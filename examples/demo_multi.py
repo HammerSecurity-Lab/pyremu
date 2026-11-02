@@ -15,6 +15,7 @@
 运行:
     uv run python examples/demo_multi.py
 """
+
 from pyremu.configs_aux import elf_dir, path_join
 from pyremu.emulator import Emulator
 from pyremu.platform import PlatformConfig
@@ -23,7 +24,7 @@ from tests.loader import MultiProgramLoader
 
 
 def main() -> None:
-    emu = Emulator(PlatformConfig.qemu_virt())
+    emu = Emulator(PlatformConfig.basic_machine())
     kernel = parse_firmware(path_join(elf_dir(), "kernel.elf"))
     emu.load_firmware(kernel)
 

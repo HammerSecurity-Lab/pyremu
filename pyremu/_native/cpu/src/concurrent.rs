@@ -445,8 +445,8 @@ unsafe fn run_harts(
 		let mem_send = shared_mem;
 		let pmp_send = if shared_pmp.num > 0 {
 			SharedPmpCtx {
-				cfg: shared_pmp.cfg.add(hid as usize * 64),
-				addr: shared_pmp.addr.add(hid as usize * 64),
+				cfg: shared_pmp.cfg.add(hid as usize * shared_pmp.num as usize),
+				addr: shared_pmp.addr.add(hid as usize * shared_pmp.num as usize),
 				num: shared_pmp.num,
 			}
 		} else {
@@ -485,12 +485,16 @@ unsafe fn run_harts(
 
 	let thread_slice: Box<[std::thread::Thread]> = thread_refs.into_boxed_slice();
 	cc_clint.hart_threads.set(thread_slice.as_ptr());
-	std::mem::forget(thread_slice); // 指针在 run_harts 返回之前保持有效
 
 	for h in handles {
 		let _ = h.join();
 	}
 	let _ = wd_handle.join();
+
+	// 全部线程已结束, 槽位此后不再被读取. 清空槽位后由 thread_slice 的析构释放
+	// 该切片, 切片的存活期覆盖上面的 join.
+	cc_clint.hart_threads.set(std::ptr::null());
+	drop(thread_slice);
 }
 
 #[inline]
@@ -756,7 +760,7 @@ mod tests {
 	// 从本文件拆分到同级模块的条目, 在此重新引入作用域,
 	// 使测试可以直接引用.
 	use crate::ffi::{DevMMIOAddrInfo, FfiPmpCtx, FfiWatchdogCtx, MemCtx};
-	use crate::state::{riscv_mode, CFG_AIA};
+	use crate::state::{riscv_mode, IsaExts, CFG_AIA};
 	use std::mem;
 
 	fn make_state(pc: u64, hart_id: u64) -> HartState {
@@ -765,6 +769,9 @@ mod tests {
 		s.mtvec = 0x8000_0100;
 		s.pc = pc;
 		s.mhartid = hart_id;
+		// 扩展开关在实际运行时由 Python 侧按平台 ISA 编组; 本模块直接调用引擎,
+		// 清零后须显式打开, 否则可选扩展的指令 (AMO、CSR) 被判为不存在.
+		s.isa_exts = IsaExts::all_enabled();
 		s
 	}
 
@@ -775,7 +782,6 @@ mod tests {
 		buf[offset + 3] = (val >> 24) as u8;
 	}
 
-	/// 构造长度为零的 PMP 与设备数组, 并调用 ``run_parallel``.
 	unsafe fn run_parallel_defaults(
 		states: *mut HartState,
 		num: u32,
@@ -853,6 +859,83 @@ mod tests {
 			flush_cnt_per_hart: std::ptr::null_mut(),
 		};
 		run_parallel(&hart, &mem_ctx, &intr_ctx, &dev_ctx, &bp, &mut tlb);
+	}
+
+	/// 以单 hart 直接调用 ``run_harts``, 该 hart 的取指目标位于主存之外,
+	/// 引擎以 NOT_MAINRAM 退出本轮. 返回本轮结束后线程句柄槽位是否为空.
+	unsafe fn run_harts_until_not_mainram(ram: *mut u8) -> bool {
+		let mut mtime_val: u64 = 0;
+		let mut mtimecmp_vec: Vec<u64> = vec![u64::MAX; 1];
+		let mut msip_vec: Vec<u8> = vec![0u8; 1];
+		let clint = FfiClintCtx {
+			mtime: &mut mtime_val as *mut u64,
+			mtimecmp: mtimecmp_vec.as_mut_ptr(),
+			msip: msip_vec.as_mut_ptr(),
+			base: 0,
+			timebase_hz: 0,
+		};
+		let cc_clint = ConcurrentClintCtx::from_ffi(&clint, 1);
+		let module = std::sync::Arc::new(ModuleState::new(
+			1,
+			1,
+			0,
+			vec![0u64].into_boxed_slice(),
+			false,
+			0,
+			vec![0u64].into_boxed_slice(),
+		));
+		let mut state = make_state(0x1000_0000, 0);
+		let mem = SharedMemCtx {
+			ram,
+			ram_size: 256,
+			ram_base: 0x8000_0000,
+			shadow_base: 0,
+			shadow_size: 0,
+			lr_reserved: std::ptr::null_mut(),
+		};
+		// 单条 TOR 条目覆盖全部地址空间, 权限为读、写与执行.
+		let mut pmp_cfg: [u8; 1] = [0x0F];
+		let mut pmp_addr: [u64; 1] = [u64::MAX];
+		let shared_pmp = SharedPmpCtx {
+			cfg: pmp_cfg.as_mut_ptr(),
+			addr: pmp_addr.as_mut_ptr(),
+			num: 1,
+		};
+		let dev_bases: [u64; 0] = [];
+		let dev_ends: [u64; 0] = [];
+		let shared_dev = SharedDevCtx {
+			bases: dev_bases.as_ptr(),
+			ends: dev_ends.as_ptr(),
+			num: 0,
+			virtio_base: 0,
+			virtio_raw: std::ptr::null_mut(),
+			plic: std::ptr::null_mut(),
+		};
+		run_harts(
+			&mut state,
+			1,
+			std::ptr::null(),
+			std::ptr::null_mut(),
+			mem,
+			shared_pmp,
+			shared_dev,
+			&cc_clint,
+			std::ptr::null(),
+			&module,
+			&[],
+			0,
+		);
+		cc_clint.hart_threads.get().is_null()
+	}
+
+	#[test]
+	fn hart_thread_slice_released_after_round() {
+		// 每轮结束后线程句柄切片必须被释放: 槽位恢复为空, 不遗留本轮创建的切片.
+		let mut ram = vec![0u8; 256];
+		for _ in 0..8 {
+			let is_cleared = unsafe { run_harts_until_not_mainram(ram.as_mut_ptr()) };
+			assert!(is_cleared, "本轮结束后线程句柄槽位必须清空");
+		}
 	}
 
 	#[test]

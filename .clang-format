@@ -8,18 +8,40 @@ AlignTrailingComments: true
 AlignConsecutiveMacros: Consecutive
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortBlocksOnASingleLine: Never
-AlignAfterOpenBracket: AlwaysBreak
+AlignAfterOpenBracket: BlockIndent
 AlignArrayOfStructures: None
+AlignOperands: Align
 
 BreakBeforeBraces: Attach
 BraceWrapping:
-  AfterControlStatement: Always
+  AfterControlStatement: MultiLine
   AfterStruct: false
   AfterClass: false
   AfterFunction: false
   IndentBraces: false
-BreakBeforeBinaryOperators: NonAssignment
-BreakStringLiterals: true
+# BreakBeforeBinaryOperators: None
+BreakAfterReturnType: Automatic
+BreakStringLiterals: false
+BreakAfterAttributes: Always
+BreakBeforeCloseBracketLoop: true
+BreakAfterOpenBracketLoop: true
+BreakBeforeCloseBracketIf: true
+BreakAfterOpenBracketIf: true
+BreakBeforeCloseBracketSwitch: true
+BreakAfterOpenBracketSwitch: true
+BreakBeforeCloseBracketFunction: true
+BreakAfterOpenBracketFunction: true
+BreakBeforeConceptDeclarations: Always
+BreakBeforeTernaryOperators: true
+
+BreakBeforeCloseBracketBracedList: true
+BreakBeforeTemplateCloser: true
+
+BreakConstructorInitializers: AfterColon
+BreakInheritanceList: AfterColon
+
+BreakBinaryOperations: RespectPrecedence
+SpaceBeforeCaseColon: false
 
 ContinuationIndentWidth: 4 # 宏续行缩进宽度
 Cpp11BracedListStyle: true
@@ -33,16 +55,18 @@ InsertBraces: true
 AllowAllParametersOfDeclarationOnNextLine: true
 AllowAllArgumentsOnNextLine: true
 BinPackParameters: AlwaysOnePerLine
-BinPackArguments: false
+BinPackArguments: true
 
 PenaltyReturnTypeOnItsOwnLine: 1000000
 PenaltyBreakBeforeFirstCallParameter: 1
 SpaceBeforeCpp11BracedList: false
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceBeforeInheritanceColon: false
+SortUsingDeclarations: Lexicographic
 
-BreakConstructorInitializers: BeforeColon
 PackConstructorInitializers: Never
-BreakInheritanceList: BeforeColon
 ConstructorInitializerIndentWidth: 0
+LambdaBodyIndentation: Signature
 
 ReflowComments: Never
 SortIncludes:

@@ -25,6 +25,7 @@ from pyremu.peripheral.crng import (
     STATUS_READY,
 )
 from pyremu.platform import PeripheralConfig, PlatformConfig
+from tests.conftest import make_test_config
 
 CRNG_BASE = 0x1000_6000
 
@@ -113,15 +114,6 @@ class TestCRNGBus:
 class TestCRNGConfig:
     """平台配置与 DTB 节点生成."""
 
-    @staticmethod
-    def _cfg() -> PlatformConfig:
-        return PlatformConfig(
-            num_harts=1,
-            ram_base=0x8000_0000,
-            prog_cnt=0x8000_0000,
-            periph=PeripheralConfig(crng_base=CRNG_BASE),
-        )
-
     def test_default_crng_base_follows_build_config(self):
         assert PeripheralConfig().crng_base == configs_gen.CRNG_BASE
 
@@ -132,10 +124,10 @@ class TestCRNGConfig:
         CRNG 覆盖 virtio, 使 virtio 的 ACK 写被 CRNG 空 ``write()`` 吞掉,
         PLIC 电平无法拉低, 受调试程序打印 "irq N: nobody cared" 后停摆.
         """
-        # virtio-blk 基址来自 cli.py --disk 的硬编码 _VIRTIO_BLK_BASE (0x200 字节).
-        virtio_base = 0x1000_5000
+        periph = PeripheralConfig()
+        virtio_base = periph.virtio_blk_base
         virtio_size = 0x200
-        crng_base = CRNG_BASE
+        crng_base = periph.crng_base
         crng_size = 0x1000
         # 两段 MMIO 区间无交集 (CRNG 恒位于 virtio 之上或之下).
         assert crng_base + crng_size <= virtio_base or crng_base >= virtio_base + virtio_size
@@ -145,34 +137,22 @@ class TestCRNGConfig:
         assert PlatformConfig.minimal().periph.crng_base == 0
 
     def test_dtb_contains_crng_node(self):
-        """启用 CRNG 时 DTB 应包含 /soc/crng@... 节点."""
-        emu = Emulator(self._cfg(), bootargs="console=ttySIF0")
-        blob = emu.build_dtb()
-        fdt = libfdt.Fdt(blob)
-        node = fdt.path_offset("/soc/crng@10006000")
+        """CRNG 启用时 DTB 含 /soc/crng@... 节点, compatible 与 reg 正确."""
+        emu = Emulator(make_test_config(crng_base=CRNG_BASE), bootargs="console=ttySIF0")
+        fdt = libfdt.Fdt(emu.build_default_dtb())
+        node = fdt.path_offset(f"/soc/crng@{CRNG_BASE:x}")
         assert node >= 0
-        compat = bytes(fdt.getprop(node, "compatible"))
-        assert compat == b"pyremu,crng\x00"
+        assert bytes(fdt.getprop(node, "compatible")) == b"crng\x00"
+        base_hi, base_lo, size_hi, size_lo = struct.unpack(
+            ">IIII", bytes(fdt.getprop(node, "reg"))
+        )
+        assert (base_hi << 32) | base_lo == CRNG_BASE
+        assert (size_hi << 32) | size_lo == 0x1000
 
-    def test_dtb_crng_disabled_no_node(self):
-        """crng_base=0 时 DTB 不应包含 crng 节点."""
-        cfg = self._cfg()
-        cfg.periph.crng_base = 0
+    def test_dtb_omits_crng_node_when_disabled(self):
+        """crng_base 取 0 时不注册 CRNG, DTB 中也没有该节点."""
+        cfg = make_test_config(crng_base=0)
         emu = Emulator(cfg, bootargs="console=ttySIF0")
-        blob = emu.build_dtb()
-        fdt = libfdt.Fdt(blob)
-        with pytest.raises(libfdt.FdtException):
-            fdt.path_offset("/soc/crng@0")
-
-    def test_dtb_crng_reg_encoded(self):
-        """crng 节点的 reg 属性编码正确的 base/size."""
-        emu = Emulator(self._cfg(), bootargs="console=ttySIF0")
-        blob = emu.build_dtb()
-        fdt = libfdt.Fdt(blob)
-        node = fdt.path_offset("/soc/crng@10006000")
-        reg = bytes(fdt.getprop(node, "reg"))
-        base_hi, base_lo, size_hi, size_lo = struct.unpack(">IIII", reg)
-        base = (base_hi << 32) | base_lo
-        size = (size_hi << 32) | size_lo
-        assert base == 0x1000_6000
-        assert size == 0x1000
+        assert emu.crng is None
+        fdt = libfdt.Fdt(emu.build_default_dtb())
+        assert fdt.path_offset("/soc/crng@0", libfdt.QUIET_NOTFOUND) < 0

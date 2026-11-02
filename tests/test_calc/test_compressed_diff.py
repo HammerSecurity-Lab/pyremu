@@ -12,7 +12,6 @@
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.mem_check_aux import inject_memory_backend
 from pyremu.utils.disassem import Opc, sext
 from tests.instr_encode import (
     b_type,
@@ -147,12 +146,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b000, rd, imm12)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -179,12 +180,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm32.value, rd, 0b000, rd, imm12)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -212,10 +215,12 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b000, 0, imm12)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.exec_instr(c_instr)
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.exec_instr(nc_instr)
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 
@@ -241,10 +246,12 @@ class TestCompressedDifferential:
         nc_instr = u_type(Opc.lui.value, rd, imm20)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.exec_instr(c_instr)
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.exec_instr(nc_instr)
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 
@@ -281,12 +288,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, 2, 0b000, 2, nzimm10 & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[2] = init_sp
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[2] = init_sp
         hn.exec_instr(nc_instr)
 
@@ -323,12 +332,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b000, 2, nzuimm & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[2] = init_sp
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[2] = init_sp
         hn.exec_instr(nc_instr)
 
@@ -365,12 +376,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b101, rd, shamt & 0x3F)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -408,12 +421,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b101, rd, 0x400 | (shamt & 0x3F))
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -447,12 +462,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b111, rd, imm12)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -494,13 +511,15 @@ class TestCompressedDifferential:
         )
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = v1
         hc.gprs[rs2] = v2
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = v1
         hn.gprs[rs2] = v2
         hn.exec_instr(nc_instr)
@@ -548,13 +567,15 @@ class TestCompressedDifferential:
             )
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = v1
         hc.gprs[rs2] = v2
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = v1
         hn.gprs[rs2] = v2
         hn.exec_instr(nc_instr)
@@ -595,12 +616,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.ld.value, rd, 0b010, rs1, uimm & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rs1] = init_rs1
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rs1] = init_rs1
         hn.exec_instr(nc_instr)
 
@@ -638,14 +661,16 @@ class TestCompressedDifferential:
 
         ram_c, rf_c, wf_c = make_ram()
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf_c, wf_c)
+        hc.mem_read_phy = rf_c
+        hc.mem_write_phy = wf_c
         hc.gprs[rs1] = init_rs1
         hc.gprs[rs2] = init_rs2
         hc.exec_instr(c_instr)
 
         ram_n, rf_n, wf_n = make_ram()
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf_n, wf_n)
+        hn.mem_read_phy = rf_n
+        hn.mem_write_phy = wf_n
         hn.gprs[rs1] = init_rs1
         hn.gprs[rs2] = init_rs2
         hn.exec_instr(nc_instr)
@@ -689,12 +714,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.ld.value, rd, 0b011, rs1, uimm & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rs1] = init_rs1
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rs1] = init_rs1
         hn.exec_instr(nc_instr)
 
@@ -727,14 +754,16 @@ class TestCompressedDifferential:
 
         ram_c, rf_c, wf_c = make_ram()
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf_c, wf_c)
+        hc.mem_read_phy = rf_c
+        hc.mem_write_phy = wf_c
         hc.gprs[rs1] = init_rs1
         hc.gprs[rs2] = init_rs2
         hc.exec_instr(c_instr)
 
         ram_n, rf_n, wf_n = make_ram()
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf_n, wf_n)
+        hn.mem_read_phy = rf_n
+        hn.mem_write_phy = wf_n
         hn.gprs[rs1] = init_rs1
         hn.gprs[rs2] = init_rs2
         hn.exec_instr(nc_instr)
@@ -770,12 +799,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.op_imm.value, rd, 0b001, rd, shamt & 0x3F)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rd] = init_val
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rd] = init_val
         hn.exec_instr(nc_instr)
 
@@ -807,12 +838,14 @@ class TestCompressedDifferential:
         )
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[rs2] = init_rs2
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[rs2] = init_rs2
         hn.exec_instr(nc_instr)
 
@@ -841,13 +874,15 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.jalr.value, 0, 0b000, rs1, 0)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.pc = 0x8000_0000
         hc.gprs[rs1] = target
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.pc = 0x8000_0000
         hn.gprs[rs1] = target
         hn.exec_instr(nc_instr)
@@ -878,13 +913,15 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.jalr.value, 1, 0b000, rs1, 0)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.pc = 0x8000_0000
         hc.gprs[rs1] = target
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.pc = 0x8000_0000
         hn.gprs[rs1] = target
         hn.exec_instr(nc_instr)
@@ -930,12 +967,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.ld.value, rd, 0b010, 2, uimm & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[2] = init_sp
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[2] = init_sp
         hn.exec_instr(nc_instr)
 
@@ -971,12 +1010,14 @@ class TestCompressedDifferential:
         nc_instr = i_type(Opc.ld.value, rd, 0b011, 2, uimm & 0xFFF)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.gprs[2] = init_sp
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.gprs[2] = init_sp
         hn.exec_instr(nc_instr)
 
@@ -1009,14 +1050,16 @@ class TestCompressedDifferential:
 
         ram_c, rf_c, wf_c = make_ram()
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf_c, wf_c)
+        hc.mem_read_phy = rf_c
+        hc.mem_write_phy = wf_c
         hc.gprs[2] = init_sp
         hc.gprs[rs2] = init_rs2
         hc.exec_instr(c_instr)
 
         ram_n, rf_n, wf_n = make_ram()
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf_n, wf_n)
+        hn.mem_read_phy = rf_n
+        hn.mem_write_phy = wf_n
         hn.gprs[2] = init_sp
         hn.gprs[rs2] = init_rs2
         hn.exec_instr(nc_instr)
@@ -1055,14 +1098,16 @@ class TestCompressedDifferential:
 
         ram_c, rf_c, wf_c = make_ram()
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf_c, wf_c)
+        hc.mem_read_phy = rf_c
+        hc.mem_write_phy = wf_c
         hc.gprs[2] = init_sp
         hc.gprs[rs2] = init_rs2
         hc.exec_instr(c_instr)
 
         ram_n, rf_n, wf_n = make_ram()
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf_n, wf_n)
+        hn.mem_read_phy = rf_n
+        hn.mem_write_phy = wf_n
         hn.gprs[2] = init_sp
         hn.gprs[rs2] = init_rs2
         hn.exec_instr(nc_instr)
@@ -1107,12 +1152,14 @@ class TestCompressedDifferential:
         nc_instr = j_type(Opc.jal.value, 0, offset)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.pc = init_pc
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.pc = init_pc
         hn.exec_instr(nc_instr)
 
@@ -1150,13 +1197,15 @@ class TestCompressedDifferential:
         nc_instr = b_type(Opc.br.value, 0b000, rs1, 0, offset)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.pc = init_pc
         hc.gprs[rs1] = init_rs1
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.pc = init_pc
         hn.gprs[rs1] = init_rs1
         hn.exec_instr(nc_instr)
@@ -1194,13 +1243,15 @@ class TestCompressedDifferential:
         nc_instr = b_type(Opc.br.value, 0b001, rs1, 0, offset)
 
         hc = Hart(id=0)
-        inject_memory_backend(hc, rf, wf)
+        hc.mem_read_phy = rf
+        hc.mem_write_phy = wf
         hc.pc = init_pc
         hc.gprs[rs1] = init_rs1
         hc.exec_instr(c_instr)
 
         hn = Hart(id=0)
-        inject_memory_backend(hn, rf, wf)
+        hn.mem_read_phy = rf
+        hn.mem_write_phy = wf
         hn.pc = init_pc
         hn.gprs[rs1] = init_rs1
         hn.exec_instr(nc_instr)

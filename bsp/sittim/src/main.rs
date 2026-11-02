@@ -13,6 +13,7 @@ mod ext_mod;
 mod hang;
 mod mem;
 mod paging;
+mod platform;
 mod prim;
 mod println;
 mod sync_aux;
@@ -49,7 +50,7 @@ pub struct BootInfo {
 
 /// 阶段一入口。
 ///
-/// 所有参数按RISC-V调用规范通过a0~a4寄存器传入
+/// 所有参数按RISC-V调用规范通过a0~a5寄存器传入
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main_before_mmu(
 	ret_boot_info: *mut BootInfo,
@@ -57,7 +58,15 @@ pub unsafe extern "C" fn main_before_mmu(
 	man_pa_start: u64,
 	_man_size: u64,
 	partition_num: u64,
+	features: u64,
 ) {
+	platform::init(features);
+	// 时钟源读数来自 time CSR: 平台不提供它时本内核无法确定时刻,
+	// 调度与定时等待都无法执行, 故在建立页表之前终止.
+	if !platform::PlatformFeatures::load().has_zicntr() {
+		hang::fault_halt("platform: time CSR unavailable\n");
+	}
+
 	// _end 与 _instr_class_end 符号已由 entry.s 中的 PIE 重定位调整至运行时地址
 	// (base_pa + link_addr), 无需再加 load_offset, 否则会 double-count base_pa.
 	let end_pa = &raw const _end as u64;
@@ -182,9 +191,8 @@ pub unsafe extern "C" fn main_after_mmu() {
 	unsafe {
 		core::arch::asm!("csrr {0}, time", out(reg) now);
 	}
-	// 与 trap.rs 定时器中断路径一致: 直接改写 stimecmp (Sstc) 而非经 SBI TIME
-	// ecall.
-	csr::write_stimecmp(now + TICKS_PER_SCHED_TICK);
+	// 与 trap.rs 定时器中断路径一致: 按平台特性选择设定截止时间的方式.
+	ecall_aux::set_smode_timer(now + TICKS_PER_SCHED_TICK);
 
 	// 登记启动进程与主线程并建立调度状态. 用户现场经参数传入, 不依赖 CSR 的写入时机.
 	proc::init_main_process();
@@ -242,7 +250,7 @@ unsafe fn push_u64(sp: &mut u64, val: u64) {
 fn setup_musl_stack(sp_top: u64, argv_pa: u64, argc: u64, payload: &elf::PayloadInfo) -> u64 {
 	let mut sp = sp_top;
 
-	// argv 终止 NULL 先于 argv 数组压入 (位于 argv[argc-1] 更高地址);
+	// argv 终止 NULL 先于 argv 数组压入;
 	// argv[argc-1] .. argv[0] 逆序压入使 argc 最终落在最低地址.
 	// 此处 sstatus.SUM 尚未置位, 不能经 U-mode VA 读 argv 页; 改从 argv_pa 的
 	// S-mode 线性映射别名读取 map_user_argv 已改写为 U-mode VA 的指针.

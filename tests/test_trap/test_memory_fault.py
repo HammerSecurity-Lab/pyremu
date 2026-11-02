@@ -10,20 +10,17 @@ import struct
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import (
-    MSTATUS_MXR,
-    MSTATUS_SUM,
-    RiscvMode,
-)
+from pyremu.core.hart import RiscvMode
 from pyremu.core.mem_check_aux import (
     AccessFaultError,
     AlignmentError,
-    check_instruction_fetch,
-    inject_memory_backend,
-    mem_read,
-    mem_write,
     PageFaultError,
 )
+from pyremu.core.priv_defs import (
+    MSTATUS_MXR,
+    MSTATUS_SUM,
+)
+from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.memory.mmu import sv39_vpn
 from tests.test_trap.support import (
@@ -45,7 +42,8 @@ class TestMemoryAccessFaults:
     def hart(self) -> Hart:
         h = Hart(id=0)
         bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
-        inject_memory_backend(h, bus.read, bus.write)
+        h.mem_read_phy = bus.read
+        h.mem_write_phy = bus.write
         h.bus = bus
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x1000
@@ -56,7 +54,7 @@ class TestMemoryAccessFaults:
     def test_lw_misaligned_traps(self, hart):
         """LW 从奇地址读取 -> LdAddrMisaligned."""
         try:
-            mem_read(hart, 0x80001001, 4)
+            hart.mem_read(0x80001001, 4)
         except AlignmentError:
             pass
         assert hart.mcause_val == 4, f"应为 LdAddrMisaligned(4), 实际={hart.mcause_val}"
@@ -64,7 +62,7 @@ class TestMemoryAccessFaults:
     def test_lh_misaligned_traps(self, hart):
         """LH 从奇地址读取 -> LdAddrMisaligned."""
         try:
-            mem_read(hart, 0x80001001, 2)
+            hart.mem_read(0x80001001, 2)
         except AlignmentError:
             pass
         assert hart.mcause_val == 4
@@ -72,7 +70,7 @@ class TestMemoryAccessFaults:
     def test_ld_misaligned_traps(self, hart):
         """LD 从非 8 字节对齐地址读取 -> LdAddrMisaligned."""
         try:
-            mem_read(hart, 0x80001004, 8)
+            hart.mem_read(0x80001004, 8)
         except AlignmentError:
             pass
         assert hart.mcause_val == 4
@@ -80,7 +78,7 @@ class TestMemoryAccessFaults:
     def test_sw_misaligned_traps(self, hart):
         """SW 到奇地址 -> StAddrMisaligned."""
         try:
-            mem_write(hart, 0x80001001, b"\x00\x01\x02\x03")
+            hart.mem_write(0x80001001, b"\x00\x01\x02\x03")
         except AlignmentError:
             pass
         assert hart.mcause_val == 6, f"应为 StAddrMisaligned(6), 实际={hart.mcause_val}"
@@ -88,7 +86,7 @@ class TestMemoryAccessFaults:
     def test_sd_misaligned_traps(self, hart):
         """SD 到非 8 字节对齐地址 -> StAddrMisaligned."""
         try:
-            mem_write(hart, 0x80001004, b"\x00" * 8)
+            hart.mem_write(0x80001004, b"\x00" * 8)
         except AlignmentError:
             pass
         assert hart.mcause_val == 6
@@ -96,15 +94,15 @@ class TestMemoryAccessFaults:
     def test_lw_aligned_succeeds(self, hart):
         """LW 从对齐地址正常读取."""
         # 先写入数据确保可读
-        hart._mem_write_phy(0x80001000, b"\x01\x02\x03\x04")
-        data = mem_read(hart, 0x80001000, 4)
+        hart.mem_write_phy(0x80001000, b"\x01\x02\x03\x04")
+        data = hart.mem_read(0x80001000, 4)
         assert data == b"\x01\x02\x03\x04"
         assert hart.mcause_val == 0
 
     def test_byte_access_always_aligned(self, hart):
         """1 字节 load/store 总是对齐."""
-        hart._mem_write_phy(0x80001001, b"\x42")
-        data = mem_read(hart, 0x80001001, 1)
+        hart.mem_write_phy(0x80001001, b"\x42")
+        data = hart.mem_read(0x80001001, 1)
         assert data == b"\x42"
         assert hart.mcause_val == 0
 
@@ -113,7 +111,7 @@ class TestMemoryAccessFaults:
     def test_read_empty_hole_traps(self, hart):
         """读取空洞地址 (非 RAM、非设备) -> LdAccessFault."""
         try:
-            mem_read(hart, 0x0000_0000, 4)
+            hart.mem_read(0x0000_0000, 4)
         except AccessFaultError:
             pass
         assert hart.mcause_val == 5, f"应为 LdAccessFault(5), 实际={hart.mcause_val}"
@@ -121,15 +119,15 @@ class TestMemoryAccessFaults:
     def test_write_empty_hole_traps(self, hart):
         """写入空洞地址 -> StAccessFault."""
         try:
-            mem_write(hart, 0x4000_0000, b"\xff")
+            hart.mem_write(0x4000_0000, b"\xff")
         except AccessFaultError:
             pass
         assert hart.mcause_val == 7, f"应为 StAccessFault(7), 实际={hart.mcause_val}"
 
     def test_read_ram_ok_pma(self, hart):
         """RAM 范围内读不触发 PMA 错误."""
-        hart._mem_write_phy(0x80000000, b"\xaa\xbb")
-        data = mem_read(hart, 0x80000000, 2)
+        hart.mem_write_phy(0x80000000, b"\xaa\xbb")
+        data = hart.mem_read(0x80000000, 2)
         assert data == b"\xaa\xbb"
         assert hart.mcause_val == 0
 
@@ -138,7 +136,7 @@ class TestMemoryAccessFaults:
     def test_alignment_checked_before_translation(self, hart):
         """未对齐检测先于 MMU 翻译 (即使 PA 有效也不放过)."""
         try:
-            mem_read(hart, 0x80000001, 4)
+            hart.mem_read(0x80000001, 4)
         except AlignmentError:
             pass
         assert hart.mcause_val == 4, "应先触发对齐错误而非页错误或访问错误"
@@ -160,7 +158,7 @@ class TestPageFault:
     L3_BASE = 0x3000  # 三级页表 (PPN=3)
     DATA_PA = 0x100000  # 数据页物理地址 (PPN=0x100)
 
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def ram_ctx(self):
         """2 MiB 物理内存, 地址 [0, 2 MiB)."""
         ram = bytearray(2 * 1024 * 1024)
@@ -172,14 +170,16 @@ class TestPageFault:
             for i, b in enumerate(data):
                 ram[addr + i] = b
 
-        return ram, read_fn, write_fn
+        self.ram_ctx = (ram, read_fn, write_fn)
+        return self.ram_ctx
 
     @pytest.fixture
-    def hart(self, ram_ctx):
+    def hart(self) -> Hart:
         """hart 注入 bytearray 内存后端, 初始为 Bare 模式."""
-        _ram, read_fn, write_fn = ram_ctx
+        _ram, read_fn, write_fn = self.ram_ctx
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy = read_fn
+        h.mem_write_phy = write_fn
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x1000
         return h
@@ -244,129 +244,129 @@ class TestPageFault:
 
     # ---- LdPageFault ----
 
-    def test_ld_page_fault_root_pte_invalid(self, hart, ram_ctx):
+    def test_ld_page_fault_root_pte_invalid(self, hart):
         """根页表条目 V=0 -> LdPageFault (13)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._enable_sv39(hart)
         try:
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
-    def test_ld_page_fault_l2_pte_invalid(self, hart, ram_ctx):
+    def test_ld_page_fault_l2_pte_invalid(self, hart):
         """L2 条目 V=0 -> LdPageFault (13)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._write_pte(ram, self.L1_BASE, 0, make_pte(PTE_V, self.L2_BASE >> self.PAGE_SHIFT))
         self._enable_sv39(hart)
         try:
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
-    def test_ld_page_fault_l3_pte_invalid(self, hart, ram_ctx):
+    def test_ld_page_fault_l3_pte_invalid(self, hart):
         """L3 叶条目 V=0 -> LdPageFault (13)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._write_pte(ram, self.L1_BASE, 0, make_pte(PTE_V, self.L2_BASE >> self.PAGE_SHIFT))
         self._write_pte(ram, self.L2_BASE, 0, make_pte(PTE_V, self.L3_BASE >> self.PAGE_SHIFT))
         self._enable_sv39(hart)
         try:
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
-    def test_ld_page_fault_unsupported_mode(self, hart, ram_ctx):
+    def test_ld_page_fault_unsupported_mode(self, hart):
         """未实现的 satp 模式 (如 Sv48=9) -> LdPageFault."""
-        _ram, _read_fn, _write_fn = ram_ctx
+        _ram, _read_fn, _write_fn = self.ram_ctx
         hart.mode = RiscvMode.S
         hart.satp_val = (9 << 60) | 1
         try:
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
     # ---- StPageFault ----
 
-    def test_st_page_fault_invalid_pte(self, hart, ram_ctx):
+    def test_st_page_fault_invalid_pte(self, hart):
         """Sv39 下 store 遇到无效 PTE -> StPageFault (15)."""
-        _ram, _read_fn, _write_fn = ram_ctx
+        _ram, _read_fn, _write_fn = self.ram_ctx
         self._enable_sv39(hart)
         try:
-            mem_write(hart, 0x1000, b"\x01\x02\x03\x04")
+            hart.mem_write(0x1000, b"\x01\x02\x03\x04")
         except PageFaultError:
             pass
         assert hart.mcause_val == 15, f"应为 StPageFault(15), 实际={hart.mcause_val}"
 
     # ---- 有效映射 — 不触发 PageFault ----
 
-    def test_ld_succeeds_valid_mapping(self, hart, ram_ctx):
+    def test_ld_succeeds_valid_mapping(self, hart):
         """完整 Sv39 映射下 load 应成功."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._setup_valid_4k(ram)
         self._enable_sv39(hart)
         # 在数据页写入预期值
         val = b"\xde\xad\xbe\xef"
         ram[self.DATA_PA : self.DATA_PA + 4] = val
-        data = mem_read(hart, 0x0, 4)
+        data = hart.mem_read(0x0, 4)
         assert data == val
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
 
-    def test_st_succeeds_valid_mapping(self, hart, ram_ctx):
+    def test_st_succeeds_valid_mapping(self, hart):
         """完整 Sv39 映射下 store 应成功."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._setup_valid_4k(ram)
         self._enable_sv39(hart)
         val = b"\xca\xfe\xba\xbe"
-        mem_write(hart, 0x0, val)
+        hart.mem_write(0x0, val)
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
         # 从物理内存验证写入
         assert bytes(ram[self.DATA_PA : self.DATA_PA + 4]) == val
 
-    def test_ld_st_nonzero_va(self, hart, ram_ctx):
+    def test_ld_st_nonzero_va(self, hart):
         """非零 VA 的映射 (验证 VPN 索引正确)."""
 
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         va = 0x7FFFFFE000  # 一个非零 VA (Sv39 最高合法地址附近)
         self._setup_valid_4k(ram, va=va, target_pa=self.DATA_PA)
         self._enable_sv39(hart)
         val = b"\x11\x22\x33\x44"
         ram[self.DATA_PA : self.DATA_PA + 4] = val
-        data = mem_read(hart, va, 4)
+        data = hart.mem_read(va, 4)
         assert data == val
         assert hart.mcause_val == 0
 
     # ---- Bare 模式 — 无 PageFault ----
 
-    def test_bare_mode_no_page_fault(self, hart, ram_ctx):
+    def test_bare_mode_no_page_fault(self, hart):
         """Bare 模式: VA = PA, 不做翻译, 不触发缺页异常."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         # 不设置 satp -> 默认 Bare (mode=0)
         # VA 0x5000 直接当 PA 用
         val = b"\x42\x42\x42\x42"
         ram[0x5000:0x5004] = val
-        data = mem_read(hart, 0x5000, 4)
+        data = hart.mem_read(0x5000, 4)
         assert data == val
         assert hart.mcause_val == 0
 
-    def test_bare_mode_st_no_page_fault(self, hart, ram_ctx):
+    def test_bare_mode_st_no_page_fault(self, hart):
         """Bare 模式 store 也不应触发缺页异常."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         val = b"\xff\xee\xdd\xcc"
-        mem_write(hart, 0x6000, val)
+        hart.mem_write(0x6000, val)
         assert hart.mcause_val == 0
         assert bytes(ram[0x6000:0x6004]) == val
 
     # ---- 页错误优先于 PMA ----
 
-    def test_page_fault_before_pma(self, hart, ram_ctx):
+    def test_page_fault_before_pma(self, hart):
         """Sv39 翻译失败直接报 PageFault, 不会走到 PMA 检查."""
-        _ram, _read_fn, _write_fn = ram_ctx
+        _ram, _read_fn, _write_fn = self.ram_ctx
         self._enable_sv39(hart)
         try:
-            mem_read(hart, 0x80000000, 4)
+            hart.mem_read(0x80000000, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, (
@@ -375,17 +375,17 @@ class TestPageFault:
 
     # ---- TLB 缓存后仍正确 ----
 
-    def test_tlb_caches_and_page_fault_on_miss(self, hart, ram_ctx):
+    def test_tlb_caches_and_page_fault_on_miss(self, hart):
         """TLB miss -> 页表遍历, 无效 PTE -> PageFault; 重复也不走运."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._setup_valid_4k(ram, va=0x0)
         self._enable_sv39(hart)
         ram[self.DATA_PA : self.DATA_PA + 4] = b"\x01\x02\x03\x04"
-        assert mem_read(hart, 0x0, 4) == b"\x01\x02\x03\x04"
-        assert mem_read(hart, 0x0, 4) == b"\x01\x02\x03\x04"
+        assert hart.mem_read(0x0, 4) == b"\x01\x02\x03\x04"
+        assert hart.mem_read(0x0, 4) == b"\x01\x02\x03\x04"
 
         try:
-            mem_read(hart, 0x1000, 4)
+            hart.mem_read(0x1000, 4)
         except PageFaultError:
             pass
         assert hart.mcause_val == 13, (
@@ -434,93 +434,93 @@ class TestPtePermissionEnforcement(TestPageFault):
 
     # ---- 读权限 ----
 
-    def test_mem_read_execute_only_page_faults(self, hart, ram_ctx):
+    def test_mem_read_execute_only_page_faults(self, hart):
         """X=1/R=0 且 MXR=0: S 模式读 -> LdPageFault (13)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_X)
         self._enable_sv39(hart)
         with pytest.raises(PageFaultError):
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
-    def test_mem_read_execute_only_with_mxr_allowed(self, hart, ram_ctx):
+    def test_mem_read_execute_only_with_mxr_allowed(self, hart):
         """X=1/R=0 且 MXR=1: S 模式读应成功."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_X)
         self._enable_sv39(hart)
         ram[self.DATA_PA : self.DATA_PA + 4] = b"\xde\xad\xbe\xef"
         hart.mstatus_val |= MSTATUS_MXR
-        assert mem_read(hart, 0x0, 4) == b"\xde\xad\xbe\xef"
+        assert hart.mem_read(0x0, 4) == b"\xde\xad\xbe\xef"
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
 
     # ---- 写权限 ----
 
-    def test_mem_write_readonly_page_faults(self, hart, ram_ctx):
+    def test_mem_write_readonly_page_faults(self, hart):
         """R=1/W=0 (R-X 代码页): S 模式写 -> StPageFault (15)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_R | PTE_X)
         self._enable_sv39(hart)
         with pytest.raises(PageFaultError):
-            mem_write(hart, 0x0, b"\x01\x02\x03\x04")
+            hart.mem_write(0x0, b"\x01\x02\x03\x04")
         assert hart.mcause_val == 15, f"应为 StPageFault(15), 实际={hart.mcause_val}"
 
-    def test_mem_write_rw_page_succeeds(self, hart, ram_ctx):
+    def test_mem_write_rw_page_succeeds(self, hart):
         """R=1/W=1: S 模式写应成功 (正向对照)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_R | PTE_W)
         self._enable_sv39(hart)
-        mem_write(hart, 0x0, b"\x01\x02\x03\x04")
+        hart.mem_write(0x0, b"\x01\x02\x03\x04")
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
         assert bytes(ram[self.DATA_PA : self.DATA_PA + 4]) == b"\x01\x02\x03\x04"
 
     # ---- SUM (S 模式访问 U 页) ----
 
-    def test_smode_read_user_page_without_sum_faults(self, hart, ram_ctx):
+    def test_smode_read_user_page_without_sum_faults(self, hart):
         """U=1 且 SUM=0: S 模式读 -> LdPageFault (13)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_R | PTE_U)
         self._enable_sv39(hart)
         with pytest.raises(PageFaultError):
-            mem_read(hart, 0x0, 4)
+            hart.mem_read(0x0, 4)
         assert hart.mcause_val == 13, f"应为 LdPageFault(13), 实际={hart.mcause_val}"
 
-    def test_smode_read_user_page_with_sum_allowed(self, hart, ram_ctx):
+    def test_smode_read_user_page_with_sum_allowed(self, hart):
         """U=1 且 SUM=1: S 模式读应成功."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_R | PTE_U)
         self._enable_sv39(hart)
         ram[self.DATA_PA : self.DATA_PA + 4] = b"\xaa\xbb\xcc\xdd"
         hart.mstatus_val |= MSTATUS_SUM
-        assert mem_read(hart, 0x0, 4) == b"\xaa\xbb\xcc\xdd"
+        assert hart.mem_read(0x0, 4) == b"\xaa\xbb\xcc\xdd"
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
 
     # ---- 取指权限 ----
 
-    def test_fetch_non_executable_page_faults(self, hart, ram_ctx):
+    def test_fetch_non_executable_page_faults(self, hart):
         """X=0: S 模式取指 -> InstrPageFault (12)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_R | PTE_W)
         self._enable_sv39(hart)
-        ok, _pa = check_instruction_fetch(hart, 0x0)
+        ok, _pa = hart.check_instruction_fetch(0x0)
         assert not ok
         assert hart.mcause_val == 12, f"应为 InstrPageFault(12), 实际={hart.mcause_val}"
 
-    def test_smode_fetch_user_page_faults(self, hart, ram_ctx):
+    def test_smode_fetch_user_page_faults(self, hart):
         """U=1/X=1: S 模式取指 -> InstrPageFault (12), 即使 SUM=1 也不放行."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_X | PTE_U)
         self._enable_sv39(hart)
         hart.mstatus_val |= MSTATUS_SUM  # SUM 仅影响数据访问, 不影响取指
-        ok, _pa = check_instruction_fetch(hart, 0x0)
+        ok, _pa = hart.check_instruction_fetch(0x0)
         assert not ok
         assert hart.mcause_val == 12, f"应为 InstrPageFault(12), 实际={hart.mcause_val}"
 
-    def test_fetch_executable_page_succeeds(self, hart, ram_ctx):
+    def test_fetch_executable_page_succeeds(self, hart):
         """X=1/U=0: S 模式取指应成功 (正向对照)."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._map_leaf(ram, perm=PTE_X)
         self._enable_sv39(hart)
-        ok, pa = check_instruction_fetch(hart, 0x0)
+        ok, pa = hart.check_instruction_fetch(0x0)
         assert ok
         assert pa == self.DATA_PA
         assert hart.mcause_val == 0, f"不应 trap, mcause={hart.mcause_val}"
@@ -579,11 +579,11 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
 
     # ---- LD: rd 不被页错误清零 ----
 
-    def test_ld_pagefault_preserves_rd(self, hart, ram_ctx):
+    def test_ld_pagefault_preserves_rd(self, hart):
         """LD 触发 LdPageFault 后 rd (x13/a3) 保持原值不被清零."""
-        ram, read_fn, write_fn = ram_ctx
-        hart._mem_read_phy = read_fn
-        hart._mem_write_phy = write_fn
+        ram, read_fn, write_fn = self.ram_ctx
+        hart.mem_read_phy = read_fn
+        hart.mem_write_phy = write_fn
         hart.csrs["stvec"].val = 0x80004000
 
         valid_va = 0x1000
@@ -613,11 +613,11 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
         )
         assert hart.mode == RiscvMode.S
 
-    def test_sd_pagefault_pc_to_stvec(self, hart, ram_ctx):
+    def test_sd_pagefault_pc_to_stvec(self, hart):
         """SD 触发 StPageFault 后 PC 跳转到 stvec, 不推进."""
-        ram, read_fn, write_fn = ram_ctx
-        hart._mem_read_phy = read_fn
-        hart._mem_write_phy = write_fn
+        ram, read_fn, write_fn = self.ram_ctx
+        hart.mem_read_phy = read_fn
+        hart.mem_write_phy = write_fn
         hart.csrs["stvec"].val = 0x80004000
 
         valid_va = 0x1000
@@ -641,11 +641,11 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
         assert advance == 0, f"SD->page fault 后 advance 应为 0, 实际={advance}"
         assert hart.mode == RiscvMode.S
 
-    def test_cld_pagefault_preserves_rd(self, hart, ram_ctx):
+    def test_cld_pagefault_preserves_rd(self, hart):
         """C.LD 触发 LdPageFault 后 rd 保持原值."""
-        ram, read_fn, write_fn = ram_ctx
-        hart._mem_read_phy = read_fn
-        hart._mem_write_phy = write_fn
+        ram, read_fn, write_fn = self.ram_ctx
+        hart.mem_read_phy = read_fn
+        hart.mem_write_phy = write_fn
         hart.csrs["stvec"].val = 0x80004000
 
         valid_va = 0x1000
@@ -674,11 +674,11 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
         )
         assert hart.mode == RiscvMode.S
 
-    def test_csd_pagefault_pc_to_stvec(self, hart, ram_ctx):
+    def test_csd_pagefault_pc_to_stvec(self, hart):
         """C.SD 触发 StPageFault 后 PC 跳转到 stvec."""
-        ram, read_fn, write_fn = ram_ctx
-        hart._mem_read_phy = read_fn
-        hart._mem_write_phy = write_fn
+        ram, read_fn, write_fn = self.ram_ctx
+        hart.mem_read_phy = read_fn
+        hart.mem_write_phy = write_fn
         hart.csrs["stvec"].val = 0x80004000
 
         valid_va = 0x1000
@@ -702,11 +702,11 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
         assert advance == 0, f"C.SD->page fault 后 advance 应为 0, 实际={advance}"
         assert hart.mode == RiscvMode.S
 
-    def test_lr_pagefault_preserves_rd(self, hart, ram_ctx):
+    def test_lr_pagefault_preserves_rd(self, hart):
         """LR.W 触发 LdPageFault 后 rd 保持原值, 不设 reservation."""
-        ram, read_fn, write_fn = ram_ctx
-        hart._mem_read_phy = read_fn
-        hart._mem_write_phy = write_fn
+        ram, read_fn, write_fn = self.ram_ctx
+        hart.mem_read_phy = read_fn
+        hart.mem_write_phy = write_fn
         hart.csrs["stvec"].val = 0x80004000
 
         valid_va = 0x1000
@@ -735,3 +735,102 @@ class TestLoadPageFaultPreservesRd(TestPageFault):
         )
         assert hart.reservation_valid == 0, "page fault 后不应设置 reservation"
         assert hart.mode == RiscvMode.S
+
+
+# ============================================================
+#  PMA 空洞地址访问经取指-执行流水线触发 AccessFault
+# ============================================================
+
+
+class TestBusErrorOnUnmappedAccess:
+    """通过完整取指-执行流水线触发 Bus error, 验证 PMA 空洞地址访问 -> AccessFault.
+
+    模拟 Linux 内核启动中探访未映射 MMIO 地址时发生的 Bus error 场景.
+    与 ``test_trap/test_memory_fault.py::TestMemoryAccessFaults`` 的区别: 本测试经过
+    fetch -> decode -> execute -> translate -> PMP -> PMA 完整路径,
+    而非直接调用 ``mem_read`` / ``mem_write``.
+    """
+
+    RAM_BASE = 0x8000_0000
+    HOLE_ADDR = 0x5000_0000  # 非 RAM、非设备 MMIO、非引导只读存储器的空洞地址
+
+    @pytest.fixture
+    def emu(self) -> Emulator:
+        emu = Emulator(num_harts=1)
+        return emu
+
+    def test_load_from_unmapped_addr_traps(self, emu):
+        """lw 从空洞地址读取 -> 经完整流水线触发 LdAccessFault."""
+        h = emu.harts[0]
+        h.pc = self.RAM_BASE
+        # 将目标地址放入 x10 (rs1)
+        h.gprs[10] = self.HOLE_ADDR
+
+        # lw x5, 0(x10): opcode=0000011 funct3=010 rd=5 rs1=10 imm=0
+        instr = (0 << 20) | (10 << 15) | (2 << 12) | (5 << 7) | 0x3
+        emu.load_code(self.RAM_BASE, instr.to_bytes(4, "little"))
+
+        emu.step()
+
+        # 应触发 LdAccessFault (mcause = 5)
+        assert h.mcause_val == 5, f"应为 LdAccessFault (5), 实际 mcause={h.mcause_val}"
+        # PC 应跳转到 mtvec (默认 0x0), 而非停留在加载指令之后
+        assert h.pc != self.RAM_BASE + 4, (
+            f"PC 不应指向下一条指令, 应已跳转到 mtvec handler, 实际 pc={h.pc:#x}"
+        )
+
+    def test_store_to_unmapped_addr_traps(self, emu):
+        """sw 到空洞地址 -> 经完整流水线触发 StAccessFault."""
+        h = emu.harts[0]
+        h.pc = self.RAM_BASE
+        h.gprs[10] = self.HOLE_ADDR  # rs1 = 目标地址
+        h.gprs[11] = 0xDEAD_BEEF  # rs2 = 写入值
+
+        # sw x11, 0(x10): opcode=0100011 funct3=010 rs2=11 rs1=10 imm=0
+        instr = (0 << 25) | (11 << 20) | (10 << 15) | (2 << 12) | 0x23
+        emu.load_code(self.RAM_BASE, instr.to_bytes(4, "little"))
+
+        emu.step()
+
+        # 应触发 StAccessFault (mcause = 7)
+        assert h.mcause_val == 7, f"应为 StAccessFault (7), 实际 mcause={h.mcause_val}"
+        assert h.pc != self.RAM_BASE + 4, f"PC 应已跳转到 mtvec handler, 实际 pc={h.pc:#x}"
+
+    def test_device_addr_load_succeeds(self, emu):
+        """从已注册设备 MMIO 地址读取不触发 Bus error (经过设备路径)."""
+        h = emu.harts[0]
+        h.pc = self.RAM_BASE
+        # UART 基址 (默认 0x1000_0000) 已注册为设备
+        uart_base = 0x1000_0000
+        h.gprs[10] = uart_base
+
+        # lw x5, 0(x10)
+        instr = (0 << 20) | (10 << 15) | (2 << 12) | (5 << 7) | 0x3
+        emu.load_code(self.RAM_BASE, instr.to_bytes(4, "little"))
+
+        emu.step()
+
+        # UART 是已注册设备, 不应触发 AccessFault
+        assert h.mcause_val != 5, (
+            f"设备 MMIO 读取不应触发 LdAccessFault, 实际 mcause={h.mcause_val}"
+        )
+
+    def test_ram_boundary_crossing_traps(self, emu):
+        """跨 RAM 边界的 load -> LdAccessFault (部分字节在空洞中)."""
+        h = emu.harts[0]
+        h.pc = self.RAM_BASE
+        # 定位到 RAM 最后 4 字节, ld 8 字节 -> 高 4 字节溢出到空洞
+        ram_end = self.RAM_BASE + emu.bus.ram_size
+        h.gprs[10] = ram_end - 4
+
+        # ld x5, 0(x10): opcode=0000011 funct3=011 rd=5 rs1=10 imm=0
+        instr = (0 << 20) | (10 << 15) | (3 << 12) | (5 << 7) | 0x3
+        emu.load_code(self.RAM_BASE, instr.to_bytes(4, "little"))
+
+        emu.step()
+
+        # PMA 检查应拒绝跨边界访问
+        assert h.mcause_val in (5, 4), (
+            f"跨边界访问应触发 LdAccessFault(5) 或 LdAddrMisaligned(4), "
+            f"实际 mcause={h.mcause_val}"
+        )

@@ -14,6 +14,7 @@ import ctypes
 from pyremu._native import (
     ClintInfo,
     DevInfo,
+    InstrToBeExec,
     PlicInfo,
     PmpInfo,
     run_parallel,
@@ -23,7 +24,7 @@ from pyremu._native import (
 )
 from pyremu.configs_aux import cfg_int
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import (
+from pyremu.core.hart_ffi import (
     EXIT_BREAKPOINT,
     EXIT_EBREAK,
     EXIT_ECALL,
@@ -31,13 +32,9 @@ from pyremu.core.hart import (
     EXIT_NOT_MAINRAM,
     EXIT_TIMEOUT,
     EXIT_TRAP,
-    InstrToBeExec,
-    marshal_hart,
-    unmarshal_hart,
 )
-from pyremu.core.mem_check_aux import check_instruction_fetch, MemoryAccessError
+from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.trap_def import TrapType
-from pyremu.core.trap_handler import check_pending_interrupts, deliver_trap, try_wfi_wakeup
 from pyremu.emu.run import RunStopReason
 from pyremu.utils.mask import mask64
 
@@ -58,12 +55,12 @@ class NativeOps:
         try:
             advance = hart.exec_instr(instr)
         except NotImplementedError, MemoryAccessError:
-            deliver_trap(hart, TrapType.IllInstr, tval=instr, is_interrupt=False)
+            hart.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
             advance = 0
         if advance != 0 and hart.pc == saved_pc:
             hart.pc = mask64(hart.pc + advance)
         if not hart._halted:
-            check_pending_interrupts(hart)
+            hart.check_pending_interrupts()
         return 0 if hart._wfi_woken else 1
 
     def _native_exec_outside_ram_fetch(self, hart: Hart) -> int:
@@ -77,11 +74,11 @@ class NativeOps:
             self._run_stop_reason = RunStopReason.BREAKPOINT
             return 0
         pc = hart.pc
-        ok, fetch_pa = check_instruction_fetch(hart, pc)
+        ok, fetch_pa = hart.check_instruction_fetch(pc)
         if not ok:
             return 0
         if (pc & 0xFFF) >= 0xFFE:
-            ok2, fetch_pa2 = check_instruction_fetch(hart, mask64(pc + 2))
+            ok2, fetch_pa2 = hart.check_instruction_fetch(mask64(pc + 2))
             if not ok2:
                 return 0
             instr_bytes = self.bus.read(fetch_pa, 2) + self.bus.read(fetch_pa2, 2)
@@ -90,7 +87,7 @@ class NativeOps:
         instr = int.from_bytes(instr_bytes, "little", signed=False)
         if instr == 0:
             # 全零编码为非法指令, 不能按 0 条指令跳过.
-            deliver_trap(hart, TrapType.IllInstr, tval=0, is_interrupt=False)
+            hart.deliver_trap(TrapType.IllInstr, tval=0, is_interrupt=False)
             return 1
         return self._handle_native_sys_exit(hart, instr)
 
@@ -108,7 +105,7 @@ class NativeOps:
         # virtio 等外设中断无法进入 hart.
         self._native_sync_plic_mip()
         for i, hart in enumerate(self.harts):
-            marshal_hart(hart, self._speedup_hart_states[i])
+            hart.marshal_to(self._speedup_hart_states[i])
 
         dev_info = self._native_marshal_dev()
         pmp_info = self._native_marshal_pmp(active)
@@ -168,7 +165,7 @@ class NativeOps:
         if self._termio is not None:
             self._termio._rx_notify.value = 0
         for hid in range(len(self.harts)):
-            unmarshal_hart(self._speedup_hart_states[hid], self.harts[hid])
+            self.harts[hid].unmarshal_from(self._speedup_hart_states[hid])
 
         # 本轮引擎内可能执行了使翻译条目失效的动作: 受调试程序执行 SFENCE.VMA
         # 或改写 satp. 计数发生变化时把 Python 侧的两个 TLB 全部作废, 否则沿用
@@ -330,16 +327,20 @@ class NativeOps:
         return DevInfo(bases=dev_bases, ends=dev_ends)
 
     def _native_marshal_pmp(self, active: list[Hart]) -> PmpInfo:
-        """构建每个 hart 各占一个切片的 PMP 缓冲区, 连续存放 num_harts * 64 项.
+        """
+        构建每个 hart 各占一个切片的 PMP 缓冲区.
 
-        每个 hart 有独立的 PMP, hart h 的条目位于 [h*64, h*64+64); 加速执行
-        引擎按 hart_id 偏移读取各自的切片.
+        每个 hart 有独立的 PMP, 记每个 hart 的条目数为 n, hart h 的条目位于
+        [h*n, h*n+n), 缓冲区共 n * num_harts 项; 加速执行引擎按 hart_id 乘以 n
+        的偏移读取各自的切片.
+
+        条目数由芯片设备树与配置中的较大者给出, 全部 hart 相同: 设备树未按 hart
+        分别声明条目数时, 全部 hart 的 PMP 按同一份配置构造.
 
         多个 hart 不得共用同一 PMP 缓冲区: SMP 启动时各 hart 在各自的
         run_parallel 线程中并发重写自己的 PMP, 共用缓冲区会造成数据竞争, 一个
         hart 取指时可能读到另一个 hart 刚写下的条目, 其地址不在这些条目覆盖的
         范围内, 因而触发访问故障, cause 为 1, 多出现在 handle_exception 入口.
-        参见 CHANGELOG 2026-07-14.
         """
         total = len(self.harts)
         ref_pmp = self.harts[0]._pmp
@@ -347,18 +348,18 @@ class NativeOps:
         self._pmp_cfg_buf = (ctypes.c_uint8 * 0)()
         self._pmp_addr_buf = (ctypes.c_uint64 * 0)()
         if self._pmp_num > 0:
-            self._pmp_cfg_buf = (ctypes.c_uint8 * (64 * total))()
-            self._pmp_addr_buf = (ctypes.c_uint64 * (64 * total))()
+            self._pmp_cfg_buf = (ctypes.c_uint8 * (self._pmp_num * total))()
+            self._pmp_addr_buf = (ctypes.c_uint64 * (self._pmp_num * total))()
             for hid, h in enumerate(self.harts):
                 hp = h._pmp
                 if hp is None or hp._num_entries == 0:
                     continue
                 if hp._cache_dirty:
                     hp._rebuild_cache()
-                base = hid * 64
+                base = hid * self._pmp_num
                 fc = hp._flat_cfg
                 fa = hp._flat_addr
-                for j in range(64):
+                for j in range(self._pmp_num):
                     self._pmp_cfg_buf[base + j] = fc[j]
                     self._pmp_addr_buf[base + j] = fa[j]
         return PmpInfo(
@@ -371,9 +372,9 @@ class NativeOps:
     def _native_unmarshal_pmp(self) -> None:
         """把各 hart 的 PMP 切片复制回其独立的 PMP, 仅在实际改动时同步 CSR.
 
-        每个 hart 的 OpenSBI 把 pmpcfg 与 pmpaddr 写入自己的 64 项切片,
-        不复制到其它 hart. sync_from_flat 写入 CSR 的开销较大, 绝大多数单轮
-        加速执行中 PMP 无变化, 故仅在切片确实被 Rust 改写时才同步.
+        每个 hart 的 OpenSBI 把 pmpcfg 与 pmpaddr 写入自己的切片, 不复制到
+        其它 hart. sync_from_flat 写入 CSR 的开销较大, 绝大多数单轮加速执行中
+        PMP 无变化, 故仅在切片确实被 Rust 改写时才同步.
         """
         if self._pmp_num <= 0:
             return
@@ -381,11 +382,11 @@ class NativeOps:
             hp = h._pmp
             if hp is None or hp._num_entries == 0:
                 continue
-            base = hid * 64
+            base = hid * self._pmp_num
             fc = hp._flat_cfg
             fa = hp._flat_addr
             changed = False
-            for j in range(64):
+            for j in range(self._pmp_num):
                 cv = self._pmp_cfg_buf[base + j]
                 av = self._pmp_addr_buf[base + j]
                 if cv != fc[j] or av != fa[j]:
@@ -612,7 +613,7 @@ class NativeOps:
             # 设备暂停事件. 若不就此退出, 重入单轮加速执行会立即再命中而空转.
             self._run_stop_reason = RunStopReason.BREAKPOINT
         elif result.exit_reason == EXIT_EBREAK:
-            # 固件停机序列 (semihosting SYS_EXIT), 全部 hart 停止.
+            # 固件停机序列, 全部 hart 停止.
             self._run_stop_reason = RunStopReason.EBREAK
         elif result.exit_reason == EXIT_TIMEOUT:
             # 时钟源超时: 看门狗线程在单轮加速执行内推进 mtime 越过截止时间时
@@ -621,7 +622,7 @@ class NativeOps:
         return all_exec_cnt
 
     def _native_finalize(self, all_exec_cnt: int) -> int:
-        """同步 CSR 镜像, 唤醒 WFI 等待, 并推进看门狗.
+        """同步 CSR 镜像并唤醒 WFI 等待的 hart.
 
         mtime 由加速执行引擎按指令增量推进, 见 advance_clock_source, 边界处
         不再重复推进; 此处仅同步 mcycle、minstret 与 time 等 CSR 镜像.
@@ -635,31 +636,31 @@ class NativeOps:
         for hart in self.harts:
             if not hart._waiting or hart._halted:
                 continue
-            try_wfi_wakeup(hart)
+            hart.sync_pending_interrupts()
+            hart.wake_hart_from_wfi()
             if hart._waiting:
                 wfi_waiting += 1
 
-        self._wfi_sleep_if_idle(self.harts, wfi_waiting)
+        # 停机 hart 不计入等待判定, 否则全部存活 hart 等待时也永远不进入睡眠
+        live_harts = [hart for hart in self.harts if not hart._halted]
+        self._wfi_sleep_if_idle(live_harts, wfi_waiting)
         self._native_sync_plic_mip()
         _recheck = 0
         for hart in self.harts:
             if not hart._waiting or hart._halted:
                 continue
-            if try_wfi_wakeup(hart):
+            hart.sync_pending_interrupts()
+            if hart.wake_hart_from_wfi():
                 _recheck += 1
         if _recheck:
             wfi_waiting = max(0, wfi_waiting - _recheck)
             self._wake_event.clear()
 
-        if instr_delta > 0:
-            self.watchdog.kick_all()
-        else:
-            self.watchdog.tick(self.harts)
-
         for hart in self.harts:
             if not hart._waiting or hart._halted:
                 continue
-            try_wfi_wakeup(hart)
+            hart.sync_pending_interrupts()
+            hart.wake_hart_from_wfi()
             if not hart._waiting:
                 wfi_waiting = max(0, wfi_waiting - 1)
         return all_exec_cnt

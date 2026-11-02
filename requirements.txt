@@ -1109,10 +1109,6 @@ pycryptodome==4.1.0 \
     --hash=sha256:f7bb8fcbfd72c840a17b67543b984018ead3247f7054bb729e24a8dda436eb35 \
     --hash=sha256:f7c39bbb1c0907a36e1baea1ee14ef5cc1eaadaea936017c3a125037581aa086
     # via pyremu
-pydevicetree==0.0.13 \
-    --hash=sha256:5700c05df89bad8fd729c11aa6f764a3323bcb3796f13b32481ae34445cfc1b7 \
-    --hash=sha256:d61c695cec925b90a8b5740053f4b604e51154a9b36e62a2f12ed9ceaf2f8c38
-    # via pyremu
 pyfdt==0.3 \
     --hash=sha256:61601c2005ff394a25a6c84c6da2088bbf888328038400d27e4eeb1b04b9f4f0
     # via pyremu
@@ -1131,9 +1127,7 @@ pylibfdt==1.7.2.post2 \
 pyparsing==3.3.3 \
     --hash=sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36 \
     --hash=sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4
-    # via
-    #   pydevicetree
-    #   pyremu
+    # via pyremu
 pyproject-hooks==1.2.0 \
     --hash=sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8 \
     --hash=sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913

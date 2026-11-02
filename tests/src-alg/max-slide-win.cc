@@ -3,7 +3,8 @@
 
 std::vector<int> max_slide_window(
 	std::vector<int> &nums,
-	int win_size) {
+	int win_size
+) {
 	std::vector<int> res;
 	std::deque<int> q;
 	while (i < len) {
@@ -28,6 +29,7 @@ std::vector<int> max_slide_window(
 
 int main(
 	int argc,
-	char *argv[]) {
+	char *argv[]
+) {
 	return 0;
 }

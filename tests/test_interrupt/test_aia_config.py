@@ -19,7 +19,7 @@ from pyremu.platform import InterruptMode, PeripheralConfig, PlatformConfig
 def _disable_aia_compile_override(monkeypatch):
     """Disable PYREMU_AIA compile-time override.
 
-    Tests use explicit configs: qemu_virt() for legacy, qemu_virt_aia() for AIA.
+    Tests use explicit configs: basic_machine() for legacy, basic_aia_machine() for AIA.
     """
     monkeypatch.setattr(configs_gen, "PYREMU_AIA", False)
 
@@ -41,21 +41,21 @@ class TestInterruptModeEnum:
 
 
 class TestQemuVirtAiaPreset:
-    """qemu_virt_aia 工厂方法."""
+    """basic_aia_machine 工厂方法."""
 
     def test_creates_correct_mode(self):
-        cfg = PlatformConfig.qemu_virt_aia()
+        cfg = PlatformConfig.basic_aia_machine()
         assert cfg.interrupt_mode == InterruptMode.AIA
         assert cfg.periph.imsic_m_base == configs_gen.IMSIC_M_BASE
         assert cfg.periph.aplic_s_base == configs_gen.APLIC_S_BASE
 
-    def test_emulator_creates_imsic(self):
-        emu = Emulator(PlatformConfig.qemu_virt_aia())
+    def test_emulator_creates_imsic(self, make_aia_config):
+        emu = Emulator(make_aia_config())
         assert emu.imsic is not None
         assert emu.harts[0]._imsic is not None
 
-    def test_legacy_qemu_virt_has_no_imsic(self):
-        emu = Emulator(PlatformConfig.qemu_virt())
+    def test_legacy_basic_machine_has_no_imsic(self):
+        emu = Emulator(PlatformConfig.basic_machine())
         assert emu.imsic is None
         assert emu.harts[0]._imsic is None
 
@@ -64,7 +64,7 @@ class TestConfigSerialization:
     """JSON/TOML 序列化与枚举互转."""
 
     def test_json_roundtrip_legacy(self):
-        cfg = PlatformConfig.qemu_virt()
+        cfg = PlatformConfig.basic_machine()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(
                 {
@@ -89,7 +89,7 @@ class TestConfigSerialization:
         Path(path).unlink()
 
     def test_json_roundtrip_aia(self):
-        cfg = PlatformConfig.qemu_virt_aia()
+        cfg = PlatformConfig.basic_aia_machine()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(
                 {
@@ -121,7 +121,8 @@ class TestPeripheralConfigDefault:
         assert p.imsic_m_base == configs_gen.IMSIC_M_BASE
         assert p.aplic_s_base == configs_gen.APLIC_S_BASE
 
-    def test_minimal_preset_no_imsic(self):
+    def test_minimal_preset_rejected_by_window_overlap(self):
+        """minimal 预设的 RAM 窗口覆盖 CLINT, 装配模拟器时被地址窗口重叠断言拒绝."""
         cfg = PlatformConfig.minimal()
-        emu = Emulator(cfg)
-        assert emu.imsic is None
+        with pytest.raises(AssertionError, match="与 RAM"):
+            Emulator(cfg)

@@ -16,11 +16,11 @@ route AIA CSRs through the Python IMSIC backend.  CSR addresses:
   mtopei = 0x35C  (IMSIC M-file only, auto-claim on read)
 """
 
+import pytest
+
 from pyremu.core.hart import RiscvMode
-from pyremu.core.trap_handler import check_pending_interrupts
 from pyremu.emulator import Emulator
 from pyremu.interrupt.imsic import IID_M_IPI, IID_S_IPI, IMSIC
-from pyremu.platform import PlatformConfig
 
 # ============================================================
 #  常量
@@ -35,6 +35,7 @@ _CSR_STOPEI = 0x15C
 _CSR_MTOPEI = 0x35C
 _CSR_MTOPI = 0xFB0
 _CSR_STOPI = 0xDB0
+
 
 # ============================================================
 #  IMSIC 单元级: 完整的 IPI 生命周期 (与 Rust imsic.rs 逻辑一致)
@@ -163,17 +164,11 @@ class TestIpiCsrLevel:
     Native batch disabled by conftest.py -> CSR ops stay in Python.
     """
 
-    @staticmethod
-    def _make_aia_emu(num_harts=2):
-        cfg = PlatformConfig.qemu_virt_aia()
-        cfg.num_harts = num_harts
-        return Emulator(cfg)
-
     # ---- stopi (0xDB0, S-mode combined view) ----
 
-    def test_stopi_read_after_ipi(self):
+    def test_stopi_read_after_ipi(self, make_aia_emu):
         """stopi (0xDB0) read -> IID=9 (SEI); write stopi to claim -> next read returns 0."""
-        emu = self._make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         imsic = emu.imsic
         h1 = emu.harts[1]
         h1.mode = RiscvMode.S
@@ -191,7 +186,7 @@ class TestIpiCsrLevel:
         val2 = h1.read_csr(_CSR_STOPI)
         assert val2 == 0, f"stopi after claim: expected 0, got {val2}"
 
-    def test_stopi_ipi_major_identity_is_sei_regression(self):
+    def test_stopi_ipi_major_identity_is_sei_regression(self, make_aia_emu):
         """Regression: S-file IPI (minor 1) -> stopi returns major identity 9 (SEI).
 
         Linux 的 riscv_intc_aia_irq() 将 stopi>>16 分发给 intc domain。
@@ -199,7 +194,7 @@ class TestIpiCsrLevel:
         SSI 没有 handler，IPI 丢失，发送方 hart 卡死在
         smp_call_function_many_cond 等待目标 hart 应答。
         """
-        emu = self._make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         imsic = emu.imsic
         h1 = emu.harts[1]
         h1.mode = RiscvMode.S
@@ -219,9 +214,9 @@ class TestIpiCsrLevel:
             f"stopei>>16 must be the minor IPI identity (1), got {(stopei >> 16) & 0x7FF}"
         )
 
-    def test_stopi_read_idempotent_no_auto_claim(self):
+    def test_stopi_read_idempotent_no_auto_claim(self, make_aia_emu):
         """stopi read does NOT auto-claim — same IID returned on repeated reads."""
-        emu = self._make_aia_emu(num_harts=1)
+        emu = make_aia_emu(num_harts=1)
         imsic = emu.imsic
         h = emu.harts[0]
         h.mode = RiscvMode.S
@@ -234,9 +229,9 @@ class TestIpiCsrLevel:
         assert v1 == v2, "stopi read should be idempotent"
         assert v1 != 0
 
-    def test_stopi_zero_when_no_interrupts(self):
+    def test_stopi_zero_when_no_interrupts(self, make_aia_emu):
         """stopi returns 0 when no interrupts are pending."""
-        emu = self._make_aia_emu(num_harts=1)
+        emu = make_aia_emu(num_harts=1)
         h = emu.harts[0]
         h.mode = RiscvMode.S
         h.mip_val = 0
@@ -247,9 +242,9 @@ class TestIpiCsrLevel:
 
     # ---- stopei (0x15C, IMSIC S-file only, auto-claim on read) ----
 
-    def test_stopei_read_auto_claims(self):
+    def test_stopei_read_auto_claims(self, make_aia_emu):
         """stopei (0x15C) read auto-claims: second read returns 0."""
-        emu = self._make_aia_emu(num_harts=1)
+        emu = make_aia_emu(num_harts=1)
         imsic = emu.imsic
         h = emu.harts[0]
         h.mode = RiscvMode.S
@@ -264,9 +259,9 @@ class TestIpiCsrLevel:
 
     # ---- mtopi (0xFB0, M-mode combined view) ----
 
-    def test_mtopi_read_after_mfile_ipi(self):
+    def test_mtopi_read_after_mfile_ipi(self, make_aia_emu):
         """mtopi (0xFB0) sees IID=11 (MEI) for M-mode IPI (minor 3)."""
-        emu = self._make_aia_emu(num_harts=1)
+        emu = make_aia_emu(num_harts=1)
         imsic = emu.imsic
         h = emu.harts[0]
         h.mode = RiscvMode.M
@@ -280,9 +275,9 @@ class TestIpiCsrLevel:
 
     # ---- mtopei (0x35C, IMSIC M-file only, auto-claim on read) ----
 
-    def test_mtopei_read_auto_claims(self):
+    def test_mtopei_read_auto_claims(self, make_aia_emu):
         """mtopei (0x35C) read auto-claims IMSIC M-file."""
-        emu = self._make_aia_emu(num_harts=1)
+        emu = make_aia_emu(num_harts=1)
         imsic = emu.imsic
         h = emu.harts[0]
         h.mode = RiscvMode.M
@@ -297,10 +292,10 @@ class TestIpiCsrLevel:
 
     # ---- Integration: IPI -> trap ----
 
-    def test_ipi_raises_seip_trap(self):
+    def test_ipi_raises_seip_trap(self, make_aia_emu):
         """set_ip_number -> check_pending_interrupts fires for target hart."""
 
-        emu = self._make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         imsic = emu.imsic
         h1 = emu.harts[1]
         h1.mode = RiscvMode.S
@@ -312,7 +307,7 @@ class TestIpiCsrLevel:
         imsic.set_ip_number(1, "S", IID_S_IPI)
 
         # check_pending_interrupts returns True if a trap was delivered
-        result = check_pending_interrupts(h1)
+        result = h1.check_pending_interrupts()
         assert result, "check_pending_interrupts should deliver SEI trap"
 
         # After delivery, mcause should reflect SEI
@@ -397,3 +392,131 @@ class TestImsicAddressing:
             hart_id, file, file_off = resolved
             assert hart_id == h, f"S-file offset {off:#x} -> hart {hart_id}, expected {h}"
             assert file_off == 0
+
+
+# ============================================================
+#  多 hart 间 IPI: Emulator 级投递与 trap 上下文
+# ============================================================
+
+
+class TestEmulatorIPI:
+    """多 hart 间 IPI (核间中断) — 参数化 hart 数量, 多目标同时接收."""
+
+    @staticmethod
+    def _ipi_targets(num_harts: int, max_targets: int = 3):
+        """返回应开启中断的 target hart 列表 (跳过 hart 0)."""
+        return list(range(1, min(num_harts, max_targets + 1)))
+
+    # fmt: off
+    @pytest.mark.parametrize("num_harts", [4, 8, 9, 10, 12, 16])
+    # fmt: on
+    def test_ipi_pending_detection(self, num_harts: int):
+        """CLINT send_ipi -> 多个目标 hart 同时检测到待处理 MSIP."""
+        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
+
+        targets = self._ipi_targets(num_harts)
+        assert len(targets) >= 2, f"需要至少 2 个 target, num_harts={num_harts}"
+
+        for tid in targets:
+            emu.harts[tid].mie = True
+            emu.harts[tid].csrs["mie"].val = 1 << 3  # MSIE
+            emu.harts[tid].csrs["mtvec"].val = 0x80000000
+
+        # 向所有 target hart 发送 IPI
+        for tid in targets:
+            emu.clint.send_ipi(tid)
+
+        # 每个 target 都应检测到 MSIP
+        for tid in targets:
+            interrupted = emu.harts[tid].check_pending_interrupts()
+            assert interrupted, f"hart {tid} 应检测到 MSIP (num_harts={num_harts})"
+
+        # hart 0 未开启 MSIE, check 应返回 False (中断不使能)
+        emu.harts[0].mie = True
+        emu.harts[0].csrs["mie"].val = 0  # 无任何使能位
+        assert not emu.harts[0].check_pending_interrupts(), (
+            f"hart 0 未使能 MSIE, 不应检测到中断 (num_harts={num_harts})"
+        )
+
+    # fmt: off
+    @pytest.mark.parametrize("num_harts", [4, 8, 9, 10, 12, 16])
+    # fmt: on
+    def test_ipi_diverges_hart_pc(self, num_harts: int):
+        """多目标 hart 收到 IPI 后跳转 mtvec; 未开启中断的 hart 正常推进 PC."""
+        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
+
+        for h in emu.harts:
+            assert h.pc == 0x1000
+
+        targets = self._ipi_targets(num_harts)
+        for tid in targets:
+            emu.harts[tid].mie = True
+            emu.harts[tid].csrs["mie"].val = 1 << 3
+            emu.harts[tid].csrs["mtvec"].val = 0x80000000
+
+        for tid in targets:
+            emu.clint.send_ipi(tid)
+
+        emu.step()
+
+        # targets: PC 应跳转到 mtvec
+        for tid in targets:
+            assert emu.harts[tid].pc == 0x80000000, (
+                f"hart {tid} 应跳转到 mtvec (num_harts={num_harts}), "
+                f"PC={emu.harts[tid].pc:#x}"
+            )
+
+        # hart 0 (未开启中断): PC 正常 +4
+        assert emu.harts[0].pc == 0x1004, (
+            f"hart 0 应正常推进 PC (num_harts={num_harts})"
+        )
+
+        # 编号最大的非 target hart (若存在): PC 也应正常 +4
+        non_target = targets[-1] + 1
+        if non_target < num_harts:
+            assert emu.harts[non_target].pc == 0x1004, (
+                f"hart {non_target} (非 target) 应正常推进 PC (num_harts={num_harts})"
+            )
+
+    # fmt: off
+    @pytest.mark.parametrize("num_harts", [4, 8, 9, 10, 12, 16])
+    # fmt: on
+    def test_ipi_causes_trap_context_save(self, num_harts: int):
+        """多 target 同时收 IPI, 每个 hart 的 mepc/mcause/MIE 独立正确."""
+        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
+
+        targets = self._ipi_targets(num_harts)
+        saved_pcs = {}
+        for tid in targets:
+            h = emu.harts[tid]
+            h.mie = True
+            h.csrs["mie"].val = 1 << 3
+            h.csrs["mtvec"].val = 0x80000000
+            saved_pcs[tid] = h.pc  # 0x1000
+
+        for tid in targets:
+            emu.clint.send_ipi(tid)
+
+        emu.step()
+
+        for tid in targets:
+            h = emu.harts[tid]
+            next_pc = saved_pcs[tid] + 4  # 0x1004
+            assert h.mepc_val == next_pc, (
+                f"hart {tid}: mepc 应={next_pc:#x}, 实际={h.mepc_val:#x}"
+            )
+            assert h.mie is False, f"hart {tid}: 进入 trap 后 MIE 应清零"
+            assert (h.mcause_val >> 63) & 1 == 1, (
+                f"hart {tid}: mcause bit63 应置位 (中断)"
+            )
+            assert (h.mcause_val & ~(1 << 63)) == 3, (
+                f"hart {tid}: mcause code 应为 3 (MSI)"
+            )
+
+        # hart 0 没有中断使能, 不应 trap
+        assert emu.harts[0].mcause_val == 0, (
+            f"hart 0 不应 trap (num_harts={num_harts})"
+        )

@@ -28,7 +28,7 @@ PCB 布局 (每进程 296 字节, 与 kernel.s 中 PCB_*_OFF 常量一致):
     from pyremu.loader import MultiProgramLoader
     from pyremu.configs_aux import examed_elf_dir
 
-    emu = Emulator(PlatformConfig.qemu_virt())
+    emu = Emulator(PlatformConfig.basic_machine())
     kernel = parse_firmware(examed_elf_dir("kernel.elf"))
     emu.load_firmware(kernel)
 

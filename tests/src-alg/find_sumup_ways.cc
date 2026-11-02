@@ -7,7 +7,8 @@ std::vector<int> rec;
 void dfs(
 	int sumup,
 	int curr,
-	std::vector<int> &arr) {
+	std::vector<int> &arr
+) {
 	if (curr > arr.size() || sumup > goal) {
 		return;
 	}
@@ -35,7 +36,8 @@ void dfs(
 }
 std::vector<std::vector<int>> combinationSum(
 	std::vector<int> &inp,
-	int target) {
+	int target
+) {
 	goal = target;
 	dfs(0, 0, inp);
 	return res;
@@ -43,6 +45,7 @@ std::vector<std::vector<int>> combinationSum(
 
 int main(
 	int argc,
-	char *argv[]) {
+	char *argv[]
+) {
 	return 0;
 }

@@ -3,11 +3,10 @@ use core::arch::asm;
 
 use crate::constants::*;
 use crate::context;
+use crate::csr;
 use crate::hang::fault_halt;
 use crate::paging;
-// ---------------------------------------------------------------
-//  ecall调用原语
-// ---------------------------------------------------------------
+use crate::platform;
 
 #[inline(always)]
 unsafe fn ecall_3(ext_id: u64, func_id: u64, a0: u64, a1: u64, a2: u64) -> (u64, u64) {
@@ -28,12 +27,6 @@ unsafe fn ecall_3(ext_id: u64, func_id: u64, a0: u64, a1: u64, a2: u64) -> (u64,
 	(ret0, ret1)
 }
 
-// ---------------------------------------------------------------
-//  Enclave 扩展调用  (ext_id = 0x2022_1222)
-// ---------------------------------------------------------------
-
-/// Yield to M-mode.  M-mode returns `(a0, a1, a2)` — typically
-/// `(payload_pa, payload_size, argc)` during boot.
 #[inline]
 pub fn enclave_call_suspend(short_msg: u64) -> (u64, u64, u64) {
 	let a0: u64;
@@ -53,12 +46,8 @@ pub fn enclave_call_suspend(short_msg: u64) -> (u64, u64, u64) {
 	(a0, a1, a2)
 }
 
-/// 取回本飞地模块请求的交付结果, 返回
-/// `(交付结果, 宿主报告的字节数, 接收内存范围首字节的物理地址, 实际写入的字节数)`.
-///
-/// 模块请求的每一次让出 (见 ENCLAVE_SUSPEND_MODULE_*) 都以一次本调用闭合: 飞地经
-/// RESUME 取回的是自己让出时的寄存器, 宿主无法经 RESUME 回传数据, 故结果只能另行取回.
-/// 读取后 M 模式把交付结果复位为 ENCLAVE_MODULE_STATUS_NONE.
+/// 取回本飞地模块请求的结果, 返回
+/// `(执行结果, 宿主报告的字节数, 接收内存范围首字节的物理地址, 实际写入的字节数)`.
 #[inline]
 pub fn enclave_call_module_result() -> (u64, u64, u64, u64) {
 	let a0: u64;
@@ -81,16 +70,15 @@ pub fn enclave_call_module_result() -> (u64, u64, u64, u64) {
 
 /// 登记模块映像接收缓冲区, 入参为缓冲区的起始虚拟地址与字节数。
 ///
-/// 交付的映像字节由 M 模式写入本缓冲区, 故飞地须先分配并映射好缓冲区再登记, 登记之后
-/// 才让出请求交付。返回 0 表示已登记, 其余取值为 SBI 错误码。
+/// 返回 0 表示已登记, 其余取值为 SBI 错误码。
 #[inline]
 pub fn enclave_call_module_img_recv_buf(va: u64, len: u64) -> u64 {
 	(unsafe { ecall_3(ENCLAVE_EXT_ID, ENCLAVE_CALL_MODULE_IMG_RECV_BUF, va, len, 0) }).0
 }
 
 /// Request 2 MiB memory chunks from M-mode.
-/// `attr` 给出这批分区的类别, 取值见 ENCLAVE_MEM_ATTR_*.
-/// Returns `(allocated_count, physical_address)`.
+/// `attr` 给出这批分区的类别.
+/// 返回 `(allocated_count, physical_address)`.
 pub fn enclave_call_mem_alloc(chunk_nums: u64, attr: u64) -> (u64, u64) {
 	unsafe { ecall_3(ENCLAVE_EXT_ID, ENCLAVE_CALL_MEM_ALLOC, 0, chunk_nums, attr) }
 }
@@ -113,7 +101,7 @@ pub fn enclave_call_set_mem_attr(paddr: u64, partition_num: u64, attr: u64) -> u
 }
 
 /// 向M模式查询可信应用剩余可用内存容量.
-/// Returns `(free_total, max_contiguous)` in units of 2 MiB partitions.
+/// 返回 `(free_total, max_contiguous)` in units of 2 MiB partitions.
 #[inline]
 #[allow(dead_code)]
 pub fn enclave_call_get_available_mem() -> (u64, u64) {
@@ -136,7 +124,6 @@ pub fn enclave_call_get_id() -> u64 {
 	ret
 }
 
-/// Get the current hart ID.
 #[inline]
 #[allow(dead_code)]
 pub fn enclave_call_get_hartid() -> u64 {
@@ -152,7 +139,7 @@ pub fn enclave_call_get_hartid() -> u64 {
 	ret
 }
 
-/// Destroy this enclave and return to host.
+/// 释放并返回到host
 pub fn enclave_call_exit(code: u64) -> ! {
 	unsafe {
 		ecall_3(ENCLAVE_EXT_ID, ENCLAVE_CALL_SHUTDOWN, code, 0, 0);
@@ -160,7 +147,6 @@ pub fn enclave_call_exit(code: u64) -> ! {
 	fault_halt("enclave_call_exit: ecall returned\n")
 }
 
-/// Query M-mode for pending host requests.
 /// Returns a flags bitmask: bit0=SHUTDOWN_REQUESTED.
 #[inline]
 pub fn enclave_call_query_requests() -> u64 {
@@ -176,11 +162,11 @@ pub fn enclave_call_query_requests() -> u64 {
 	ret
 }
 
-/// 请求 M-mode 向 *buf* 写入随机字节, 返回实际写入的字节数.
+/// 请求 M-mode 向buf写入随机字节, 返回实际写入的字节数.
 ///
-/// 缓冲区地址以物理地址形式交给 M-mode (与 DBCN 同理), 因此只可用于运行时
+/// 缓冲区地址以物理地址形式交给 M-mode, 因此只可用于运行时
 /// 自身的内存; 载荷的缓冲区是 U 模式虚拟地址, 须先分块拷入本地缓冲.
-/// 地址换算失败时返回 0: 未写入任何字节.
+/// 失败时返回 0 表示未写入任何字节.
 #[inline]
 pub fn enclave_call_get_rand_num(buf: &mut [u8]) -> u64 {
 	let Some(pa) = va_to_pa(buf.as_ptr() as u64) else {
@@ -216,10 +202,6 @@ pub fn enclave_call_unmatched_acc_fault(stval: u64, scause: u64) -> u64 {
 	})
 	.0
 }
-
-// ---------------------------------------------------------------
-//  标准SBI调用
-// ---------------------------------------------------------------
 
 /// 使用ecall通过传统SBI控制台输出接口输出单个字符
 #[inline]
@@ -257,7 +239,7 @@ pub fn va_to_pa(va: u64) -> Option<u64> {
 		// 载荷/argv 的线性映射所得地址 VA = PA + LINEAR_MAP_OFFSET.
 		Some(va.wrapping_sub(LINEAR_MAP_OFFSET))
 	} else {
-		// MMU 未使能时的恒等映射 (VA == PA), 无需换算.
+		// MMU 未使能时.
 		Some(va)
 	}
 }
@@ -290,10 +272,23 @@ pub fn sbi_console_write(buf: &[u8]) {
 
 /// 请求设置定时器中断
 #[inline]
-#[allow(dead_code)]
-#[allow(unused)]
 pub fn sbi_set_timer(stime_value: u64) {
 	unsafe {
 		ecall_3(SBI_TIMER_EXT, SBI_SET_TIMER_FUNC, stime_value, 0, 0);
 	}
+}
+
+/// 设定下一次 S 模式时钟中断的截止时间。
+///
+/// 平台提供 sstc 时直接写 stimecmp; 否则经 SBI TIME 调用交给 M 模式, 由机器模式的
+/// 定时器事件列表按最早的截止时间设定 mtimecmp。两条路径都清除 sip.STI: 该位描述
+/// 的是刚处理完的那次到期。
+#[inline]
+pub fn set_smode_timer(deadline: u64) {
+	if platform::PlatformFeatures::load().has_sstc() {
+		csr::write_stimecmp(deadline);
+	} else {
+		sbi_set_timer(deadline);
+	}
+	csr::clear_csr!(sip, csr::STI);
 }

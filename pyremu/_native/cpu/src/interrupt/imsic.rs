@@ -1446,6 +1446,20 @@ mod tests {
 	}
 
 	#[test]
+	fn stopi_ignores_latched_stip_when_sstc_armed() {
+		// stimecmp 不为 0 时 STIP 由定时器决定. 定时器到期后 mip.STIP 仍为置位,
+		// 固件上调 stimecmp 使 mtime 小于比较值, 此时 compute_stopi 须返回 0;
+		// 否则内核按 stopi 排空中断的循环不会退出.
+		let mut h1 = make_hart1_state();
+		h1.mie |= 1 << 5; // STIE
+		h1.stimecmp = 50;
+		h1.mip.fetch_or(1 << 5, Ordering::AcqRel); // 残留的 STIP
+
+		let (val, _) = compute_stopi(&mut h1, 49);
+		assert_eq!(val, 0, "stopi must return 0 when mtime < stimecmp");
+	}
+
+	#[test]
 	fn multi_hart_stopi_ipi_in_sfile_not_visible_in_mtopi() {
 		// hart 1 的 S 文件中编号 1 的 IPI 经 compute_stopi 可见, 经 compute_mtopi
 		// 不可见. 两个文件互相独立, 不存在跨文件转发.

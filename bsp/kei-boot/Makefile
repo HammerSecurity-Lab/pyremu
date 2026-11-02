@@ -18,8 +18,8 @@ phony = kei-sav
 kei-sav:
 	@mkdir -p $(firmbin_dir)
 	$(CLANG) $(ZSBL_FLAGS) $(CONF_DEFS) \
-		kei.sav.S                       \
-		-T kei.sav.lds                  \
+		kei.sav.S          \
+		-T kei.sav.lds     \
 		-o kei.sav.elf
 	$(OBJCOPY) kei.sav.elf \
 		-O binary          \

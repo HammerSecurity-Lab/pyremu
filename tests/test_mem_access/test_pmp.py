@@ -9,16 +9,13 @@ from unittest import mock
 
 import pytest
 
+from pyremu import configs_gen
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import RiscvMode
+from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
-    check_instruction_fetch,
-    inject_memory_backend,
-    mem_read,
-    mem_write,
     MemoryAccessError,
 )
-from pyremu.core.registers import CSR, CsrAccess
+from pyremu.core.registers import CSR, CsrAccess, register_csr
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.memory.pmp import (
@@ -289,6 +286,29 @@ class TestPmpConstruction:
 
 
 # ============================================================
+#  PMP CSR 的定义
+# ============================================================
+
+
+class TestPmpCsrDefinition:
+    """PMP CSR 的数目由 configs_gen.PMP_ENTRIES 给出."""
+
+    def test_pmpaddr_count_follows_config(self):
+        """pmpaddr0 至 pmpaddr<PMP_ENTRIES-1> 存在, 其后不存在."""
+        names = register_csr()
+
+        assert f"pmpaddr{configs_gen.PMP_ENTRIES - 1}" in names
+        assert f"pmpaddr{configs_gen.PMP_ENTRIES}" not in names
+
+    def test_odd_pmpcfg_registers_absent(self):
+        """RV64 只实现偶数编号的 pmpcfg, 每个覆盖 8 个条目."""
+        groups = (min(configs_gen.PMP_ENTRIES, 64) + 7) // 8
+        cfg = sorted(int(name[6:]) for name in register_csr() if name.startswith("pmpcfg"))
+
+        assert cfg == [2 * i for i in range(groups)]
+
+
+# ============================================================
 #  PMP CSR 条目范围检查
 # ============================================================
 
@@ -299,7 +319,7 @@ class TestPmpCsrRange:
     @pytest.fixture
     def hart(self) -> Hart:
         """8 条目的 hart."""
-        return Hart(id=0, pmp_entries=8)
+        return Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=8))
 
     def _csrrw_instr(self, csr_addr: int) -> int:
         """CSRRW x5, csr, x0 (只读)."""
@@ -335,7 +355,7 @@ class TestPmpCsrRange:
 
     def test_pmp_entries_zero_all_trap(self):
         """pmp_entries=0 时所有 pmpaddr 均 trap."""
-        h = Hart(id=0, pmp_entries=0)
+        h = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=0))
         h.mode = RiscvMode.M
         instr = self._csrrw_instr(0x3B0)  # pmpaddr0
         h.exec_instr(instr)
@@ -360,9 +380,10 @@ class TestPmpInHart:
     @pytest.fixture
     def hart(self) -> Hart:
 
-        h = Hart(id=0, pmp_entries=4)
+        h = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=4))
         bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
-        inject_memory_backend(h, bus.read, bus.write)
+        h.mem_read_phy = bus.read
+        h.mem_write_phy = bus.write
         h.bus = bus
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x1000
@@ -396,7 +417,7 @@ class TestPmpInHart:
         """M 模式 store 不被 PMP 检查."""
         self._setup_napot_rw(hart, 0x8000_1000, 12, r=True, w=True)
         # 直接通过 _mem_write 写入
-        mem_write(hart, 0x8000_1000, b"\xaa\xbb\xcc\xdd")
+        hart.mem_write(0x8000_1000, b"\xaa\xbb\xcc\xdd")
         # 无 trap
         assert hart.mcause_val == 0
 
@@ -404,7 +425,7 @@ class TestPmpInHart:
         """U 模式, PMP 允许 RW 时 store 成功."""
         self._setup_napot_rw(hart, 0x8000_1000, 12, r=True, w=True)
         hart.mode = RiscvMode.U
-        mem_write(hart, 0x8000_1000, b"\x11\x22")
+        hart.mem_write(0x8000_1000, b"\x11\x22")
         assert hart.mcause_val == 0
 
     def test_umode_store_pmp_w_denied(self, hart):
@@ -412,7 +433,7 @@ class TestPmpInHart:
         self._setup_napot_rw(hart, 0x8000_1000, 12, r=True, w=False)
         hart.mode = RiscvMode.U
         try:
-            mem_write(hart, 0x8000_1000, b"\x11\x22")
+            hart.mem_write(0x8000_1000, b"\x11\x22")
         except MemoryAccessError:
             pass
         assert hart.mcause_val == 7, f"应为 StAccessFault(7), 实际 {hart.mcause_val}"
@@ -421,9 +442,9 @@ class TestPmpInHart:
         """U 模式, PMP R=0 -> LdAccessFault."""
         self._setup_napot_rw(hart, 0x8000_1000, 12, r=False, w=True)
         hart.mode = RiscvMode.U
-        hart._mem_write_phy(0x8000_1000, b"\xde\xad")
+        hart.mem_write_phy(0x8000_1000, b"\xde\xad")
         try:
-            mem_read(hart, 0x8000_1000, 4)
+            hart.mem_read(0x8000_1000, 4)
         except MemoryAccessError:
             pass
         assert hart.mcause_val == 5, f"应为 LdAccessFault(5), 实际 {hart.mcause_val}"
@@ -439,10 +460,10 @@ class TestInstrFetchPmp:
 
     @pytest.fixture
     def hart(self) -> Hart:
-        h = Hart(id=0, pmp_entries=4)
-        bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
-        inject_memory_backend(h, bus.read, bus.write)
-        h.bus = bus
+        h = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=4))
+        h.bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
+        h.mem_read_phy = h.bus.read
+        h.mem_write_phy = h.bus.write
         h.csrs["mtvec"].val = 0x8000_0000
         h.pc = 0x8000_1000
         return h
@@ -466,7 +487,7 @@ class TestInstrFetchPmp:
         """Bare 模式, PMP X=1 时取指通过."""
         self._setup_napot(hart, 0x8000_1000, 12, PMP_R | PMP_X)
         hart.mode = RiscvMode.S
-        ok, pa = check_instruction_fetch(hart, 0x8000_1000)
+        ok, pa = hart.check_instruction_fetch(0x8000_1000)
         assert ok
         assert pa == 0x8000_1000
 
@@ -474,7 +495,7 @@ class TestInstrFetchPmp:
         """Bare 模式, PMP X=0 -> InstrAccessFault."""
         self._setup_napot(hart, 0x8000_1000, 12, PMP_R | PMP_W)
         hart.mode = RiscvMode.S
-        ok, pa = check_instruction_fetch(hart, 0x8000_1000)
+        ok, pa = hart.check_instruction_fetch(0x8000_1000)
         assert not ok
         assert hart.mcause_val == 1, f"应为 InstrAccessFault(1), 实际 {hart.mcause_val}"
 
@@ -482,7 +503,7 @@ class TestInstrFetchPmp:
         """S 模式无匹配 PMP 条目 -> InstrAccessFault."""
         # 所有条目 OFF 时 S 模式取指被拒
         hart.mode = RiscvMode.S
-        ok, pa = check_instruction_fetch(hart, 0x8000_1000)
+        ok, pa = hart.check_instruction_fetch(0x8000_1000)
         assert not ok
         assert hart.mcause_val == 1
 
@@ -491,7 +512,7 @@ class TestInstrFetchPmp:
         self._setup_napot(hart, 0x8000_1000, 12, PMP_R | PMP_W)
         hart.mode = RiscvMode.M
         # M 模式 MPRV=0 时不受 PMP 限制
-        ok, pa = check_instruction_fetch(hart, 0x8000_1000)
+        ok, pa = hart.check_instruction_fetch(0x8000_1000)
         assert ok
         assert pa == 0x8000_1000
 
@@ -506,7 +527,7 @@ class TestInstrFetchPmp:
         hart.mode = RiscvMode.M
         # MPRV=1, MPP=S (bits[12:11]=01)
         hart.mstatus_val = (1 << 17) | (1 << 11)
-        ok, pa = check_instruction_fetch(hart, 0x8000_1000)
+        ok, pa = hart.check_instruction_fetch(0x8000_1000)
         assert ok, "MPRV=1 不应影响取指 — M 模式取指必须绕过 PMP"
         assert pa == 0x8000_1000
 
@@ -514,7 +535,7 @@ class TestInstrFetchPmp:
         """取指地址不在有效内存范围 -> InstrAccessFault."""
         hart.mode = RiscvMode.M
         # M 模式 PMP 放行, 但 PMA 检查拒绝 (无效地址)
-        ok, pa = check_instruction_fetch(hart, 0xDEAD_BEEF)
+        ok, pa = hart.check_instruction_fetch(0xDEAD_BEEF)
         assert not ok
         assert hart.mcause_val == 1
 

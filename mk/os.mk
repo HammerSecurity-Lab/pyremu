@@ -39,6 +39,11 @@ _bootargs  += root=/dev/vda rw
 _bootargs  += $(if $(init),init=$(init))
 _bootargs  += $(if $(INITRD),rdinit=$(rdinit)) $(bootargs_extra)
 bootargs_arg    = --bootargs='$(_bootargs)'
+# CHIP_DTS: 芯片设备树源文件. 非空时模拟器按该树装配平台, 并把同一棵树的 blob
+#   交给受调试程序; 为空时按 configs_gen 的默认配置装配, 设备树由模拟器生成.
+#   覆盖: make emu-linux-sh chip_dts=output/chip.dts
+chip_dts       ?=
+chip_dts_arg    = $(if $(chip_dts),--chip-dts=$(chip_dts))
 # INITRD 非空时追加 --initrd (rdinit 已在 bootargs 中).
 initrd_args     = $(if $(INITRD),--initrd=$(INITRD))
 # DISK 指向的镜像存在时追加 --disk.

@@ -30,6 +30,9 @@ TEE_DEST="${ROOTFS_DIR}/eval/cache-probe-exploit"
 FNAPP_DEST="${TEE_DEST}/fn_apps"
 STRESS_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/stress-test" && pwd)"
 STRESS_DEST="${ROOTFS_DIR}/eval/stress-test"
+# Headless regression entry, installed as /eval/regress.sh and booted as the
+# kernel init by the headless test.
+REGRESS_SRC="$(cd "$(dirname "$0")" && pwd)/regress.sh"
 # Enclave modules: the images are installed into /modules; the id-to-file mapping is
 # compiled into the regression tool and the module loader.
 MODULE_SRC="$(cd "$(dirname "$0")/../../../bsp/sittim/modules" && pwd)"
@@ -346,69 +349,11 @@ else
     echo ">> SKIP module loader: ${GCC_CROSS} not found"
 fi
 
-# 8e. Headless regression entry — the headless test boots with init=/eval/regress.sh
-# to auto-run the ecall regression (insmod driver + tee_ecall_regress + tee_concurrent);
-# its [regress] ... markers are asserted from UART.
-cat > "${ROOTFS_DIR}/eval/regress.sh" <<'REGRESS'
-#!/bin/sh
-echo "Regress init starting"
-# This script is the kernel init, so nothing mounts /etc/fstab on its behalf;
-# without this /proc and /dev stay empty, and both counting the online harts and
-# creating the /dev/tee_enclave node fail.
-mount -a
-/sbin/insmod /eval/tee_enclave_drv.ko 2>&1
-cd /eval/cache-probe-exploit || exit 1
-
-# Stage 1: one hart loads every payload under fn_apps, one enclave at a time.
-# The second argument is the module directory: payloads that request a module are
-# served from it while the regression keeps resuming the enclave. It is omitted
-# when the build installed no modules, because no image can be served then.
-if [ -d /modules ]; then
-	set -- /modules
-else
-	set --
-fi
-./tee_ecall_regress /eval/cache-probe-exploit/fn_apps "$@"
-rc_seq=$?
-echo "Regress sequential rc=$rc_seq"
-
-# Stage 2: several harts enter their own enclaves concurrently and run the same
-# payload.  orbit is chosen because it exits by itself with argc = 0 (ENTER from
-# tee_concurrent passes no arguments) and stays within the regression's time
-# budget.
-CONC_PAYLOAD=/eval/cache-probe-exploit/fn_apps/orbit
-
-# One child per online hart, capped at 4.
-harts=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
-case "$harts" in
-'' | *[!0-9]*) harts=1 ;;
-esac
-if [ "$harts" -gt 4 ]; then
-	harts=4
-fi
-
-rc_conc=0
-if [ ! -f "$CONC_PAYLOAD" ]; then
-	echo "Regress concurrent skipped: $CONC_PAYLOAD not found"
-elif [ "$harts" -lt 2 ]; then
-	# Two harts at least are required for the requests to overlap; on one hart
-	# they can only run serially, which concurrent-two-harts rejects by design.
-	echo "Regress concurrent skipped: $harts online hart(s)"
-else
-	echo "Regress concurrent starting (procs=$harts)"
-	./tee_concurrent "$CONC_PAYLOAD" "$harts"
-	rc_conc=$?
-	echo "Regress concurrent rc=$rc_conc"
-fi
-
-if [ "$rc_seq" -eq 0 ] && [ "$rc_conc" -eq 0 ]; then
-	echo "Regress summary: ALL PASS"
-	exit 0
-fi
-echo "Regress summary: FAILED"
-exit 1
-REGRESS
-chmod +x "${ROOTFS_DIR}/eval/regress.sh"
+# 8e. Headless regression entry — installed from regress.sh, which sits next to
+# this script; the headless test boots with init=/eval/regress.sh to auto-run the
+# ecall regression (insmod driver + tee_ecall_regress + tee_concurrent), and its
+# [regress] ... markers are asserted from UART.
+install -m755 "${REGRESS_SRC}" "${ROOTFS_DIR}/eval/regress.sh"
 
 echo ">> TEE components:"
 ls -la "${TEE_DEST}"

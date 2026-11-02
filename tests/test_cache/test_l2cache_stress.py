@@ -6,26 +6,7 @@
 """L2 cache stress tests — simulate firmware access patterns (DTB + BSS memset)."""
 
 from pyremu.memory.l2cache import L2Cache
-
-
-def _make_ram(size=256 * 1024):
-    """Construct a simulated physical RAM bytearray with read/write callbacks."""
-    ram = bytearray(size)
-
-    def read_fn(addr, size):
-        # addr is relative to the RAM array
-        if addr < 0 or addr + size > len(ram):
-            return b"\x00" * size
-        return bytes(ram[addr : addr + size])
-
-    def write_fn(addr, data):
-        if addr < 0 or addr + len(data) > len(ram):
-            return  # silently drop out-of-range writes
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
-
+from tests.conftest import make_test_ram
 
 # ---------------------------------------------------------------
 # Tests use address-offset into the RAM array (not full PA).
@@ -40,7 +21,7 @@ class TestCacheWriteAllocateThenRead:
 
     def test_single_write_allocate_read_back(self):
         """Write data to a new address -> should be readable immediately."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -50,7 +31,7 @@ class TestCacheWriteAllocateThenRead:
 
     def test_write_then_read_partial(self):
         """Write 8 bytes, then read 4 at offset 2."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -60,7 +41,7 @@ class TestCacheWriteAllocateThenRead:
 
     def test_write_multiple_same_line(self):
         """Multiple writes to the same cache line (at different offsets)."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -78,7 +59,7 @@ class TestCacheEvictionIntegrity:
 
     def test_dirty_line_survives_eviction(self):
         """Write to address A, evict it by filling the same set, re-read A."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         # 1 set × 2 ways -> easy to force eviction
         l2 = L2Cache(size=128, line_size=64, ways=2)
         l2.set_ram_backend(rf, wf)
@@ -100,7 +81,7 @@ class TestCacheEvictionIntegrity:
 
     def test_many_writes_dont_corrupt_earlier_data(self):
         """Thrash the cache with many writes, verify earlier data survives."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)  # 16 sets × 4 ways
         l2.set_ram_backend(rf, wf)
 
@@ -125,7 +106,7 @@ class TestCacheEvictionIntegrity:
 
     def test_dtb_like_pattern(self):
         """Simulate DTB + BSS memset pattern: write small data, then thrash cache."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -151,7 +132,7 @@ class TestCacheEvictionIntegrity:
 
     def test_interleaved_read_write_integrity(self):
         """Interleave reads from 'DTB' area with writes to 'BSS' area."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -175,7 +156,7 @@ class TestCrossCacheLineAccess:
 
     def test_write_crossing_cache_line(self):
         """Write 16 bytes at offset 56 of a cache line (crosses boundary)."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -190,7 +171,7 @@ class TestCrossCacheLineAccess:
 
     def test_read_crossing_cache_line(self):
         """Read 8 bytes at offset 60 (4 bytes in line 0, 4 bytes in line 1)."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         # Pre-fill RAM
         for i in range(128):
             ram[i] = i & 0xFF
@@ -205,7 +186,7 @@ class TestCrossCacheLineAccess:
 
     def test_cross_line_write_then_read_back(self):
         """Write across cache line boundary, thrash, then read back."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -238,7 +219,7 @@ class TestCacheSetAliasing:
 
     def test_same_set_different_tags_no_corruption(self):
         """Two addresses in the same set with different tags don't alias."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -261,7 +242,7 @@ class TestCacheSetAliasing:
 
     def test_set_overflow_evicts_lru(self):
         """When more addresses than ways map to the same set, LRU evicts oldest."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=2)  # 2 ways
         l2.set_ram_backend(rf, wf)
 
@@ -289,28 +270,28 @@ class TestCacheWriteSizeVariants:
     """Test different write sizes that the emulator issues."""
 
     def test_write_1_byte(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
         l2.write(0x1000, b"\x42")
         assert l2.read(0x1000, 1) == b"\x42"
 
     def test_write_2_bytes(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
         l2.write(0x1000, b"\x34\x12")
         assert l2.read(0x1000, 2) == b"\x34\x12"
 
     def test_write_4_bytes(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
         l2.write(0x1000, b"\x78\x56\x34\x12")
         assert l2.read(0x1000, 4) == b"\x78\x56\x34\x12"
 
     def test_write_8_bytes(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
         l2.write(0x1000, b"\xef\xcd\xab\x89\x67\x45\x23\x01")
@@ -321,7 +302,7 @@ class TestCacheMfenceDid:
     """mfence.did: flush cache lines by domain ID."""
 
     def test_flush_by_mdid_does_not_affect_other_domains(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
@@ -349,7 +330,7 @@ class TestCacheLargeScale:
 
     def test_full_cache_thrash(self):
         """Fill the entire cache multiple times, verify data integrity at checkpoints."""
-        ram, rf, wf = _make_ram(1024 * 1024)  # 1 MiB RAM
+        ram, rf, wf = make_test_ram(1024 * 1024, has_bounds_check=True)  # 1 MiB RAM
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)  # 64 sets × 4 ways
         l2.set_ram_backend(rf, wf)
 

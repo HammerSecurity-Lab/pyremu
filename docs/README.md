@@ -103,10 +103,16 @@ pyremu/                       模拟器包
     disk.py                   磁盘映像的格式摘要与块布局
     sym/                      多来源符号的解析、加载与登记
   core/                       处理器核心
-    hart.py                   寄存器文件、特权级与 mstatus 位常量
-    decoder.py                指令解码与全部指令处理函数
-    trap_handler.py           陷态投递、中断检查与陷态返回
-    mem_check_aux.py          访存、CSR 校验与地址翻译
+    priv_defs.py              特权级枚举与 mstatus 位常量
+    hart.py                   寄存器文件与 mstatus 快捷属性
+    decoder/                  指令解码与执行
+      hart.py                 指令执行入口与 32 位指令处理函数
+      alu.py                  纯 Python 算术表与加速执行引擎的选择
+      compressed.py           CompressedInstrOps: 16 位压缩指令的三个象限
+      sys_ops.py              SysInstrOps: 特权指令与 CSR 指令
+      mem_ops.py              加载与原子操作的取值辅助
+    trap_handler.py           TrapOps: 陷态投递、中断检查与陷态返回
+    mem_check_aux.py          MemoryAccessOps: 访存、CSR 校验与地址翻译
     registers.py              寄存器与 CSR 模型
     trap_def.py               陷态类型与 cause 编码的互查
   memory/                     内存子系统
@@ -137,7 +143,7 @@ pyremu/                       模拟器包
   utils/                      工具
     disassem.py               RV64 反汇编器
     parse_bin.py              ELF、PE 与纯二进制的固件解析
-    dtb.py                    设备树生成
+    dev_tree/                 设备树: 文本格式解析、读取、改写与生成
     str_aux.py                地址与十六进制转储的格式化
     mask.py                   位宽掩码
     wrapper.py                异常处理装饰器
@@ -212,7 +218,7 @@ rvdbg[0] mem 0x80000000 64  # 内存 dump
 rvdbg[0] csr satp        # CSR 读写
 ```
 
-依赖 `prompt_toolkit` 提供 Tab 补全与历史记录，历史记录写入 `~/.pyremu_history`；`rich` 提供彩色格式化的命令行输出。历史文件仅保留最近 5000 行。
+依赖 `prompt_toolkit` 提供 Tab 补全与历史记录，历史记录写入 `PYREMU_HISTORY_FILE` 给出的路径，该路径在 `mk/emu-feats.mk` 中配置；未配置时写入 `~/.pyremu_history`。`rich` 提供彩色格式化的命令行输出。历史文件超过 10000 行时只保留最近 5000 行。
 
 
 ## Rust Native 并发执行引擎

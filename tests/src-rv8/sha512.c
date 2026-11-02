@@ -4,7 +4,7 @@
 
 /*
  * derived from SUPERCOP: https://bench.cr.yp.to/supercop.html
- * 
+ *
  * Copyright (c) 2011 Stanford University.
  * Copyright (c) 2014 Cryptography Research, Inc.
  * Released under the MIT License.  See LICENSE for license information.
@@ -25,15 +25,10 @@ struct sha512_ctx_t {
 	uint64_t nbytes;
 };
 
-static const uint64_t sha512_init_state[8] = {
-	0x6a09e667f3bcc908,
-	0xbb67ae8584caa73b,
-	0x3c6ef372fe94f82b,
-	0xa54ff53a5f1d36f1,
-	0x510e527fade682d1,
-	0x9b05688c2b3e6c1f,
-	0x1f83d9abfb41bd6b,
-	0x5be0cd19137e2179};
+static const uint64_t sha512_init_state[8] = { //
+	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+	0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
+};
 
 static const uint64_t sha512_k[80] = {
 	0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
@@ -55,11 +50,13 @@ static const uint64_t sha512_k[80] = {
 	0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
 	0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
 	0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
-	0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817};
+	0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817
+};
 
 static inline uint64_t rotate_r(
 	uint64_t x,
-	int d) {
+	int d
+) {
 	return (x >> d) | (x << (64 - d));
 }
 
@@ -82,14 +79,16 @@ static inline uint64_t s1(uint64_t b) {
 static inline uint64_t ch(
 	uint64_t h4,
 	uint64_t h5,
-	uint64_t h6) {
+	uint64_t h6
+) {
 	return h6 ^ (h4 & (h6 ^ h5));
 }
 
 static inline uint64_t maj(
 	uint64_t h1,
 	uint64_t h2,
-	uint64_t h3) {
+	uint64_t h3
+) {
 	return (h1 & h2) ^ (h3 & (h1 ^ h2));
 }
 
@@ -152,7 +151,8 @@ void sha512_init(struct sha512_ctx_t *ctx) {
 void sha512_update(
 	struct sha512_ctx_t *ctx,
 	const unsigned char *data,
-	uint64_t bytes) {
+	uint64_t bytes
+) {
 	assert(ctx->nbytes < 1ull << 56);
 	assert(bytes < 1ull << 56);
 
@@ -177,7 +177,8 @@ void sha512_update(
 
 void sha512_final(
 	struct sha512_ctx_t *ctx,
-	uint8_t result[64]) {
+	uint8_t result[64]
+) {
 	uint64_t fill	   = ctx->nbytes % 128, i;
 	ctx->block[fill++] = 0x80;
 	if (fill > 112) {

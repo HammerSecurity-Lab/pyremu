@@ -1,0 +1,3 @@
+板级支持包(board support package)
+
+提供交互驱动、rust管理器、debian系根文件系统构建

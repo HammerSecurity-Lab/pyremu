@@ -255,10 +255,6 @@ pub struct FfiVirtIoCtx {
 unsafe impl Send for FfiVirtIoCtx {}
 unsafe impl Sync for FfiVirtIoCtx {}
 
-// ============================================================
-//  FFI 结构体 — run_parallel 的分组参数
-// ============================================================
-
 #[repr(C)]
 /// Python 持有的共享外部中断上下文, 由 Rust 在 hart 循环内读取.
 ///

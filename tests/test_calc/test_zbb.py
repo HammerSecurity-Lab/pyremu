@@ -9,15 +9,13 @@
 - R-type: andn, orn, xnor, min, max, minu, maxu, rol, ror
 - I-type: clz, ctz, cpop, sext.b, sext.h, rori
 - OP-IMM-32: clzw, ctzw, cpopw, roriw
-- OP-32: rolw, rorw
+- I-type 固定立即数: orc.b, rev8
 
-Native 路径对 Zbb 返回 trap, 自动 fallback 到 Python 实现.
+加速执行引擎与纯 Python 实现均覆盖上述指令.
 """
 
 import pytest
 
-from pyremu.core.decoder import Hart
-from pyremu.core.mem_check_aux import inject_memory_backend
 from tests.instr_encode import i_type, pack_funct, pack_src_regs, r_type
 
 # Opcode 常量
@@ -30,27 +28,6 @@ OP32 = 0b0111011  # R-type 32-bit
 ZBB_FUNCT7_ANDN_ORN_XNOR = 0x20
 ZBB_FUNCT7_MIN_MAX = 0x05
 ZBB_FUNCT7_ROL_ROR = 0x30
-
-
-def _make_ram():
-    ram = bytearray(2 * 1024 * 1024)
-
-    def read_fn(addr, size):
-        return bytes(ram[addr : addr + size])
-
-    def write_fn(addr, data):
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
-
-
-@pytest.fixture
-def hart() -> Hart:
-    h = Hart(id=0)
-    ram, rf, wf = _make_ram()
-    inject_memory_backend(h, rf, wf)
-    return h
 
 
 # =====================================================================
@@ -298,4 +275,62 @@ class TestZbbItype:
         assert hart.gprs[3] == gpr3_val, (
             f"wrong at instr<{instruction}>:imm<{imm}>, "
             + f"gpr1: {gpr1_val}, gpr3: {gpr3_val}"
+        )
+
+
+# =====================================================================
+#  Zbb: orc.b 与 rev8, 立即数固定
+# =====================================================================
+
+ZBB_ORC_B_IMM = 0x287
+ZBB_REV8_IMM = 0x6B8
+
+
+class TestZbbFixedImm:
+    """orc.b 与 rev8 的立即数为固定值, 其余取值属保留编码."""
+
+    @pytest.mark.parametrize(
+        "gpr1_val, imm, expect_rd, instruction",
+        [
+            (0x0100_0200_0000_0300, ZBB_ORC_B_IMM, 0xFF00_FF00_0000_FF00, "orc.b"),
+            (0, ZBB_ORC_B_IMM, 0, "orc.b"),
+            (0xFFFF_FFFF_FFFF_FFFF, ZBB_ORC_B_IMM, 0xFFFF_FFFF_FFFF_FFFF, "orc.b"),
+            (0x0123_4567_89AB_CDEF, ZBB_REV8_IMM, 0xEFCD_AB89_6745_2301, "rev8"),
+            (0, ZBB_REV8_IMM, 0, "rev8"),
+            (0xFF, ZBB_REV8_IMM, 0xFF00_0000_0000_0000, "rev8"),
+        ],
+    )
+    def test_fixed_imm(
+        self,
+        hart,
+        gpr1_val: int,
+        imm: int,
+        expect_rd: int,
+        instruction: str,
+    ):
+        hart.gprs[1] = gpr1_val
+        hart.exec_instr(i_type(OP_IMM, 3, 0b101, 1, imm))
+        assert hart.gprs[3] == expect_rd, (
+            f"wrong at instr<{instruction}>:imm<{imm:#x}>, gpr1: {gpr1_val}"
+        )
+
+    @pytest.mark.parametrize(
+        "imm, instruction",
+        [
+            (ZBB_ORC_B_IMM - 1, "orc.b"),
+            (ZBB_REV8_IMM + 1, "rev8"),
+        ],
+    )
+    def test_reserved_imm_traps(
+        self,
+        hart,
+        imm: int,
+        instruction: str,
+    ):
+        """立即数偏离固定值时为保留编码, 触发 IllInstr 陷态."""
+        hart.gprs[1] = 0
+        hart.exec_instr(i_type(OP_IMM, 3, 0b101, 1, imm))
+        assert hart.mcause_val == 2, (
+            f"instr<{instruction}>:imm<{imm:#x}> 应投递 IllInstr, "
+            f"实际 mcause={hart.mcause_val}"
         )

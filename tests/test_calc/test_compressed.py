@@ -8,22 +8,7 @@
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.mem_check_aux import inject_memory_backend
-
-
-def _make_ram():
-    """构造模拟物理内存."""
-    ram = bytearray(2 * 1024 * 1024)
-
-    def read_fn(addr, size):
-        return bytes(ram[addr : addr + size])
-
-    def write_fn(addr, data):
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
-
+from tests.conftest import make_test_ram
 
 # ============================================================
 #  编码辅助: C1/C2 共用 bits[11:7] 为 rd 或 rs1 字段
@@ -295,12 +280,10 @@ class TestCompressedC0:
     """C0 象限 (低 2 位 = 00)."""
 
     @pytest.fixture
-    def hart(self) -> Hart:
-        h = Hart(id=0)
-        ram, read_fn, write_fn = _make_ram()
-        inject_memory_backend(h, read_fn, write_fn)
-        h.gprs[2] = 0x8000  # sp
-        return h
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上令 sp 指向 0x8000."""
+        hart.gprs[2] = 0x8000
+        return hart
 
     @pytest.mark.parametrize(
         "rd_creg, imm, expected_reg",
@@ -331,7 +314,7 @@ class TestCompressedC0:
     def test_c_lw(self, hart):
         """C.LW x8, 8(x10) -> 加载 32-bit."""
         test_val = 0xDEAD
-        hart._mem_write_phy(0x8008, test_val.to_bytes(4, "little"))
+        hart.mem_write_phy(0x8008, test_val.to_bytes(4, "little"))
         hart.gprs[10] = 0x8000
         # uimm=8: [6]=0,[5:3]=001,[2]=0
         # bits: [12:10]=001, [9:7]=010(rs1'=x10), [6]=0, [5]=0, [4:2]=000(rd'=x8)
@@ -343,7 +326,7 @@ class TestCompressedC0:
     def test_c_ld(self, hart):
         """C.LD x8, 8(x10) -> 加载 64-bit."""
         test_val = 0xFEED_CACE
-        hart._mem_write_phy(0x8008, test_val.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8008, test_val.to_bytes(8, "little"))
         hart.gprs[10] = 0x8000
         scatter = (1 << 10) | (2 << 7)
         instr = _c0(0b011, 0, 0, scatter)
@@ -358,7 +341,7 @@ class TestCompressedC0:
         scatter = (1 << 10) | (2 << 7)
         instr = _c0(0b110, 1, 0, scatter)
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8008, 4), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8008, 4), "little")
         assert val == 0xCAFE
 
     def test_c_sd(self, hart):
@@ -368,7 +351,7 @@ class TestCompressedC0:
         scatter = (1 << 10) | (2 << 7)
         instr = _c0(0b111, 1, 0, scatter)
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8008, 8), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8008, 8), "little")
         assert val == 0xDEAD_BEEF
 
     # -- 大偏移量测试 (uimm[7:6] ≠ 0, 验证 C.LD/C.SD 立即数布局) --
@@ -381,7 +364,7 @@ class TestCompressedC0:
         # C.SD: funct3=111, rs1_creg=4(x12), rs2_creg=6(x14)
         instr = (0b111 << 13) | (2 << 10) | (4 << 7) | (2 << 5) | (6 << 2)
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8000 + 144, 8), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8000 + 144, 8), "little")
         assert val == 0xDEAD_BEEF_CAFE, (
             f"偏移 144 的 C.SD: 期望 0xDEAD_BEEF_CAFE, 得到 0x{val:016x}"
         )
@@ -389,7 +372,7 @@ class TestCompressedC0:
     def test_c_ld_large_offset(self, hart):
         """C.LD x14, 144(x12) — uimm[7:6]=2, 验证与 C.SD 相同位布局."""
         test_val = 0xFEED_CACE_BABE
-        hart._mem_write_phy(0x8000 + 144, test_val.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8000 + 144, test_val.to_bytes(8, "little"))
         hart.gprs[12] = 0x8000
         # C.LD: funct3=011, rs1_creg=4(x12), rd_creg=6(x14)
         instr = (0b011 << 13) | (2 << 10) | (4 << 7) | (2 << 5) | (6 << 2)
@@ -406,7 +389,7 @@ class TestCompressedC0:
         hart.gprs[12] = 0xAAAA
         instr_sd = (0b111 << 13) | (1 << 10) | (2 << 7) | (3 << 5) | (4 << 2)
         hart.exec_instr(instr_sd)
-        val_at_200 = int.from_bytes(hart._mem_read_phy(0x8000 + 200, 8), "little")
+        val_at_200 = int.from_bytes(hart.mem_read_phy(0x8000 + 200, 8), "little")
         assert val_at_200 == 0xAAAA, (
             f"C.SD 应在偏移 200, 实际写了偏移 {200 if val_at_200 == 0xAAAA else '?'}"
         )
@@ -416,10 +399,10 @@ class TestCompressedC0:
         instr_sw = (0b110 << 13) | (1 << 10) | (2 << 7) | (3 << 5) | (4 << 2)
         hart.exec_instr(instr_sw)
         # = 1<<6 | 1<<3 | 1<<2 = 64 + 8 + 4 = 76
-        val_at_76 = int.from_bytes(hart._mem_read_phy(0x8000 + 76, 4), "little") & 0xFFFF_FFFF
+        val_at_76 = int.from_bytes(hart.mem_read_phy(0x8000 + 76, 4), "little") & 0xFFFF_FFFF
         assert val_at_76 == 0xBBBB, "C.SW 与 C.SD 应有不同偏移: C.SW->76, 实际写了偏移 ?"
         # 确认 C.SD 的偏移 200 处没有被 C.SW 覆写
-        val_still = int.from_bytes(hart._mem_read_phy(0x8000 + 200, 8), "little")
+        val_still = int.from_bytes(hart.mem_read_phy(0x8000 + 200, 8), "little")
         assert val_still == 0xAAAA, "C.SW 不应覆写 C.SD 的偏移 200 位置"
 
 
@@ -432,17 +415,15 @@ class TestCompressedC2:
     """C2 象限 (低 2 位 = 10)."""
 
     @pytest.fixture
-    def hart(self) -> Hart:
-        h = Hart(id=0)
-        ram, read_fn, write_fn = _make_ram()
-        inject_memory_backend(h, read_fn, write_fn)
-        h.gprs[2] = 0x8000
-        return h
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上令 sp 指向 0x8000."""
+        hart.gprs[2] = 0x8000
+        return hart
 
     def test_c_lwsp(self, hart):
         """C.LWSP x10, 8 -> 从 sp+8 加载 32-bit."""
         test_val = 0x12345678
-        hart._mem_write_phy(0x8008, test_val.to_bytes(4, "little"))
+        hart.mem_write_phy(0x8008, test_val.to_bytes(4, "little"))
         # C.LWSP x10, 8(sp): encoding 0x4522 (llvm-mc verified)
         # Spec: uimm[7:6]=instr[3:2], uimm[5]=instr[12], uimm[4:2]=instr[6:4]
         instr = 0x4522
@@ -452,7 +433,7 @@ class TestCompressedC2:
     def test_c_ldsp(self, hart):
         """C.LDSP x10, 8 -> 从 sp+8 加载 64-bit."""
         test_val = 0xFEED_FACE
-        hart._mem_write_phy(0x8008, test_val.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8008, test_val.to_bytes(8, "little"))
         # C.LDSP: funct3=011, uimm=8, rd=10
         # uimm=8: imm[5]=0, imm[4:3]=01, imm[8:6]=000
         # bit[12]=0, bits[6:5]=01, bits[4:2]=000
@@ -467,7 +448,7 @@ class TestCompressedC2:
         # bit[15:13]=110, bits[12:9]=0001(uimm[5:2]), bits[8:7]=00(uimm[7:6])
         instr = (0b110 << 13) | (1 << 9) | (5 << 2) | 0b10
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8004, 4), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8004, 4), "little")
         assert val == 0xBEEF
 
     def test_c_sdsp(self, hart):
@@ -478,7 +459,7 @@ class TestCompressedC2:
         # bits[12:10]=001, bits[9:7]=000, bits[6:2]=00101(rs2=5)
         instr = (0b111 << 13) | (1 << 10) | (5 << 2) | 0b10
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8008, 8), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8008, 8), "little")
         assert val == 0xDEAD_BEEF
 
     # -- 大偏移量测试 (验证 C.LWSP/C.LDSP/C.SDSP 立即数布局分立) --
@@ -486,7 +467,7 @@ class TestCompressedC2:
     def test_c_lwsp_large_offset(self, hart):
         """C.LWSP x10, 40(sp) — uimm[5]=1 验证 imm[5] 位位置."""
         test_val = 0x12345678
-        hart._mem_write_phy(0x8000 + 40, test_val.to_bytes(4, "little"))
+        hart.mem_write_phy(0x8000 + 40, test_val.to_bytes(4, "little"))
         # C.LWSP x10, 40(sp): encoding 0x5522 (llvm-mc verified)
         # Spec: instr[3:2]=uimm[7:6]=00, instr[12]=uimm[5]=1, instr[6:4]=uimm[4:2]=010
         instr = 0x5522
@@ -498,7 +479,7 @@ class TestCompressedC2:
     def test_c_ldsp_large_offset(self, hart):
         """C.LDSP x10, 40(sp) — uimm[5]=1, uimm[4:3]=01 验证布局."""
         test_val = 0xFEED_FACE_CAFE
-        hart._mem_write_phy(0x8000 + 40, test_val.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8000 + 40, test_val.to_bytes(8, "little"))
         # C.LDSP: funct3=011, uimm=40, rd=10
         # bit[15:13]=011, bit[12]=1(uimm[5]), bits[11:7]=01010,
         # bits[6:5]=01(uimm[4:3]), bits[4:2]=000(uimm[8:6])
@@ -516,7 +497,7 @@ class TestCompressedC2:
         # bits[9:7]=000(uimm[8:6]), bits[6:2]=01010(rs2)
         instr = (0b111 << 13) | (5 << 10) | (10 << 2) | 0b10
         hart.exec_instr(instr)
-        val = int.from_bytes(hart._mem_read_phy(0x8000 + 40, 8), "little")
+        val = int.from_bytes(hart.mem_read_phy(0x8000 + 40, 8), "little")
         assert val == 0xDEAD_BEEF_BABE, (
             f"偏移 40 的 C.SDSP: 期望 0xDEAD_BEEF_BABE, 得到 0x{val:016x}"
         )
@@ -524,7 +505,7 @@ class TestCompressedC2:
     def test_c_lwsp_vs_c_ldsp_bit_layout(self, hart):
         """C.LWSP 与 C.LDSP 同 bit pattern 应解码为不同偏移."""
         test_val_lw = 0x42
-        hart._mem_write_phy(0x8000 + 40, test_val_lw.to_bytes(4, "little"))
+        hart.mem_write_phy(0x8000 + 40, test_val_lw.to_bytes(4, "little"))
         # C.LWSP x10, 40(sp): encoding 0x5522 (llvm-mc verified)
         instr_lwsp = 0x5522
         hart.exec_instr(instr_lwsp)
@@ -533,7 +514,7 @@ class TestCompressedC2:
         # 用 C.LDSP 的 bit pattern 构造与 C.LWSP 相同 raw 位但不同 funct3
         # C.LDSP funct3=011, 同 offset=40 的编码
         test_val_ld = 0xDEAD_BEEF
-        hart._mem_write_phy(0x8000 + 40, test_val_ld.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8000 + 40, test_val_ld.to_bytes(8, "little"))
         instr_ldsp = (0b011 << 13) | (1 << 12) | (10 << 7) | (0b01 << 5) | 0b10
         hart.exec_instr(instr_ldsp)
         assert hart.gprs[10] == test_val_ld, (
@@ -653,7 +634,7 @@ class TestCompressedC2:
     def test_c_fldsp_ft0(self, hart):
         """C.FLDSP ft0, 280(sp): rd=0 -> ft0 是合法 FP 目标 (非 reserved)."""
         test_val = 0xFEED_FACE_CAFE_BABE
-        hart._mem_write_phy(0x8000 + 280, test_val.to_bytes(8, "little"))
+        hart.mem_write_phy(0x8000 + 280, test_val.to_bytes(8, "little"))
         hart.mstatus_val = 0x00006000  # FS=Initial (mstatus.FS=1)
         # 0x2072: C.FLDSP ft0, 280(sp) — libc 中实际出现的编码
         advance = hart.exec_instr(0x2072)
@@ -708,9 +689,10 @@ class TestFdtProbeScenario:
 
     def test_c_addi16sp_prologue_save_restore_ra(self):
         """C.ADDI16SP 分配栈帧, 随后 sd ra, 随后 ld ra, 最后 sp 复原."""
-        ram, read_fn, write_fn = _make_ram()
+        ram, read_fn, write_fn = make_test_ram()
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy = read_fn
+        h.mem_write_phy = write_fn
         sp_top = 0x1000  # 在 2 MiB RAM 内
         h.gprs[2] = sp_top
         h.gprs[1] = 0xCAFE  # ra
@@ -735,9 +717,10 @@ class TestFdtProbeScenario:
 
     def test_c_addi16sp_multi_callee_save(self):
         """模拟 imafdc: s3 缓存 FDT 指针, 完整栈帧保存/恢复."""
-        ram, read_fn, write_fn = _make_ram()
+        ram, read_fn, write_fn = make_test_ram()
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy = read_fn
+        h.mem_write_phy = write_fn
         sp_top = 0x1000  # 在 2 MiB RAM 内
         h.gprs[2] = sp_top
         h.gprs[8] = 0xABCD0000  # s0
@@ -966,23 +949,21 @@ class TestCompressedFpAndReserved:
     """C.FLD / C.FSD / C.FLDSP / C.FSDSP 与保留编码."""
 
     @pytest.fixture
-    def hart(self) -> Hart:
-        h = Hart(id=0)
-        ram, read_fn, write_fn = _make_ram()
-        inject_memory_backend(h, read_fn, write_fn)
-        h.gprs[2] = 0x1000
-        h.gprs[8] = 0x1000
-        return h
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上令 sp 与 s0 均指向 0x1000."""
+        hart.gprs[2] = 0x1000
+        hart.gprs[8] = 0x1000
+        return hart
 
     def test_c_fld(self, hart):
         hart.mstatus_val |= FS_ON
-        hart._mem_write_phy(0x1000, (0x0123_4567_89AB_CDEF).to_bytes(8, "little"))
+        hart.mem_write_phy(0x1000, (0x0123_4567_89AB_CDEF).to_bytes(8, "little"))
         hart.exec_instr(_c0(0b001, 0, 0, 0))
         assert hart._fpr_bits[8] == 0x0123_4567_89AB_CDEF
 
     def test_c_fld_marks_fs_dirty(self, hart):
         hart.mstatus_val = FS_ON
-        hart._mem_write_phy(0x1000, bytes(8))
+        hart.mem_write_phy(0x1000, bytes(8))
         hart.exec_instr(_c0(0b001, 0, 0, 0))
         assert hart.mstatus_val & FS_ON == 0b11 << 13
 
@@ -993,7 +974,7 @@ class TestCompressedFpAndReserved:
         hart.mstatus_val |= FS_ON
         hart._fpr_bits[8] = 0x0123_4567_89AB_CDEF
         hart.exec_instr(_c0(0b101, 0, 0, 0))
-        assert hart._mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        assert hart.mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
 
     def test_c_fsd_disabled(self, hart):
         _assert_ill_instr(hart, _c0(0b101, 0, 0, 0))
@@ -1006,7 +987,7 @@ class TestCompressedFpAndReserved:
         hart.mstatus_val |= FS_ON
         hart._fpr_bits[8] = 0x0123_4567_89AB_CDEF
         hart.exec_instr(_c2(0b101, 0, 8 << 2))
-        assert hart._mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        assert hart.mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
 
     def test_c_fsdsp_disabled(self, hart):
         _assert_ill_instr(hart, _c2(0b101, 8, 0))

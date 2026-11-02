@@ -26,7 +26,8 @@
 static long loader_ioctl(
 	int fd,
 	unsigned long cmd,
-	void *arg) {
+	void *arg
+) {
 	long rc = syscall(SYS_ioctl, fd, cmd, arg);
 	if (rc < 0) {
 		return -errno;
@@ -37,7 +38,8 @@ static long loader_ioctl(
 /* 读入整个文件. 失败返回 NULL. */
 static uint8_t *read_whole_file(
 	const char *path,
-	size_t *out_size) {
+	size_t *out_size
+) {
 	FILE *fp = fopen(path, "rb");
 	if (!fp) {
 		fprintf(stderr, "open '%s' failed (errno=%d)\n", path, errno);
@@ -70,7 +72,8 @@ static uint8_t *read_whole_file(
 
 int main(
 	int argc,
-	char **argv) {
+	char **argv
+) {
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <payload> <modules_dir>\n", argv[0]);
 		return 2;
@@ -85,14 +88,14 @@ int main(
 		return 1;
 	}
 	printf(
-		"[ext-mod-loader] %d modules from %s (images are read on request)\n",
-		n,
-		modules_dir);
+		"[ext-mod-loader] %d modules from %s (images are read on request)\n", n,
+		modules_dir
+	);
 	for (int i = 0; i < modules.count; i++) {
 		printf(
-			"[ext-mod-loader]   id=%u path=%s\n",
-			modules.entries[i].module_id,
-			modules.entries[i].path);
+			"[ext-mod-loader]   id=%u path=%s\n", modules.entries[i].module_id,
+			modules.entries[i].path
+		);
 	}
 
 	size_t payload_size = 0;
@@ -118,7 +121,13 @@ int main(
 	}
 	printf("[ext-mod-loader] enclave=%llu\n", (unsigned long long)enclave_id);
 
-	/* CREATE 登记的管理令牌恒为 0, 故后续 RESUME 与模块应答均以令牌 0 调用. */
+	/*
+        CREATE 登记的管理令牌恒为 0,
+        故后续 RESUME 与模块应答均以令牌 0 调用.
+        TODO: 生产环境须由 CREATE_EX 登记不可猜测的令牌, 且令牌的持有以装载器
+        自身的完整性为前提; 纯 CREATE 路径登记的令牌为 0, 任何进程持有飞地编号
+        即可 RESUME.
+    */
 	struct tee_enclave_args args;
 	memset(&args, 0, sizeof(args));
 	args.enclave_id			= enclave_id;
@@ -142,7 +151,7 @@ int main(
 	}
 
 	free(payload);
-	/* 载荷交还宿主时仍未终止: 回收它占用的槽位与内存. */
+	/* 回收它占用的内存及固件管理空间. */
 	if (rc == TEE_RUN_SUSPENDED || rc < 0) {
 		struct tee_enclave_token_args shutdown_args = {
 			.enclave_id = enclave_id,
@@ -159,8 +168,8 @@ int main(
 
 	printf("[ext-mod-loader] serviced=%d\n", serviced);
 	printf(
-		"[ext-mod-loader] result: state=%d exit=%llu\n",
-		TEE_RUN_STATE(rc),
-		(unsigned long long)TEE_EXIT_CODE(rc));
+		"[ext-mod-loader] result: state=%d exit=%llu\n", TEE_RUN_STATE(rc),
+		(unsigned long long)TEE_EXIT_CODE(rc)
+	);
 	return (TEE_RUN_STATE(rc) == TEE_RUN_EXITED && TEE_EXIT_CODE(rc) == 0) ? 0 : 1;
 }

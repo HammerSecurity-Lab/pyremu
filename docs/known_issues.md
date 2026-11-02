@@ -60,9 +60,6 @@ cause=2 (Illegal instruction)，故障指令为任意 F/D 指令（如 `C.FSDSP`
 同一操作在 legacy PLIC 模式 (`PYREMU_AIA=0`) 下未见此延迟 (用户实测对比)。
 
 **已确认**:
-- 两条路径共用同一处空闲睡眠 (`Emulator._wfi_sleep_if_idle`, 见
-  [emulator.py](../pyremu/emulator.py) 中 `_WFI_MAX_SLEEP = 0.2s` 上限与
-  clear-then-wait 的时序), 故该睡眠粒度不是两种模式的差异来源。
 - 差异候选取自 RX 中断的注入与可见性: AIA 下 UART RX 经 APLIC 转入 IMSIC,
   而加速执行只在每轮 batch 起始读取 `imsic_m` / `imsic_s` 的快照, batch 期间
   由 Python 侧注入的 `eip` 对该轮不可见; 唯一逃逸是 `uart_rx_notify` 触发的
@@ -77,3 +74,44 @@ cause=2 (Illegal instruction)，故障指令为任意 F/D 指令（如 `C.FSDSP`
   (Rust termio 写入 ring, RX daemon 搬运至 UART FIFO, 主循环被 `_wake_event`
   唤醒, 下一轮 batch 经 `RX_WAIT` 退出)。
 - 空闲 1 秒 / 10 秒 / 60 秒三档下, 记录键入时刻与首次回显时刻的间隔。
+
+---
+
+## 5. `restart` 之后 Ctrl+Q 不能暂停执行, 客机不再有输出
+
+**现象** (2026-10-31): S 模式程序访问 `0x83000000` 后长时间停留在 M 模式的陷态
+处理中, 按 Ctrl+Q 回到调试器并执行 `restart`; 重启后执行到内核注册块设备
+
+```
+[    1.179290] virtio_blk virtio0: 1/0/0 default/read/poll queues
+[    1.181270] virtio_blk virtio0: [vda] 8388608 512-byte logical blocks (4.29 GB/4.00 GiB)
+```
+
+之后不再有任何内核输出与输入回显, 再次按 Ctrl+Q 不能回到调试器接受命令,
+最终进程被宿主以 `SIGKILL` 终止 (`Killed`, `make` 报错误 137, 即 128 加 9).
+
+**已确认**:
+- Ctrl+Q 由 `pyremu/_native/termio/src/lib.rs` 的 `scan_rx` 识别 0x11, 经
+  `notify_emu_stop` 直接写 `_init_termio` 注入的 `_native_stop_flag`; 该路径不置位
+  `Emulator._wake_event`.
+- 加速执行引擎在每条指令开头检查该标志 (`hart_sched.rs` 的 `hart_worker`), 因此该
+  检查只在引擎运行期间发生.
+- 全部存活 hart 处于 WFI 时, `_native_finalize` 调用 `_wfi_sleep_if_idle`, 阻塞在
+  `_wake_event.wait(timeout=sleep_sec)`, 等待期间不检查 `_native_stop_flag`.
+  `sleep_sec` 取最早到期的定时器与运行超时截止时刻中较小者, 运行超时取
+  `mk/emu-feats.mk` 的 `DEFAULT_TIMEOUT`, 即 36000 秒.
+- 键盘字节由接收守护线程在 `drain_rx` 中置位 `_wake_event`; Ctrl+Q 在写入接收环形
+  缓冲区之前已由 `scan_rx` 消费, 不经过该路径.
+
+**待验证**:
+- 停顿时全部存活 hart 是否都处于 WFI, 以及该时刻 `mtimecmp` 与 `stimecmp` 的取值.
+- `cmd_restart` 只重置 CLINT 的 mtime、mtimecmp 与 msip; 需确认加速执行引擎内
+  `HartState` 的 `mtip_deadline`、`stip_deadline` 与 `mip` 是否一并复位.
+
+**修复** (2026-10-31): 接收通知管道同时承载停机请求. `notify_emu_stop` 置位停止
+标志后, 向该管道写 1 字节; 接收守护线程阻塞在 `poll(_rx_notify_r)` 上, 收到该字节
+即置位 `_wake_event`, 并照常执行一次 `drain_rx`. 该守护线程只在通知到达时置位,
+`_wfi_sleep_if_idle` 的单次等待仍由同一事件唤醒, 等待期间不检查停止标志.
+回归测试为 `tests/test_peripheral/test_uart.py` 的
+`TestRxDaemonStopNotify::test_stop_notify_sets_wake_event`, 以及
+`pyremu/_native/termio/src/lib.rs` 的 `test_notify_emu_stop_wakes_python_daemon`.

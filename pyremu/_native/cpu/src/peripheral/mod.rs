@@ -18,8 +18,7 @@ pub struct DevCtx {
 	/// 用于更新虚拟块设备状态.
 	pub virtio_raw: *mut FfiVirtIoCtx,
 	/// FFI PLIC 状态的可变指针, 用于更新 claim、complete、
-	/// 优先级、使能与阈值. 空指针表示无 PLIC 设备, 仅在单次 ``run_parallel``
-	/// 调用期间有效.
+	/// 优先级、使能与阈值. 空指针表示无 PLIC 设备
 	pub plic: *mut FfiPlicCtx,
 }
 

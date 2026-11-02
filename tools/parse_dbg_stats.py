@@ -37,8 +37,9 @@ PMP 列按类别 (``data`` 或 ``instr``) 分开:
 测试项名称经 ``canonical_name`` 写为规范写法: 连续空白合并为单个空格, 再把
 ``malloc_churn p=1`` 写作 ``malloc_churn-p1``、``malloc_churn p=2`` 写作
 ``malloc_churn-p2``, 其余名称原样保留。
-规范写法为 chibicc、dsp、dune、fem、graphene、knots、malloc_churn-p1、malloc_churn-p2、
-modular_form、nc_udp、orbit、stress_ng 512M、stress_ng 1G、stress_ng 2G、dune-poisson。
+规范写法为 chibicc、dsp、dune、fem、graphene、json_calc、knots、malloc_churn-p1、
+malloc_churn-p2、modular_form、nc_udp、orbit、stress_ng 512M、stress_ng 1G、stress_ng 2G、
+dune-poisson。
 输出哪些行仍由日志中出现的飞地决定, 不按该清单筛选。
 
 用法:

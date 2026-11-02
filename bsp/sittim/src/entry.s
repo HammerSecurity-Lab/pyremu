@@ -1,10 +1,5 @@
 # 飞地 S-mode 入口与陷态向量。
 
-# ================================================================
-#  SAVE / RESTORE 宏, 264 字节帧：32 GPR + 陷入前的 sp 槽
-#  必须在使用前定义, LLVM 集成汇编器要求前置声明。
-# ================================================================
-
 .macro SAVE_CONTEXT
     addi sp, sp, -264
     sd   x0,  0(sp)
@@ -87,18 +82,17 @@
 _start:
     # ---- 保存 M-mode 传入的参数, 即 callee-saved 寄存器 ----
     # M-mode 在 CREATE ecall 返回前设置:
-    #   a0 = enclave_id, a1 = base_pa, a2 = payload_size,
-    #   a3 = 授予的分区总数
     mv   s0, a0                 # s0 = enclave_id
     mv   s1, a1                 # s1 = base_pa
     mv   s2, a2                 # s2 = payload_size
     mv   s3, a3                 # s3 = 授予的分区总数
+    mv   s4, a4                 # s4 = 64类平台特性使能记录
 
     # ---- 设置临时栈 ----
 _setup_tmp_stk:
     auipc sp, %pcrel_hi(tmp_stack_top)
     addi  sp, sp, %pcrel_lo(_setup_tmp_stk)
-    # ---- 为 BootInfo 分配栈空间 (3 × u64 = 24 字节, 对齐到 32) ----
+    # 为 BootInfo 分配 24 字节栈空间
     addi sp, sp, -32
 
     # ---- 应用 R_RISCV_RELATIVE 重定位 (PIE) ----
@@ -126,7 +120,7 @@ _setup_tmp_stk:
 
     # MMU使能前让 BSS 清零
     # PIE 重定位后, _bss_start / _bss_end 的地址为运行时 PA.
-    # EnclaveContext (含 page_table_root) 位于 BSS 内, 必须初始化为零.
+    # 含 page_table_root的EnclaveContext位于 BSS 内, 必须初始化为零.
 .L0_bss_s:
     auipc t0, %pcrel_hi(_bss_start)
     addi  t0, t0, %pcrel_lo(.L0_bss_s)
@@ -144,14 +138,16 @@ _bss_reset_done:
 	#   enclave_id: u64,
 	#   base_pa: u64,
 	#   payload_size: u64,
-    #   partition_num: u64
+    #   partition_num: u64,
+    #   features: u64
     mv   a0, sp                 # a0 = &BootInfo
     mv   a1, s0                 # a1 = enclave_id
     mv   a2, s1                 # a2 = base_pa
     mv   a3, s2                 # a3 = payload_size
     mv   a4, s3                 # a4 = partition_num
-    # 注册相对于pc的早期陷态处理
+    mv   a5, s4                 # a5 = 平台特性字
 setup_early_stvec:
+	# 注册相对于pc的早期陷态处理
     auipc t0, %pcrel_hi(early_trap)
     addi  t0, t0, %pcrel_lo(setup_early_stvec)
     csrw stvec, t0
@@ -162,7 +158,8 @@ setup_early_stvec:
     ld   a1, 8(sp)              # a1 = smode_sp
     ld   a2, 16(sp)             # a2 = va_offset
     addi sp, sp, 32             # 恢复临时栈指针
-.L0_temp_stvec: # 切换到虚拟地址并启用 MMU
+.L0_temp_stvec:
+	# 切换到虚拟地址并启用 MMU
     auipc s7, %pcrel_hi(temp_stvec)
     addi  s7, s7, %pcrel_lo(.L0_temp_stvec)
     add  s7, a2, s7             # s7 = VA(temp_stvec)
@@ -186,24 +183,19 @@ temp_stvec:
     csrrw sp, sscratch, sp
     sret
 
-# ================================================================
-#  Bare 模式下的占位陷态向量 — 仅作死循环，Bare 阶段不应触发陷阱
-# ================================================================
 
 .align 2
 early_trap:
+	#  Bare 模式下的陷态向量
     wfi
     j   early_trap
-
-# ================================================================
-#  陷态入口
-# ================================================================
 
 .align 4
 .section ".text"
 .global trap_vector
 trap_vector:
-    # sscratch 交换：sp ↔ sscratch
+	#  陷态入口
+    # sscratch 交换：sp <-> sscratch
     csrrw sp, sscratch, sp
     bnez  sp, save_user_ctx      # sp != 0 -> 用户态陷态
 
@@ -295,15 +287,14 @@ ret_to_smode:
 ret_to_user:
     sret
 
-# ================================================================
-#  临时栈, 16 KiB, 位于 .bss
-#  MMU 使能之前由 _start 使用; MMU 使能之后由陷态入口存放内核陷态的陷态栈帧,
-#  陷态分发所用的栈也取自本栈. 本栈尺寸与线程内核栈相同.
-# ================================================================
-
 .align 12
 .section ".bss"
 .globl tmp_stack
 tmp_stack:
     .zero 0x4000
+# ================================================================
+#  临时栈, 16 KiB, 位于 .bss
+#  MMU 使能之前由 _start 使用; MMU 使能之后由陷态入口存放内核陷态的陷态栈帧,
+#  陷态分发所用的栈也取自本栈. 本栈尺寸与线程内核栈相同.
+# ================================================================
 tmp_stack_top:

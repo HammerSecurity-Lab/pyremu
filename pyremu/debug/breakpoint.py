@@ -15,11 +15,15 @@ from rich.table import Table
 
 from pyremu._native import decode_fields
 from pyremu.core.hart import RiscvMode
-from pyremu.core.mem_check_aux import translate_addr
 from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import Breakpoint
-from pyremu.debug.utils import check_rv64_addr, hex_addr, INSTR_BP_NAMES, KNOWN_OPCODES
+from pyremu.debug.utils import (
+    check_rv64_addr,
+    hex_addr,
+    INSTR_BP_NAMES,
+    KNOWN_OPCODES,
+)
 from pyremu.utils.wrapper import seize_val_err
 
 # 条件断点的比较符到比较函数
@@ -157,7 +161,7 @@ class BreakpointOps(SharedAttrs):
         if pc == bp_value:
             return True
         if hart.mmu_mode != 0 and hart.mode != RiscvMode.M:
-            ok, pa = translate_addr(hart, pc, is_hart_access=False)
+            ok, pa = hart.translate_addr(pc, is_hart_access=False)
             if ok and pa == bp_value:
                 return True
         return False

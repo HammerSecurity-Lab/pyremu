@@ -24,8 +24,6 @@ class StubController:
 
 
 class StubExtIrqCtx:
-    """加速执行引擎的通知位桩件."""
-
     def __init__(self) -> None:
         self.pending = 0
 

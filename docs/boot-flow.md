@@ -124,6 +124,13 @@
 - `/reserved-memory`: 固件映像保留区与飞地内存池, 均为 `no-map` 区间, 使内核的线性
   映射与分配器避开这两段.
 
+给出 `--chip-dts` 时, 交付的树以该文件为底, 由调试器写入它自己决定的内容: 各已使能的
+`/memory` 节点的 `reg` 改写为实际装配的 RAM 窗口, 平台保留区间追加为
+`/reserved-memory` 下带 `no-map` 的子节点, `/chosen` 写入 `bootargs`、`rng-seed` 与
+`linux,initrd-start`、`linux,initrd-end`. 这些区间超出芯片树根节点声明的单元格数时,
+根节点改为 `#address-cells = <2>` 与 `#size-cells = <2>`, 直接子节点的 `reg` 与
+`ranges` 按新宽度重新编码. 其余节点按原样交付.
+
 ## 启动命令
 
 ```bash
@@ -140,5 +147,5 @@ python -m pyremu.debugger \
 `--hart-logs`; 它不传递 `--fdt`, 需要交付设备树时在 `pyargs` 之外另行给出.
 零阶段引导程序的路径与装入地址集中在 `mk/pyremu-args.mk` 的 `zsbl_args`, 各启动目标
 共用. `make emu-linux-sh` 改用 `fw_jump` 固件, 并追加 `--kernel`、`--sym-dir=build/sym`、
-`--fdt -1`、`--disk` 与内核命令行参数. 内核符号不再随命令行自动加载; 启动后执行
-`sym ls` 与 `sym load vmlinux pa:<内核加载地址>` 登记.
+`--fdt -1`、`--chip-dts` (`chip_dts` 非空时给出)、`--disk` 与内核命令行参数. 内核符号
+不再随命令行自动加载; 启动后执行 `sym ls` 与 `sym load vmlinux pa:<内核加载地址>` 登记.

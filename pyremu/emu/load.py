@@ -11,8 +11,10 @@
 
 from pathlib import Path
 
+from pyremu import configs_gen
 from pyremu.configs_aux import cfg_int
-from pyremu.utils import dtb
+from pyremu.memory.bus import ranges_overlap
+from pyremu.utils import dev_tree
 from pyremu.utils.parse_bin import FirmwareImage
 
 # 不超过该字节数的内容在直写主存之外再经总线写一次, 使 Python 执行路径命中
@@ -23,12 +25,12 @@ _FAST_LOAD_THRESHOLD = cfg_int("FAST_LOAD_THRESHOLD")
 class LoadOps:
     """固件、设备树与初始化内存盘的装载步骤."""
 
-    def build_dtb(self) -> bytes:
-        """基于当前平台配置, 通过 libfdt 构建 DTB blob.
+    def build_default_dtb(self) -> bytes:
+        """基于当前平台配置, 构建 DTB blob.
 
         固件可将此 blob 加载到物理内存并通过 a1 寄存器接收其地址.
         """
-        devices = dtb.DtbDevices(
+        devices = dev_tree.DefaultDtbDev(
             uart=self.uart,
             spi=self.spi,
             i2c_gen=self.i2c,
@@ -41,7 +43,7 @@ class LoadOps:
             imsic=self.imsic,
             aplic_s=self.aplic,
         )
-        return dtb.build_dtb(
+        return dev_tree.build_default_dtb(
             self._cfg,
             devices=devices,
             bootargs=self._bootargs,
@@ -49,7 +51,7 @@ class LoadOps:
             reserved_ranges=self._cfg.reserved_memory_ranges,
         )
 
-    def load_dtb(
+    def load_default_dtb(
         self,
         addr: int,
     ) -> None:
@@ -57,8 +59,7 @@ class LoadOps:
 
         遵循 RISC-V 引导约定: 固件入口时 a1 指向设备树 blob.
         """
-        dtb = self.build_dtb()
-        self.load_dtb_blob(addr, dtb)
+        self.load_dtb_blob(addr, self.build_default_dtb())
 
     def load_dtb_file(
         self,
@@ -67,10 +68,10 @@ class LoadOps:
     ) -> None:
         """加载预编译的 DTB 文件到物理内存, 并将地址写入所有 hart 的 a1.
 
-        addr 为 None 时取 RAM 顶端减 64 KiB.
+        addr 为 None 时取 ram_base + ram_size - RAM_DTB_OFFSET, 见 mk/memory.mk.
         """
         if addr is None:
-            addr = self._cfg.ram_base + self._cfg.ram_size - 0x10000
+            addr = self._cfg.ram_base + self._cfg.ram_size - configs_gen.RAM_DTB_OFFSET
         dtb = Path(path).read_bytes()
         self.load_dtb_blob(addr, dtb)
 
@@ -79,9 +80,29 @@ class LoadOps:
         addr: int,
         dtb: bytes,
     ) -> None:
-        """将 dtb 写入物理内存的 addr, 并设所有 hart 的 a1."""
+        """将 dtb 写入物理内存的 addr, 并设所有 hart 的 a1.
+
+        Raises:
+            ValueError: 设备树的区间范围不在 RAM 窗口或引导只读存储器窗口内,
+                或与已装载的 initramfs 的区间范围重叠.
+        """
+        bus = self.bus
+        start, end = addr, addr + len(dtb)
+        if not (bus.is_ram_range(start, len(dtb)) or bus.is_rom_range(start, len(dtb))):
+            raise ValueError(
+                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 窗口"
+                f" [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
+                f"引导只读存储器的窗口内"
+            )
+        initrd = self._initrd
+        if initrd is not None and ranges_overlap(start, end, initrd.start, initrd.end):
+            raise ValueError(
+                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 与 initramfs 的区间范围"
+                f" [0x{initrd.start:x}, 0x{initrd.end:x}) 重叠"
+            )
         self._dtb_addr = addr
         self._dtb_size = len(dtb)
+        self._dtb_blob = dtb
         self.load_code(addr, dtb)
         for hart in self.harts:
             hart.write_gpr(11, addr)
@@ -94,16 +115,25 @@ class LoadOps:
         self,
         path: str,
         addr: int,
-    ) -> dtb.Initrd:
+    ) -> dev_tree.Initrd:
         """将 initramfs (cpio[.gz]) 加载到 RAM 的 addr, 记录物理范围.
 
-        返回 Initrd(start, end); 随后 build_dtb 会把该范围写入
+        返回 Initrd(start, end); 随后 build_default_dtb 会把该范围写入
         /chosen/linux,initrd-start 与 /chosen/linux,initrd-end, 供内核解包为
         rootfs. 必须在生成 DTB 之前调用, 使该范围进入设备树.
+
+        Raises:
+            ValueError: initramfs 的区间范围不在 RAM 窗口内.
         """
         data = Path(path).read_bytes()
+        bus = self.bus
+        if not bus.is_ram_range(addr, len(data)):
+            raise ValueError(
+                f"initramfs 的区间范围 [0x{addr:x}, 0x{addr + len(data):x}) 不在"
+                f" RAM 窗口 [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 内"
+            )
         self.load_code(addr, data)
-        self._initrd = dtb.Initrd(start=addr, end=addr + len(data))
+        self._initrd = dev_tree.Initrd(start=addr, end=addr + len(data))
         return self._initrd
 
     def load_code(
@@ -157,6 +187,18 @@ class LoadOps:
             if zero_pad <= _FAST_LOAD_THRESHOLD:
                 self.bus.write(zp_addr, b"\x00" * zero_pad)
 
+    def set_boot_addrs(self) -> None:
+        """把各 hart 当前的 PC 写入启动地址寄存器; 未注册该设备时为空操作.
+
+        引导只读存储器内的代码经该寄存器取得下一级程序的入口地址, 故落定各 hart
+        的 PC 之后调用.
+        """
+        reg = self.boot_addr_reg
+        if reg is None:
+            return
+        for hart in self.harts:
+            reg.set_entry(hart.id, hart.pc)
+
     def load_firmware(
         self,
         image: FirmwareImage | None,
@@ -188,6 +230,7 @@ class LoadOps:
         # 将所有 hart 的 PC 设置为入口地址
         for hart in self.harts:
             hart.pc = image.entry_point + load_offset
+        self.set_boot_addrs()
 
         # 装入的段覆盖了既有的内存内容, 两个 TLB 中既有的翻译一律作废: 页表本身
         # 可能就在被覆盖的范围内.

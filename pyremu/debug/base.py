@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import select
 import signal
 import sys
@@ -43,6 +42,7 @@ from pyremu.debug.types import (
 )
 from pyremu.debug.utils import (
     hex_addr,
+    history_file_path,
     trim_history,
 )
 from pyremu.emulator import Emulator
@@ -129,7 +129,7 @@ class DebuggerBase(SharedAttrs):
         self._current_frame_idx: int = 0
 
         # prompt_toolkit REPL
-        self._history: FileHistory = FileHistory(str(Path.home() / ".pyremu_history"))
+        self._history: FileHistory = FileHistory(str(history_file_path()))
         trim_history(max_entries=10000)
         self._completer: WordCompleter = self._build_completer()
         self._session: PromptSession[str] = PromptSession(
@@ -211,7 +211,7 @@ class DebuggerBase(SharedAttrs):
         每字节即时输出, _console_echo=False 抑制 Python重复输出.
 
         ── RX: stdin daemon 独立于处理器执行循环持续读取.
-        处理器仅看到 PLIC 外部中断信号, 由 try_wfi_wakeup() 唤醒.
+        处理器仅看到 PLIC 外部中断信号, 由 wake_hart_from_wfi() 唤醒.
         """
         # 终端 ISIG 关闭后键盘 Ctrl+C (0x03) 作为普通字节透传给受调试程序, 不经信号
         # 路径; Ctrl+Q 停止由 termio 的 notify_emu_stop 直连置位 stop_flag, 同样

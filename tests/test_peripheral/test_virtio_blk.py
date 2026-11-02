@@ -922,9 +922,9 @@ _Q_STATUS_OFF = 0x6000
 
 
 class TestIrqReportPath:
-    """完成中断必须经 Emulator.raise_device_irq 上报.
+    """完成中断必须经 Emulator.irq_sink 上报.
 
-    修复前 VirtIOBlock 直接调 plic.set_irq, 略过 raise_device_irq 的两项副作用:
+    修复前 VirtIOBlock 直接调 plic.set_irq, 略过 irq_sink 的两项副作用:
     置 _native_ext_irq.pending 使加速执行引擎在单轮内看到新中断, 以及 set(_wake_event)
     唤醒阻塞于 WFI 的 hart。缺前者会在单轮加速执行内丢失中断, 缺后者使空闲的 hart
     错过唤醒时机。本类锁定该接线: 修改前此类用例失败。
@@ -970,7 +970,7 @@ class TestIrqReportPath:
         return desc_pa
 
     def test_completion_reaches_emulator_irq_entry(self, emu: Emulator) -> None:
-        """请求完成时 interrupt_status 与 raise_device_irq 的两项副作用同时出现."""
+        """请求完成时 interrupt_status 与 irq_sink 的两项副作用同时出现."""
         desc_pa = self._lay_out_read_request(emu)
         emu._native_ext_irq.pending = 0
         emu._wake_event.clear()
@@ -987,7 +987,7 @@ class TestIrqReportPath:
         assert _mmio_read(emu.virtio_blk, VIRTIO_MMIO_INTERRUPT_STATUS) == 1
         assert emu.plic is not None
         assert emu.plic._pending[VIRTIO_BLK_IRQ] is True
-        # raise_device_irq 的两项副作用: 引擎通知位与 WFI 唤醒
+        # irq_sink 的两项副作用: 引擎通知位与 WFI 唤醒
         assert emu._native_ext_irq.pending == 1
         assert emu._wake_event.is_set()
 
@@ -1008,4 +1008,4 @@ class TestIrqReportPath:
         _mmio_write(emu.virtio_blk, VIRTIO_MMIO_INTERRUPT_ACK, 1)
 
         assert emu.plic._pending[VIRTIO_BLK_IRQ] is False, "确认后中断源应被拉低"
-        assert emu._native_ext_irq.pending == 1, "拉低同样经 raise_device_irq 通知引擎"
+        assert emu._native_ext_irq.pending == 1, "拉低同样经 irq_sink 通知引擎"

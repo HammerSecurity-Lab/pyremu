@@ -6,7 +6,8 @@ std::vector<int> tmp, inp;
 int goal = 0;
 void dfs(
 	int curr,
-	std::vector<int> &arr) { // 选或不选
+	std::vector<int> &arr
+) { // 选或不选
 	if (curr >= goal) {
 		ans.emplace_back(tmp);
 		return;
@@ -26,7 +27,8 @@ std::vector<std::vector<int>> subsets(std::vector<int> &nums) {
 
 int main(
 	int argc,
-	char *argv[]) {
+	char *argv[]
+) {
 	int n, x;
 	std::cin >> n;
 

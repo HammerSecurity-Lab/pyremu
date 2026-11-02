@@ -7,4 +7,5 @@ NATIVE_SO      = $(NATIVE_DIR)/libdecode.so
 TERMIO_SO      = $(NATIVE_DIR)/libtermio.so
 CARGO_FLAGS    ?=
 NATIVE_SRC = $(shell find $(NATIVE_DIR)/cpu $(NATIVE_DIR)/termio -type f -name '*.rs') \
-             $(NATIVE_DIR)/Cargo.toml $(NATIVE_DIR)/cpu/Cargo.toml $(NATIVE_DIR)/termio/Cargo.toml
+             $(NATIVE_DIR)/Cargo.toml $(NATIVE_DIR)/cpu/Cargo.toml \
+			 $(NATIVE_DIR)/termio/Cargo.toml

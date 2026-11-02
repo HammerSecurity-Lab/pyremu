@@ -43,18 +43,8 @@ from pyremu.interrupt.clint import CLINT
 from pyremu.interrupt.imsic import IMSIC
 from pyremu.interrupt.irq_sink import DeviceIrqSink
 from pyremu.interrupt.plic import PLIC
-from pyremu.peripheral import (
-    CRNG,
-    GPIO,
-    I2C,
-    SPI,
-    UART,
-    VirtIOBlock,
-    VirtIONet,
-)
-from pyremu.peripheral.watchdog import HartWatchdog
 from pyremu.platform import PeripheralConfig, PlatformConfig
-from pyremu.utils import dtb
+from pyremu.utils import dev_tree
 from pyremu.utils.str_aux import fmt_hexdump
 from pyremu.utils.wrapper import silent_on_err
 
@@ -70,9 +60,9 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
 
     @staticmethod
     def _build_default_config(**kwargs: int) -> PlatformConfig:
-        """从 kwargs 设置平台配置; 缺少时使用 qemu_virt 作为默认配置."""
+        """缺少时使用默认配置."""
         if not kwargs:
-            return PlatformConfig.qemu_virt()
+            return PlatformConfig.basic_machine()
         periph_kw = {"clint_base": 0x0200_0000}
         plat_kw: dict[str, Any] = {"periph": PeripheralConfig(**periph_kw)}
         for field_name in PlatformConfig.__dataclass_fields__:
@@ -94,13 +84,10 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         """
         if config is None:
             config = self._build_default_config(**kwargs)
-        # 环境变量 PYREMU_AIA 已在 PlatformConfig.__post_init__ 中解析, 此处直接
-        # 使用解析后的 interrupt_mode.
         self._cfg = config
-        # bootargs 为 None 时取默认值: 内核控制台输出与信任 bootloader 随机数
-        # 种子; 传入字符串时以传入值为准.
-        self._dtb_addr: int | None = None  # 最近一次 load_dtb 的地址
-        self._dtb_size: int = 0  # 最近一次 load_dtb 写入的字节数
+        self._dtb_addr: int | None = None  # 最近一次写入设备树的物理地址
+        self._dtb_size: int = 0  # 最近一次写入的设备树字节数
+        self._dtb_blob: bytes | None = None  # 最近一次写入的设备树内容
         self._bootargs = (
             bootargs
             if bootargs is not None
@@ -127,8 +114,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         self._mtime_instr_frac: int = 0  # 指令计数推进 mtime 的亚 tick 余数
         self._prev_all_exec_cnt: int = 0  # 上一轮加速执行累计的指令数
         # initramfs 的物理范围, 由 load_initrd 设置, 未加载时为 None;
-        # build_dtb 据此写入 /chosen/linux,initrd-start 与 linux,initrd-end.
-        self._initrd: dtb.Initrd | None = None
+        # build_default_dtb 据此写入 /chosen/linux,initrd-start 与 linux,initrd-end.
+        self._initrd: dev_tree.Initrd | None = None
 
         # 终端 I/O 管理器, 由 _init_termio 在 UART 就绪后创建; 后台线程管理标准
         # 输入与标准输出.
@@ -143,8 +130,10 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         # 的通道; 暂停时各 hart 的执行状态保留在跨轮保留的 ctypes 数组
         # _speedup_hart_states 中.
         self._native_stop_flag = ctypes.c_uint8(0)
+
         # run() 的停止原因, 由单轮加速执行的边界检查与引擎退出映射写入
         self._run_stop_reason: RunStopReason = RunStopReason.NONE
+
         # 时钟源超时的截止时刻, 单位为 time.monotonic() 的秒数, 取 0 表示禁用
         self._timeout_deadline: float = 0.0
 
@@ -170,17 +159,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         # 方法, 理由见 DeviceIrqSink. 中断源编号与中断控制器的对应关系由
         # _setup_interrupt_controllers 经 set_fallback 与 bind 登记.
         self._irq_sink = DeviceIrqSink(self._native_ext_irq, self._wake_event)
-        # 外设与看门狗: 外设按配置创建, 基址取 0 时保持 None; 看门狗恒创建.
-        # 二者均由 _setup_peripherals 填充.
-        self.uart: UART | None = None
-        self.spi: SPI | None = None
-        self.i2c: I2C | None = None
-        self.gpio: GPIO | None = None
-        self.virtio_blk: VirtIOBlock | None = None
-        self.virtio_net_s: VirtIONet | None = None
-        self.virtio_net_m: VirtIONet | None = None
-        self.watchdog: HartWatchdog  # 恒创建, 类型非 Optional
-        self.crng: CRNG | None = None
+        # 外设与看门狗均由 _setup_peripherals 按配置填充, 基址取 0 时保持 None.
+        self._declare_device_slots()
         self._peripherals: dict[str, object] = {}
         # 全部 hart, 由 _create_harts 原地填充. 本列表先于 hart 创建而存在, 使
         # 早于 hart 创建的外设可直接持有它.
@@ -225,9 +205,19 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         return self._dtb_size
 
     @property
-    def initrd(self) -> dtb.Initrd | None:
+    def dtb_blob(self) -> bytes | None:
+        """最近一次写入的设备树内容; 未写入时为 None."""
+        return self._dtb_blob
+
+    @property
+    def initrd(self) -> dev_tree.Initrd | None:
         """initramfs 的物理范围; 未加载时为 None."""
         return self._initrd
+
+    @property
+    def bootargs(self) -> str | None:
+        """写入 /chosen/bootargs 的命令行; 未给出时为 None."""
+        return self._bootargs
 
     @property
     def num_harts(self) -> int:
@@ -257,14 +247,17 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
     def close(self) -> None:
         """释放本 Emulator 占用的全部输入输出资源; 重复调用不产生效果.
 
-        调试器退出、测试清理与对象回收时调用. TerminalIO.stop() 停止后台线程
-        并关闭 3 个管道, 共 6 个文件描述符; 随后关闭 UART 的 hart 日志文件.
-        不释放时每个实例占用 6 个文件描述符, 进程内的描述符编号达到 1024 之后
-        select() 无法监视.
+        调试器退出、测试清理与对象回收时调用. 先停止看门狗线程, 再停止
+        TerminalIO 并关闭 UART 的 hart 日志文件: 线程退出之后不会再触碰已经
+        停用的中断控制器与串口. TerminalIO.stop() 关闭 3 个管道, 共 6 个文件
+        描述符; 不释放时每个实例占用 6 个文件描述符, 进程内的描述符编号达到
+        1024 之后 select() 无法监视.
         """
         if self._closed:
             return
         self._closed = True
+        if self.watchdog is not None:
+            self.watchdog.stop()
         if self._termio is not None:
             self._termio.stop()
         if self.uart is not None:
@@ -278,7 +271,7 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
     def notify_processor(self) -> None:
         """通知处理器暂停执行.
 
-        供看门狗设备、磁盘、串口与调试器的 Ctrl+Q 处理等外部实体调用: 置
+        供磁盘、串口与调试器的 Ctrl+Q 处理等外部实体调用: 置
         stop_flag, 加速执行引擎逐指令检查该标志, 在本轮加速执行内退出, 并唤醒
         处于 WFI 等待的 hart. 模拟器自身不设定时停机的线程, 需要按时间或条件
         暂停的外部设备都经本接口通知处理器; 这是打断连续执行的唯一通道.
@@ -295,14 +288,15 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         if addr not in self._bp_addrs:
             self._bp_addrs.append(addr)
 
-    def raise_device_irq(self, source: int, pending: bool = True) -> None:
-        """修改中断线的电平, 供磁盘、串口、网卡与看门狗等外部调用方使用.
+    @property
+    def irq_sink(self) -> DeviceIrqSink:
+        """设备中断投递目标, 供 Emulator 之外的调用方修改中断线电平.
 
-        转交设备中断投递目标处理: 后者按中断源编号选中处理该中断源的控制器,
-        写入其挂起状态并置 ext_irq 通知位. 设备自身持有的是 ``self._irq_sink``,
-        理由见 DeviceIrqSink; 本方法供 Emulator 之外的调用方使用.
+        调用形式为 ``emu.irq_sink(source, pending)``: 按中断源编号选中处理该中断源
+        的控制器, 写入其挂起状态并置 ext_irq 通知位. 设备经构造参数 ``on_irq`` 持有
+        同一对象, 理由见 DeviceIrqSink.
         """
-        self._irq_sink(source, pending)
+        return self._irq_sink
 
     # ----------------------------------------------------------
     #  状态导出

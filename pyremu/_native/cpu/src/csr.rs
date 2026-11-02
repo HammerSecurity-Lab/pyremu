@@ -148,6 +148,31 @@ pub fn cycles_of(state: &HartState) -> u64 {
 	state.total_instrs.wrapping_mul(CYCLES_PER_INSTR)
 }
 
+/// misa 的取值: MXL 取 RV64, 单字母扩展按该字母在字母表中的序号占一个位.
+///
+/// S 与 U 两个特权级位恒为 1, 因为模拟器无条件实现这两个特权级, 其取值不来自
+/// 扩展开关. 多字母扩展不在 misa 中表达. 取值与 Python 侧
+/// ``utils.isa.encode_misa`` 一致.
+pub fn misa_value(exts: &crate::state::IsaExts) -> u64 {
+	let mut value: u64 = (2 << 62) | (1 << 18) | (1 << 20);
+	for (is_on, letter) in [
+		(exts.is_i, b'i'),
+		(exts.is_m, b'm'),
+		(exts.is_a, b'a'),
+		(exts.is_f, b'f'),
+		(exts.is_d, b'd'),
+		(exts.is_c, b'c'),
+		(exts.is_b, b'b'),
+		(exts.is_h, b'h'),
+		(exts.is_v, b'v'),
+	] {
+		if is_on {
+			value |= 1 << (letter - b'a');
+		}
+	}
+	value
+}
+
 // ============================================================
 //  mstatus 与 sstatus 的位域掩码
 // ============================================================
@@ -260,7 +285,12 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
         STVAL   => (ctx.state.stval, CSR_OK),
         SATP    => (ctx.state.satp, CSR_OK),
         SCOUNTEREN => (ctx.state.scounteren, CSR_OK),
-        STIMECMP => (ctx.state.stimecmp, CSR_OK),
+        // 平台未声明 sstc 时该 CSR 不存在, 读取产生 IllInstr, 与 Python 侧
+        // validate_csr 的判定一致.
+        STIMECMP => {
+            if ctx.state.isa_exts.is_sstc { (ctx.state.stimecmp, CSR_OK) }
+            else { (0, CSR_ILL) }
+        }
 
         // 浮点 CSR, 要求 mstatus.FS 不为 Off
         FFLAGS => if fp_off(ctx.state) { (0, CSR_ILL) } else { ((ctx.state.fcsr & 0x1F) as u64, CSR_OK) },
@@ -273,8 +303,8 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
         MIMPID    => (0, CSR_OK),
         MHARTID   => (ctx.state.mhartid as u64, CSR_OK),
 
-        // MISA: 报告 RV64IMAC
-        MISA => (0x800000000014112Du64, CSR_OK),
+        // MISA: 由平台声明的扩展给出
+        MISA => (misa_value(&ctx.state.isa_exts), CSR_OK),
 
         // time, 取自 CLINT 的 mtime
         TIME => (ctx.mtime(), CSR_OK),
@@ -423,11 +453,11 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
         MCAUSE  => { ctx.state.mcause = val; CSR_OK }
         MTVAL   => { ctx.state.mtval = val; CSR_OK }
         MIP     => {
-            // MSIP, STIP, MTIP, SEIP 与 MEIP 为只读位, 由 CLINT, SSTC
-            // 定时器或外部中断控制器驱动; 写入时保留原值, 只允许写
-            // 软件可写位 SSIP 与 USIP. STIP 与 SEIP 镜像硬件状态,
-            // 受调试程序的 ``csrw mip`` 不得覆写它们.
-            let ro_mask: u64 = (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11);
+            // MSIP, MTIP, SEIP 与 MEIP 为只读位, 由 CLINT 与外部中断控制器
+            // 驱动, 写入时保留原值. SSIP, STIP 与 USIP 可写: 设备树未声明
+            // sstc 时, M 模式固件以 mtimecmp 承担 S 模式定时器, 到期经
+            // ``csrw mip`` 置位 STIP, 重新装定 mtimecmp 时清除该位.
+            let ro_mask: u64 = (1 << 3) | (1 << 7) | (1 << 9) | (1 << 11);
             ctx.state.mip.store((ctx.state.mip.load(Ordering::Acquire) & ro_mask) | (val & !ro_mask), Ordering::Release);
             CSR_OK
         }
@@ -487,7 +517,12 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
         // cycle 与 instret 为只读计数器
         CYCLE | INSTRET | CYCLEH | INSTRETH => CSR_OK,
 
+        // 平台未声明 sstc 时该 CSR 不存在, 写入产生 IllInstr, 与 Python 侧
+        // validate_csr 的判定一致.
         STIMECMP => {
+            if !ctx.state.isa_exts.is_sstc {
+                return CSR_ILL;
+            }
             ctx.state.stimecmp = val;
             write_stimecmp(ctx.state, ctx.mtime(), val, ctx.clint.timebase_hz);
             CSR_OK
@@ -619,11 +654,12 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
                 sync_imsic_one(ctx.state, false);
                 ctx.state.mip.fetch_and(!(1 << 1), Ordering::AcqRel);
             } else if iid == 5 {
-                // IRQ_S_TIMER, 即 STIP: 清除 mip 中对应位并推进 stimecmp,
-                // 使该中断不会立即再次触发.
+                // IRQ_S_TIMER, 即 STIP: 清除 mip.STIP. stimecmp 不为 0 且已到期时
+                // 更新为当前 mtime 加 4, 使该中断不会立即再次触发. stimecmp 为 0 表示
+                // 本 hart 未使用 sstc 定时器, 该位由 M 模式软件经 mip 写入维护.
                 ctx.state.mip.fetch_and(!(1 << 5), Ordering::AcqRel);
                 let now = ctx.mtime();
-                if ctx.state.stimecmp <= now {
+                if ctx.state.stimecmp > 0 && ctx.state.stimecmp <= now {
                     ctx.state.stimecmp = now + 4;
                     // 推进 stimecmp; 若不设定, sync_mtip 的活跃分支
                     // 退化为共享 mtime 的比较, 会被其它活跃 hart 的进度提前置位.
@@ -1098,10 +1134,10 @@ mod tests {
 		);
 	}
 
-	/// mip 位于 0x344, 只读位 STIP 与 SEIP 不得被受调试程序的 ``csrw mip`` 覆写.
-	/// 一条 ``csrw mip, 0`` 必须保留 SSTC 定时器与外部中断的挂起位.
+	/// mip 位于 0x344: SSIP 与 STIP 可写, 只读位 SEIP 不得被受调试程序的
+	/// ``csrw mip`` 覆写. 设备树未声明 sstc 时, 固件经 STIP 转交 S 模式定时器中断.
 	#[test]
-	fn write_mip_preserves_stip_and_seip() {
+	fn write_mip_writes_stip_and_preserves_seip() {
 		let mut s = test_state();
 		s.mip
 			.store((1 << 5) | (1 << 9) | (1 << 1), Ordering::Release);
@@ -1114,8 +1150,8 @@ mod tests {
 		let mip = s.mip.load(Ordering::Acquire);
 		assert_eq!(
 			mip & (1 << 5),
-			1 << 5,
-			"STIP is read-only, must be preserved"
+			0,
+			"STIP is software-writable, must be cleared"
 		);
 		assert_eq!(
 			mip & (1 << 9),
@@ -1126,6 +1162,19 @@ mod tests {
 			mip & (1 << 1),
 			0,
 			"SSIP is software-writable, must be cleared"
+		);
+
+		// 写入置位 STIP: M 模式固件据此把 S 模式定时器中断交给 S 模式.
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let st = csr_write(&mut ctx, MIP, 1 << 5);
+			assert_eq!(st, CSR_OK);
+		}
+		assert_eq!(
+			s.mip.load(Ordering::Acquire) & (1 << 5),
+			1 << 5,
+			"STIP must be settable through csrw mip"
 		);
 	}
 
@@ -1722,5 +1771,24 @@ mod tests {
 		let (v, st) = csr_read(&mut ctx, 0x5C0);
 		assert_eq!(st, CSR_OK);
 		assert_eq!(v, 256);
+	}
+
+	/// misa 的单字母扩展位取自扩展开关, S 与 U 两位恒置位, MXL 取 RV64.
+	#[test]
+	fn misa_follows_extension_switches() {
+		let mut exts: crate::state::IsaExts = unsafe { std::mem::zeroed() };
+		let base = (2u64 << 62) | (1 << 18) | (1 << 20);
+		assert_eq!(misa_value(&exts), base);
+
+		exts.is_i = true;
+		exts.is_m = true;
+		exts.is_c = true;
+		let want = base | (1 << 8) | (1 << 12) | (1 << 2);
+		assert_eq!(misa_value(&exts), want);
+
+		// 多字母扩展不产生 misa 位
+		exts.is_zbb = true;
+		exts.is_sstc = true;
+		assert_eq!(misa_value(&exts), want);
 	}
 }

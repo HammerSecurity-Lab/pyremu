@@ -9,10 +9,6 @@ use crate::syscall;
 use crate::syscall::concurrency::{proc, sched, thread, timer};
 use crate::trap_frame::TrapGprs;
 
-// ---------------------------------------------------------------
-//  C ABI 入口
-// ---------------------------------------------------------------
-
 /// entry.s调用。通过csrr设置函数参数。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trap_dispatch(
@@ -43,7 +39,7 @@ pub unsafe extern "C" fn trap_dispatch(
 		interrupt_dispatch(cause);
 		// 信号投递: 定时器到期置入的 SIGALRM 即在此投递, 恢复点取被中断的 pc.
 		// 默认处置为终止时本进程就此终结并登记切换目标, 故投递先于切换检查, 使
-		// 两种来源 (中断自身与信号投递) 的切换都在下方统一处理.
+		// 两种中断自身与信号投递的切换都在下方统一处理.
 		let next_sepc = proc::deliver_pending(gprs, sepc).unwrap_or(sepc);
 		// 有已登记的切换目标则记录当前线程现场并激活目标线程, 返回目标帧基址
 		// 交给 entry.s 换栈.
@@ -57,7 +53,7 @@ pub unsafe extern "C" fn trap_dispatch(
 	// ECALL from U-mode
 	if scause == 0x8 {
 		let ret = syscall_dispatch(gprs);
-		// rt_sigreturn 恢复的现场覆盖整个陷态栈帧 (含 a0), 且恢复点是被中断的 pc;
+		// rt_sigreturn 恢复的现场覆盖整个陷态栈帧, 且恢复点是被中断的 pc;
 		// 阻塞后重启的调用要退回 ecall 本身重新执行, 也不写回返回值. 两者都在
 		// 写回 a0 与推进 sepc 之前取走.
 		let resume_sepc = match proc::take_sigreturn() {
@@ -214,12 +210,7 @@ fn interrupt_dispatch(cause: Option<InterruptCause>) {
 				Some(d) if d < slice_end => d,
 				_ => slice_end,
 			};
-			// 本平台已在设备树声明Sstc, S 模式可直接写该 CSR;
-			// 若改经 SBI TIME ecall 由 M 模式代写,
-			// M 模式在未识别 Sstc 时会改设 M 模式 mtimecmp, stimecmp 保持旧值,
-			// 使 STIP 持续置位.
-			csr::write_stimecmp(deadline);
-			csr::clear_csr!(sip, csr::STI);
+			ecall_aux::set_smode_timer(deadline);
 			// 间隔定时器检查. 遍历全部进程而不只当前进程: 父进程的
 			// SIGALRM 常在子进程正在运行时到期.
 			proc::tick();

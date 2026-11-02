@@ -5,6 +5,7 @@
 
 mod alu;
 mod atom_instr;
+mod check_ext_isa;
 mod concurrent;
 mod consts;
 pub mod csr;

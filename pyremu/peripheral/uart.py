@@ -22,7 +22,7 @@ TX: 固件写入的字节存入 _tx_buf 列表 (调试时可检查);
 RX: 可通过 preload() 预填入数据; RXDATA 读取返回队首字节;
     RX buffer 为空时返回 UART_RXFIFO_EMPTY (bit31=1), 与 SiFive 硬件一致.
 
-中断线: 当前版本不生成硬件中断 (待接入 interrupt controller).
+中断线: IP 与 IE 按位与非零时经中断控制器拉高该设备的中断源, 见 _publish_state().
 """
 
 from __future__ import annotations
@@ -97,8 +97,8 @@ class UART(Device):
         self._rx_fifo: list[int] = []  # 待接收字节 (len <= RX_FIFO_SIZE)
         self._rx_lock = threading.Lock()  # daemon reader 线程与主线程共享 _rx_fifo
 
-        # 当前 MMIO 写者 hart ID — 由 _wrap_phy_write_for_uart 在 hart
-        # 写 UART MMIO 地址时自动标记, 仅用于 hart 日志文件分流归档.
+        # 当前 MMIO 写者 hart ID — 由 wrap_phy_write 返回的写入口在 hart
+        # 写 UART MMIO 地址时标记, 仅用于 hart 日志文件分流归档.
         self._current_writer: int | None = None
 
         # 终端 I/O 反向引用 — 由 Emulator._init_for_speedup_lib 注入,
@@ -162,6 +162,25 @@ class UART(Device):
             f = open(path, "w", buffering=1, encoding="utf-8")  # 每次运行覆写
             self._hart_log_files[hart_id] = f
         return f
+
+    def wrap_phy_write(
+        self,
+        hart_id: int,
+        orig_write: Callable[[int, bytes], None],
+    ) -> Callable[[int, bytes], None]:
+        """返回该 hart 的物理写入口: 写入落在本设备区间时先记录写者身份.
+
+        记录写者只用于把发送的字节分入该 hart 的日志文件, 不做行缓冲.
+        """
+        base = self.base_addr
+        end = base + self.size
+
+        def _write(pa: int, data: bytes) -> None:
+            if base <= pa < end:
+                self._current_writer = hart_id
+            return orig_write(pa, data)
+
+        return _write
 
     def can_rx(self) -> bool:
         """RX FIFO 是否有空闲槽位
@@ -335,8 +354,8 @@ class UART(Device):
                 self._tx_callback(chr(val))
             if self._tx_callback is None or not self._console_echo:
                 os.write(1, bytes([val]))
-            # Hart 日志分流: 若 _current_writer 已标记 (由 _wrap_phy_write_for_uart
-            # 在 MMIO 写时自动设置), 同步写入该 hart 的日志文件.
+            # Hart 日志分流: 若 _current_writer 已标记 (由 wrap_phy_write 返回的
+            # 写入口在 MMIO 写时设置), 同步写入该 hart 的日志文件.
             if self._current_writer is not None:
                 log_f = self._hart_log_file(self._current_writer)
                 if log_f is not None:

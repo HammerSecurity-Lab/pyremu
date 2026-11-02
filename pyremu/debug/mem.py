@@ -14,7 +14,6 @@ from rich.table import Table
 
 from pyremu._native import decode_fields
 from pyremu.core.hart import RiscvMode
-from pyremu.core.mem_check_aux import translate_addr
 from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.core.trap_def import trap_cause_name
 from pyremu.debug.attrs import SharedAttrs
@@ -22,7 +21,8 @@ from pyremu.debug.utils import (
     check_rv64_addr,
     hex_addr,
     MAX_INSTR_COUNT,
-    read_code_bytes,
+    read_pa_bytes,
+    read_va_bytes,
 )
 from pyremu.memory.mmu import sv39_walk
 from pyremu.utils.disassem import disasm
@@ -202,42 +202,13 @@ class MemoryOps(SharedAttrs):
 
     def _try_read_va(self, va: int, size: int) -> bytes | None:
         """从虚拟地址读取内存, 自动完成 VA 到 PA 的翻译."""
-        if size <= 0 or size > 4096:
-            return None
-        hart = self.hart
-        if hart.mmu_mode == 0 or hart.mode == RiscvMode.M:
-            return self._emu.bus.try_read(va, size)
-        result = bytearray()
-        remain = size
-        cur = va
-        while remain > 0:
-            page_off = cur & 0xFFF
-            chunk = min(remain, 0x1000 - page_off)
-            ok, pa = translate_addr(hart, cur, is_hart_access=False)
-            if not ok:
-                return None
-            data = self._emu.bus.try_read(pa, chunk)
-            if data is None:
-                return None
-            result.extend(data)
-            remain -= chunk
-            cur += chunk
-        return bytes(result)
-
-    def _try_read_code_va(self, va: int, size: int) -> bytes | None:
-        """按取指语义读取指令字节.
-
-        取指只判定页面的可执行位; 数据读语义还要求 R=1, 只在 mstatus.MXR
-        置位时才由 X=1 顶替. 管理器把自身 .text 映射为只可执行, 故 pc 与栈
-        回溯读取指令字节时不能用数据读语义.
-        """
-        return read_code_bytes(self._emu.bus, self.hart, va, size)
+        return read_va_bytes(self._emu.bus, self.hart, va, size)
 
     def _try_read_pa(self, pa: int, size: int) -> bytes | None:
         """从物理地址读取内存."""
         if size <= 0 or size > 4096:
             return None
-        return self._emu.bus.try_read(pa, size)
+        return read_pa_bytes(self._emu.bus, pa, size)
 
     def _try_read_va_forced(self, va: int, size: int) -> tuple[int, bytes] | None:
         """尝试 VA 读取并返回翻译后的 PA."""
@@ -245,12 +216,12 @@ class MemoryOps(SharedAttrs):
             return None
         hart = self.hart
         if hart.mmu_mode == 0 or hart.mode == RiscvMode.M:
-            data = self._emu.bus.try_read(va, size)
+            data = read_pa_bytes(self._emu.bus, va, size)
             return (va, data) if data is not None else None
-        ok, pa = translate_addr(hart, va, is_hart_access=False)
+        ok, pa = hart.translate_addr(va, is_hart_access=False)
         if not ok:
             return None
-        data = self._emu.bus.try_read(pa, size)
+        data = read_pa_bytes(self._emu.bus, pa, size)
         return (pa, data) if data is not None else None
 
     # ----------------------------------------------------------
@@ -311,10 +282,8 @@ class MemoryOps(SharedAttrs):
         """从 pc 取指并反汇编一条指令, 返回 (hex_str, asm_str).
 
         MMU 启用时 PC 为虚拟地址, 需先做 VA 到 PA 的翻译再读取.
-        读取用取指语义 (只判定页面的可执行位), 只可执行的页面在数据读语义下
-        必定被拒, pc 将显示为不可读取.
         """
-        raw = self._try_read_code_va(pc, 4)
+        raw = self._try_read_va(pc, 4)
         if raw is None:
             return None
         instr = int.from_bytes(raw.ljust(4, b"\x00"), "little", signed=False)
@@ -431,7 +400,8 @@ class MemoryOps(SharedAttrs):
         _mstatus = h.mstatus_val
         _mcause_name = trap_cause_name(mcause)
         _scause = h.csrs["scause"].val
-        _sstatus = h.csrs["sstatus"].val
+        # sstatus 是 mstatus 的视图, 取视图值而非该对象的存储值.
+        _sstatus = h.read_csr_by_name("sstatus")
 
         if h.mode in (RiscvMode.M, RiscvMode.D):
             m_style, s_style = "bold cyan", "dim"
@@ -720,11 +690,11 @@ class MemoryOps(SharedAttrs):
         va = self._resolve_vdisasm_va(addr_str)
         if va is None:
             return None
-        if self.hart._mem_read_phy is None:
+        if self.hart.mem_read_phy is None:
             self._err("内存后端未挂载")
             return None
         root_ppn = self.hart.satp_val & ((1 << 44) - 1)
-        ok, ppn, _perm, page_size = sv39_walk(root_ppn, va, self.hart._mem_read_phy)
+        ok, ppn, _perm, page_size = sv39_walk(root_ppn, va, self.hart.mem_read_phy)
         if not ok:
             self._err(
                 f"VA [yellow]{hex_addr(va)}[/] 页表翻译失败 (缺页);"
@@ -736,7 +706,7 @@ class MemoryOps(SharedAttrs):
         # PA (Bare 翻译) 返回, 对 S-mode 内核 VA 会读到错误物理地址.
         page_mask = page_size - 1
         first_pa = mask64(((ppn << 12) | (va & page_mask)))
-        raw = self._emu.bus.try_read(first_pa, inst_count * 4)
+        raw = read_pa_bytes(self._emu.bus, first_pa, inst_count * 4)
         if raw is None:
             self._err(f"VA [yellow]{hex_addr(va)}[/] 翻译后物理读取失败")
             return None
@@ -762,7 +732,7 @@ class MemoryOps(SharedAttrs):
             is_compressed = decode_fields(instr).is_compressed
             inst_size = 2 if is_compressed else 4
             if remaining < inst_size:
-                extra = self._emu.bus.try_read(pc_pa, inst_size)
+                extra = read_pa_bytes(self._emu.bus, pc_pa, inst_size)
                 if extra is None:
                     hex_s = " ".join(f"{b:02x}" for b in raw[offset:])
                     instrs.append((pc_va, hex_s, "[dim](截断)[/]", "normal", pc_pa))
@@ -818,12 +788,12 @@ class MemoryOps(SharedAttrs):
             page_va = (va & ~0xFFF) + (pi << 12)
             vpn = page_va >> 12
             hit, ppn, perm = h.dtlb.lookup(vpn)
-            if not hit and h._mem_read_phy is None:
+            if not hit and h.mem_read_phy is None:
                 lines.append(f"  [red]VA 0x{page_va:016x}  内存后端未挂载[/]")
                 continue
-            if not hit and h._mem_read_phy is not None:
+            if not hit and h.mem_read_phy is not None:
                 root_ppn = h.satp_val & ((1 << 44) - 1)
-                ok, ppn, perm, _ = sv39_walk(root_ppn, page_va, h._mem_read_phy)
+                ok, ppn, perm, _ = sv39_walk(root_ppn, page_va, h.mem_read_phy)
                 if not ok:
                     lines.append(f"  [red]VA 0x{page_va:016x}  缺页 (无法翻译)[/]")
                     continue
@@ -887,11 +857,11 @@ class MemoryOps(SharedAttrs):
 
     def _walk_and_read_va(self, va: int, size: int) -> tuple[int, bytes] | None:
         """遍历页表并按虚拟地址读出 size 字节; 失败时报告原因并返回 None."""
-        if self.hart._mem_read_phy is None:
+        if self.hart.mem_read_phy is None:
             self._err("内存后端未挂载")
             return None
         root_ppn = self.hart.satp_val & ((1 << 44) - 1)
-        ok, _, _, _ = sv39_walk(root_ppn, va, self.hart._mem_read_phy)
+        ok, _, _, _ = sv39_walk(root_ppn, va, self.hart.mem_read_phy)
         if not ok:
             self._err(
                 f"VA [yellow]{hex_addr(va)}[/] 页表翻译失败 (缺页);"

@@ -47,6 +47,8 @@ bsp/*
 !bsp/sittim/
 !bsp/tee_aux_tools/
 !bsp/kei-boot/
-!bsp/setup-rootfs/local-build.sh
+!bsp/setup-rootfs/debootstrap/local-build.sh
+!bsp/setup-rootfs/debootstrap/regress.sh
+!bsp/readme
 !bsp/.linux-config
 !bsp/build-*.sh

@@ -17,7 +17,7 @@ from pyremu.utils.parse_bin import parse_firmware
 @pytest.fixture
 def multi_hart_emu():
     """2-hart emulator with kernel loaded."""
-    cfg = PlatformConfig.qemu_virt()
+    cfg = PlatformConfig.basic_machine()
     cfg.num_harts = 2
     # 时钟源取固定值, 使 mtime 的推进量与项目的编译选项无关.
     cfg.timebase_freq = 10_000_000
@@ -29,35 +29,40 @@ def multi_hart_emu():
 
 
 class TestMultiHartBoot:
-    """验证多 hart 基本启动."""
+    """验证多 hart 基本启动: 仅启动 hart 进入 S 模式, 其余 hart 驻留等待."""
 
-    def test_both_harts_boot_to_smode(self, multi_hart_emu):
-        """两个 hart 都应从 M 模式进入 S 模式."""
+    def test_boot_hart_boots_to_smode(self, multi_hart_emu):
+        """启动 hart 从 M 模式进入 S 模式."""
         emu = multi_hart_emu
         for _ in range(500):
             emu.step()
-            if all(h.mode.name == "S" for h in emu.harts):
+            if emu.harts[0].mode.name == "S":
                 break
 
-        for i, h in enumerate(emu.harts):
-            assert h.mode.name == "S", f"Hart {i} 仍是 {h.mode.name}, 未进入 S"
+        assert emu.harts[0].mode.name == "S", f"Hart 0 仍是 {emu.harts[0].mode.name}"
 
-    def test_harts_have_separate_csrs(self, multi_hart_emu):
-        """每个 hart 有独立的 CSR 状态."""
+    def test_non_boot_harts_park(self, multi_hart_emu):
+        """非启动 hart 保持 M 模式, 停在 park_hart 的 WFI 循环内."""
         emu = multi_hart_emu
-        for _ in range(100):
+        for _ in range(500):
             emu.step()
 
-        # 两个 hart 执行相同代码, satp 应相同 (共享页表)
-        satp0 = emu.harts[0].satp_val
-        satp1 = emu.harts[1].satp_val
-        assert satp0 == satp1, "共享页表, satp 应相同"
+        kernel = parse_firmware(path_join(examed_elf_dir(), "kernel.elf"))
+        assert kernel is not None
+        park_pc = kernel.symbols["park_hart"]
+        for h in emu.harts[1:]:
+            assert h.mode.name == "M", f"Hart {h.id} 应为 M 模式, 实际 {h.mode.name}"
+            assert park_pc <= h.pc < park_pc + 8, f"Hart {h.id} PC=0x{h.pc:08x}"
 
-        # 独立 PC (可能因时序差异有偏移)
-        pc0 = emu.harts[0].pc
-        pc1 = emu.harts[1].pc
-        assert 0x80000000 <= pc0 <= 0x80010000, f"Hart 0 PC=0x{pc0:08x}"
-        assert 0x80000000 <= pc1 <= 0x80010000, f"Hart 1 PC=0x{pc1:08x}"
+    def test_harts_have_separate_csrs(self, multi_hart_emu):
+        """每个 hart 的 CSR 状态独立: 写入一个 hart 的 mscratch 不影响另一个."""
+        emu = multi_hart_emu
+        for _ in range(500):
+            emu.step()
+
+        emu.harts[1].csrs["mscratch"].val = 0x5A5A
+        assert emu.harts[1].csrs["mscratch"].val == 0x5A5A
+        assert emu.harts[0].csrs["mscratch"].val != 0x5A5A, "CSR 状态不应跨 hart 共享"
 
 
 class TestMultiHartTimer:

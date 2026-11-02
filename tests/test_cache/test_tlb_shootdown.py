@@ -10,8 +10,6 @@
 
 import struct
 
-import pytest
-
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
 from pyremu.platform import PlatformConfig
@@ -46,12 +44,18 @@ def _encode_nop():
     return 0x00000013
 
 
+def _encode_j_self():
+    """j . — 跳转到自身."""
+    return 0x0000006F
+
+
 class TestTlbSyncCounter:
     """验证 tlb_sync 计数器在跨核 MSIP + AMO 下的正确性."""
 
     SHARED_ADDR = 0x80001000  # 模拟 tlb_sync[H1] 的内存位置
     H0_BASE = 0x80000000
     H1_BASE = 0x80000100
+    MTVEC0 = 0x80003000  # H0 的陷态处理程序入口, 内容为 mret
 
     @staticmethod
     def _setup_two_mmode_harts(emu):
@@ -75,6 +79,31 @@ class TestTlbSyncCounter:
                 addr = code_base + offset
                 if addr != mtvec:
                     emu.bus.write(addr, wfi_raw)
+
+    @classmethod
+    def _setup_pair(cls):
+        """构造两个 M 模式 hart: H0 待测, H1 在原地跳转保持活跃.
+
+        H1 必须保持活跃: 构造时两个 hart 的代码区都填充了 WFI, 若 H1 也进入
+        等待, ``Emulator.step()`` 在全部未停机 hart 都等待时阻塞本线程, 直到
+        有中断或外部事件唤醒, 用例将无法推进.
+        """
+        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
+        emu = Emulator(cfg, bootargs="")
+        h0, h1 = emu.harts
+        cls._setup_two_mmode_harts(emu)
+        emu.bus.write(cls.H1_BASE, struct.pack("<I", _encode_j_self()))
+        h1.pc = cls.H1_BASE
+        return emu, h0, h1
+
+    @staticmethod
+    def _run_until(emu, cond, limit: int = 8) -> bool:
+        """逐条执行指令直到 cond 成立或达到步数上限, 返回 cond 的最终取值."""
+        for _ in range(limit):
+            if cond():
+                return True
+            emu.step()
+        return cond()
 
     # ================================================================
     #  Test 1: 基本场景 — H1 amoadd +1 ->H0 amoadd -1
@@ -119,46 +148,35 @@ class TestTlbSyncCounter:
     # ================================================================
 
     def test_wfi_wake_then_amo(self):
-        """Hart 0 进入 WFI, Hart 1 写 MSIP, Hart 0 醒来执行 AMO, 随后验证结果."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
-        emu = Emulator(cfg, bootargs="")
-        h0, h1 = emu.harts
-        self._setup_two_mmode_harts(emu)
-
-        # 将共享计数器初始化为 1
+        """H0 在 WFI 等待时被 H1 写 MSIP 唤醒, 中断返回后执行 AMOADD 递减共享计数器."""
+        emu, h0, _h1 = self._setup_pair()
         emu.bus.write(self.SHARED_ADDR, struct.pack("<I", 1))
 
-        # H0 执行 wfi 进入等待
+        # H0 代码: WFI (+0) -> AMOADD -1 (+4)
         emu.bus.write(self.H0_BASE, struct.pack("<I", _encode_wfi()))
+        emu.bus.write(
+            self.H0_BASE + 4,
+            struct.pack("<I", _encode_amoadd_w(rd=5, rs1=10, rs2=11)),
+        )
         h0.pc = self.H0_BASE
-
-        # H1 循环执行 nop 保持活跃
-        emu.bus.write(self.H1_BASE, struct.pack("<I", _encode_nop()))
-        h1.pc = self.H1_BASE
-
-        # 执行几步让 H0 进入 WFI
-        for _ in range(5):
-            emu.step()
-
-        assert h0._waiting, f"H0 应在 WFI, 实际 waiting={h0._waiting}"
-
-        # H1 写入 CLINT MSIP[0] = 1
-        emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
-
-        emu.step()
-
-        assert not h0._waiting, f"H0 应被 MSIP 唤醒, waiting={h0._waiting}"
-
-        # 现在 H0 醒来了, 让它执行 amoadd 递减
-        instr_dec = _encode_amoadd_w(rd=5, rs1=10, rs2=11)
-        emu.bus.write(0x80000010, struct.pack("<I", instr_dec))
-        h0.pc = 0x80000010
         h0.gprs[10] = self.SHARED_ADDR
         h0.gprs[11] = 0xFFFF_FFFF  # -1
-        h0._waiting = False  # 确保不在 waiting 状态
+
+        assert self._run_until(emu, lambda: h0._waiting), "H0 应进入 WFI 等待"
+        assert h0.pc == self.H0_BASE + 4, f"WFI 之后 PC 应推进, 实际 {h0.pc:#x}"
+
+        # H1 写 CLINT MSIP[0] = 1, H0 在下一轮被唤醒并立即投递 M 模式中断
+        emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
+        emu.step()
+        assert not h0._waiting, "H0 应被 MSIP 唤醒"
+        assert h0.pc == self.MTVEC0, f"唤醒后应进入 mtvec, 实际 {h0.pc:#x}"
+
+        # 中断处理程序写 0 撤销 MSIP; mret 返回被中断处
+        emu.bus.write(CLINT_BASE, struct.pack("<I", 0))
+        emu.step()
+        assert h0.pc == self.H0_BASE + 4, f"mret 应回到 WFI 的下一条指令, 实际 {h0.pc:#x}"
 
         emu.step()
-
         after = struct.unpack("<I", emu.bus.read(self.SHARED_ADDR, 4))[0]
         h0_rd = h0.gprs[5] & 0xFFFF_FFFF
 
@@ -166,27 +184,23 @@ class TestTlbSyncCounter:
         assert h0_rd == 1, f"amoadd 应返回旧值 1, 实际 {h0_rd}"
 
     # ================================================================
-    #  Test 3: 完整 tlb_sync 模拟 — 纯 Python 路径
+    #  Test 3: 完整 tlb_sync 模拟
     # ================================================================
 
-    @pytest.mark.parametrize("use_native", [True, False])
-    def test_tlb_sync_simulation(self, use_native):
-        """完整模拟 tlb_sync 协议在两个路径下.
+    def test_tlb_sync_simulation(self):
+        """完整模拟 tlb_sync 协议: 唤醒、中断返回、递减、重新进入 WFI.
 
-        H0 的代码布局: WFI ->amoadd -1 ->wfi
-        陷阱 handler 在 mtvec: mret (回到 WFI 的下一条 = amoadd)
+        H0 的代码布局: WFI (+0) -> AMOADD -1 (+4) -> WFI (+8), 陷态处理程序
+        在 mtvec 处为 mret, 中断返回后 PC 回到 WFI 的下一条指令.
 
         流程:
-          1. H0 执行 WFI ->waiting
+          1. H0 执行 WFI 进入等待
           2. H1 通过 Bus.write 设置 MSIP[0] (模拟 sbi_ipi_send_many)
-          3. emu.step() 使 H0 醒来, 进入陷阱, mret 后执行 amoadd, 递减共享变量
-          4. H1 读共享变量, 应为 0, 因为该变量已被 H0 递减
-
+          3. H0 在下一轮被唤醒并陷入 mtvec; 处理程序写 0 撤销 MSIP 后 mret
+          4. H0 执行 AMOADD 递减共享变量, 随后回到 +8 的 WFI 重新等待
+          5. H1 读共享变量, 应为 0
         """
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
-        emu = Emulator(cfg, bootargs="")
-        h0, h1 = emu.harts
-        self._setup_two_mmode_harts(emu)
+        emu, h0, h1 = self._setup_pair()
 
         # tlb_sync 原始值 = 1 (模拟 H1 的 tlb_update 递增后)
         emu.bus.write(self.SHARED_ADDR, struct.pack("<I", 1))
@@ -197,43 +211,38 @@ class TestTlbSyncCounter:
         emu.bus.write(self.H0_BASE + 4, struct.pack("<I", instr_dec))  # +4
         emu.bus.write(self.H0_BASE + 8, struct.pack("<I", _encode_wfi()))  # +8
 
-        # H1 代码: nop ->wfi
-        emu.bus.write(self.H1_BASE, struct.pack("<I", _encode_nop()))
-        emu.bus.write(self.H1_BASE + 4, struct.pack("<I", _encode_wfi()))
-
         # 预设 H0 寄存器
         h0.gprs[10] = self.SHARED_ADDR  # rs1 = addr
         h0.gprs[11] = 0xFFFF_FFFF  # rs2 = -1
-
         h0.pc = self.H0_BASE
-        h1.pc = self.H1_BASE
 
         # --- 阶段 1: 让 H0 进入 WFI ---
-        for _ in range(5):
-            emu.step()
-
-        assert h0._waiting, "H0 应在 WFI (阶段 1)"
+        assert self._run_until(emu, lambda: h0._waiting), "H0 应在 WFI (阶段 1)"
 
         # --- 阶段 2: H1 发送 MSIP[0] (模拟 sbi_ipi_send_many) ---
         emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
-        # 并发模型: H0 的 WFI 被 MSIP 唤醒, 随后进入陷阱到 mtvec,
-        # 随后 mret 回到 amoadd (+4), 执行 amoadd, 随后到下一个 wfi (+8)
-        # MSIP 此时必须清除, 否则第二个 wfi 会立即再次唤醒
-        for _ in range(10):
-            emu.step()
-            # 当 MSIP 还被挂起而 H0 又回到 WFI 时, 发动机检测到
-            # 中断并再投递, 但 trap handler 是 mret, 故 amoadd
-            # 已执行过的情形下 H0 回到 +8 处的 WFI 即可稳定等待.
-            if h0._waiting and (h0.gprs[5] & 0xFFFF_FFFF) == 1:
-                # amoadd 已执行 (返回旧值 1), 清除 MSIP 让 H0 可稳定 WFI
-                emu.clint._msip[0] = 0
+        emu.step()
+        assert not h0._waiting, "H0 应被 MSIP 唤醒 (阶段 2)"
+        assert h0.pc == self.MTVEC0, f"唤醒后应进入 mtvec, 实际 {h0.pc:#x}"
+
+        # MSIP 必须撤销, 否则 mret 之后中断立即再次投递, AMOADD 不会执行
+        emu.bus.write(CLINT_BASE, struct.pack("<I", 0))
+        emu.step()
+        assert h0.pc == self.H0_BASE + 4, f"mret 应回到 AMOADD, 实际 {h0.pc:#x}"
 
         # --- 阶段 3: 验证 H0 执行了 amoadd -1 ---
+        emu.step()
         after = struct.unpack("<I", emu.bus.read(self.SHARED_ADDR, 4))[0]
         h0_rd = h0.gprs[5] & 0xFFFF_FFFF
 
-        assert after == 0, f"[native={use_native}] 递减后应为 0, 实际 {after}"
-        assert h0_rd == 1, f"[native={use_native}] amoadd 应返回旧值 1, 实际 {h0_rd}"
+        assert after == 0, f"递减后应为 0, 实际 {after}"
+        assert h0_rd == 1, f"amoadd 应返回旧值 1, 实际 {h0_rd}"
+
+        # 唤醒后 _wfi_woken 仍为真: 紧随其后的第一条 WFI (+8) 按 NOP 处理,
+        # 使 while (cond) wfi(); 形式的循环得以重新检查条件; 第二条 WFI (+0xC)
+        # 才真正进入等待
+        assert self._run_until(emu, lambda: h0._waiting), "H0 应重新进入 WFI"
+        assert h0.pc == self.H0_BASE + 0x10, f"WFI 之后 PC 应推进, 实际 {h0.pc:#x}"
 
         # --- 阶段 4: H1 读取应看到 0 (模拟 tlb_sync 自旋退出) ---
         lw_instr = _encode_lw(rd=6, rs1=10)
@@ -243,59 +252,55 @@ class TestTlbSyncCounter:
         h1.exec_instr(lw_instr)
         h1_sees = h1.gprs[6] & 0xFFFF_FFFF
 
-        assert h1_sees == 0, f"[native={use_native}] H1 应看到 tlb_sync=0, 实际 {h1_sees}"
+        assert h1_sees == 0, f"H1 应看到 tlb_sync=0, 实际 {h1_sees}"
 
     # ================================================================
     #  Test 4: 多次 MSIP 唤醒 + AMO 的序列正确性
     # ================================================================
 
     def test_multiple_wake_amo_sequence(self):
-        """连续两次 MSIP 唤醒并执行 AMO, 每次计数器正确递减."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
-        emu = Emulator(cfg, bootargs="")
-        h0, h1 = emu.harts
-        self._setup_two_mmode_harts(emu)
-
+        """连续两次 MSIP 唤醒, 每次中断返回后执行一条 AMOADD, 计数器由 2 递减到 0."""
+        emu, h0, _h1 = self._setup_pair()
         emu.bus.write(self.SHARED_ADDR, struct.pack("<I", 2))  # 起始=2
 
-        # H0 代码: wfi / amoadd -1 / wfi
+        # H0 代码: WFI (+0) -> AMOADD -1 (+4) -> WFI (+8, 唤醒后的第一条 WFI,
+        # 按 NOP 处理) -> WFI (+0xC) -> AMOADD -1 (+0x10)
         emu.bus.write(self.H0_BASE, struct.pack("<I", _encode_wfi()))
         emu.bus.write(
             self.H0_BASE + 4,
+            struct.pack("<I", _encode_amoadd_w(rd=5, rs1=10, rs2=11)),
+        )
+        emu.bus.write(self.H0_BASE + 8, struct.pack("<I", _encode_wfi()))
+        emu.bus.write(self.H0_BASE + 0xC, struct.pack("<I", _encode_wfi()))
+        emu.bus.write(
+            self.H0_BASE + 0x10,
             struct.pack("<I", _encode_amoadd_w(rd=5, rs1=10, rs2=11)),
         )
         h0.pc = self.H0_BASE
         h0.gprs[10] = self.SHARED_ADDR
         h0.gprs[11] = 0xFFFF_FFFF
 
-        # hart1 的代码为一条 nop
-        emu.bus.write(self.H1_BASE, struct.pack("<I", _encode_nop()))
-        h1.pc = self.H1_BASE
-
-        # 第 1 次
-        for _ in range(5):
+        for round_index, (expected_after, expected_rd, resume_pc) in enumerate(
+            [(1, 2, self.H0_BASE + 4), (0, 1, self.H0_BASE + 0x10)]
+        ):
+            assert self._run_until(emu, lambda: h0._waiting), (
+                f"第 {round_index + 1} 次唤醒前 H0 应处于 WFI"
+            )
+            emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
             emu.step()
-        assert h0._waiting
-        emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
-        emu.step()
-        assert not h0._waiting
-        h0.pc = self.H0_BASE + 4
-        h0._waiting = False
-        emu.step()
-        assert struct.unpack("<I", emu.bus.read(self.SHARED_ADDR, 4))[0] == 1
+            assert not h0._waiting, f"第 {round_index + 1} 次唤醒后 H0 不应处于 WFI"
+            assert h0.pc == self.MTVEC0, f"唤醒后应进入 mtvec, 实际 {h0.pc:#x}"
 
-        # 第 2 次 (计数器从 1 ->0)
-        h0.pc = self.H0_BASE
-        h0._waiting = True
-        for _ in range(3):
+            emu.bus.write(CLINT_BASE, struct.pack("<I", 0))
             emu.step()
-        emu.bus.write(CLINT_BASE, struct.pack("<I", 1))
-        emu.step()
-        h0.pc = self.H0_BASE + 4
-        h0.gprs[10] = self.SHARED_ADDR
-        h0.gprs[11] = 0xFFFF_FFFF
-        h0._waiting = False
-        emu.step()
+            assert h0.pc == resume_pc, f"mret 应回到 {resume_pc:#x}, 实际 {h0.pc:#x}"
 
-        final = struct.unpack("<I", emu.bus.read(self.SHARED_ADDR, 4))[0]
-        assert final == 0, f"两次递减后应为 0, 实际 {final}"
+            emu.step()
+            counter = struct.unpack("<I", emu.bus.read(self.SHARED_ADDR, 4))[0]
+            assert counter == expected_after, (
+                f"第 {round_index + 1} 次递减后应为 {expected_after}, 实际 {counter}"
+            )
+            assert (h0.gprs[5] & 0xFFFF_FFFF) == expected_rd, (
+                f"第 {round_index + 1} 次 amoadd 应返回旧值 {expected_rd}, "
+                f"实际 {h0.gprs[5] & 0xFFFF_FFFF}"
+            )

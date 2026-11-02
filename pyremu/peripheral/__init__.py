@@ -18,6 +18,7 @@
 - VirtIONet   : virtio-net 网络设备
 """
 
+from pyremu.peripheral.boot_addr import BootAddrReg
 from pyremu.peripheral.crng import CRNG
 from pyremu.peripheral.gpio import GPIO
 from pyremu.peripheral.i2c import I2C
@@ -27,4 +28,14 @@ from pyremu.peripheral.uart import UART
 from pyremu.peripheral.virtio_blk import VirtIOBlock
 from pyremu.peripheral.virtio_net import VirtIONet
 
-__all__ = ["TerminalIO", "UART", "SPI", "I2C", "GPIO", "VirtIOBlock", "VirtIONet", "CRNG"]
+__all__ = [
+    "TerminalIO",
+    "UART",
+    "SPI",
+    "I2C",
+    "GPIO",
+    "VirtIOBlock",
+    "VirtIONet",
+    "CRNG",
+    "BootAddrReg",
+]

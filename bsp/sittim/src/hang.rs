@@ -55,7 +55,7 @@ pub fn fault_halt_exc(gprs: &TrapGprs, scause: u64, stval: u64, sepc: u64) -> ! 
 		s4,s5,s6,s7: {:016x} {:016x} {:016x} {:016x}\n\
 		s8,s9,sa,sb: {:016x} {:016x} {:016x} {:016x}\n\
 		t3,t4,t5,t6: {:016x} {:016x} {:016x} {:016x}\n\
-		!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n",
+		!!!!!!!!!!!!!!TvT!!!!!!!!!!!!\n\n",
 		scause,
 		stval,
 		ptr::from_ref(gprs) as u64,

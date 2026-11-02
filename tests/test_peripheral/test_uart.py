@@ -26,7 +26,7 @@ from pyremu._native import FfiUartCtx, native_available
 from pyremu.emulator import Emulator
 from pyremu.interrupt.plic import PLIC
 from pyremu.peripheral.uart import IP_RXWM, IP_TXWM, REG_RXDATA, RX_FIFO_SIZE, UART
-from pyremu.platform import PeripheralConfig, PlatformConfig
+from tests.conftest import make_test_emu
 
 TXDATA = 0x00
 
@@ -193,15 +193,8 @@ class TestNativeUartPairRouting:
       (修复前 range(drain, min(tx_wr, tx_cap)) 在 tx_wr 超过容量后失效)。
     """
 
-    def _make_emu(self, tmp_path) -> Emulator:
-        cfg = PlatformConfig(
-            num_harts=2,
-            ram_size=8 * 1024 * 1024,
-            ram_base=0x8000_0000,
-            prog_cnt=0x8000_0000,
-            periph=PeripheralConfig(),
-        )
-        emu = Emulator(cfg)
+    def _make_uart_emu(self, tmp_path) -> Emulator:
+        emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024)
         if emu._termio is None:
             pytest.skip("TerminalIO not available (非交互式 TTY 环境)")
         uart = emu.uart
@@ -220,7 +213,7 @@ class TestNativeUartPairRouting:
         termio.tx_wr.value = (e + 1) & 0xFFFF_FFFF
 
     def test_interleaved_pairs_routed_per_hart(self, tmp_path):
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         uart = emu.uart
         assert uart is not None
         # 交错推入: hart0 'H''I''\n', hart1 'Y''O''\n' 逐字节穿插
@@ -243,7 +236,7 @@ class TestNativeUartPairRouting:
 
     def test_flush_advances_log_index_not_drain(self, tmp_path):
         """日志消费者只推进 tx_log_rd; tx_drain 归 termio 线程独占, Python 不碰."""
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         self._push_pair(emu, 0, ord("A"))
         self._push_pair(emu, 0, ord("\n"))
         termio = emu._termio
@@ -260,7 +253,7 @@ class TestNativeUartPairRouting:
 
         修复前 range(drain, min(tx_wr, tx_cap)) 在此场景下为空区间, 条目全丢。
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         ecap = termio.TX_CAP // 2
@@ -281,7 +274,7 @@ class TestNativeUartPairRouting:
 
     def test_log_drain_skips_lapped_entries(self, tmp_path):
         """生产者超圈 (pending > ecap) 时跳到仍有效的最旧条目, 不重复整圈."""
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         ecap = termio.TX_CAP // 2
@@ -305,7 +298,7 @@ class TestNativeUartPairRouting:
         archive-only 只 record_tx_byte 回填行缓冲, tx_data() 与 hart 日志完整,
         但 os.write(1) 一次也不得触发 (对照组 drain_tx_logs 必须触发).
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         uart = emu.uart
         termio = emu._termio
         assert uart is not None
@@ -345,15 +338,8 @@ class TestTxArchiveDaemonPollFallback:
     ``stop`` 之前把新 TX 条目归档到 hart 日志文件, 修复前该日志为空。
     """
 
-    def _make_emu(self, tmp_path) -> Emulator:
-        cfg = PlatformConfig(
-            num_harts=2,
-            ram_size=8 * 1024 * 1024,
-            ram_base=0x8000_0000,
-            prog_cnt=0x8000_0000,
-            periph=PeripheralConfig(),
-        )
-        emu = Emulator(cfg)
+    def _make_uart_emu(self, tmp_path) -> Emulator:
+        emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024)
         if emu._termio is None:
             pytest.skip("TerminalIO not available (非交互式 TTY 环境)")
         uart = emu.uart
@@ -372,7 +358,7 @@ class TestTxArchiveDaemonPollFallback:
         termio.tx_wr.value = (e + 1) & 0xFFFF_FFFF
 
     def test_archive_daemon_drains_without_notify_pipe(self, tmp_path):
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         uart = emu.uart
@@ -425,7 +411,7 @@ class TestTxArchiveDaemonPollFallback:
         吞掉后 daemon 静默死亡。本测试用 dup2 把通知读端强制推到 fd 1024,
         修复前第一次 select 调用即退出, 日志永不归档; poll 版照常工作。
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         uart = emu.uart
@@ -477,7 +463,7 @@ class TestTxArchiveDaemonPollFallback:
         (见 test_archive_daemon_survives_high_fd_notify)。stop 后 fd 必须真正
         释放 (os.fstat 抛 OSError) 且属性置 -1 (幂等)。
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         fd_names = (
@@ -513,7 +499,7 @@ class TestTxArchiveDaemonPollFallback:
         而 start() 不重建管道, 守护线程捕获 fd=-1 后在 ``poll.register(-1)`` 崩溃。
         修复后 start() 先重建管道, 全部读端 fd 恢复有效。
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
 
@@ -539,7 +525,7 @@ class TestTxArchiveDaemonPollFallback:
         线程双双崩溃)。修复后三个 daemon 入口与 start 方法在 fd<0 时直接返回,
         不注册 poll、不启动线程。
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         termio.stop()  # 关闭全部管道, fd 置 -1
@@ -570,7 +556,7 @@ class TestTxArchiveDaemonPollFallback:
         使用 Emulator 的调用方 (调试器退出 / 测试 teardown) 只需调一次
         ``emu.close()`` 即释放 6 个管道 fd; 未显式 close 的实例由 __del__ 释放.
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         saved = (
@@ -596,15 +582,8 @@ class TestTxArchiveDaemonPollFallback:
 class _RxRingHarness:
     """接收环形缓冲区测试夹具: 构建 Emulator, 并直接写入接收环形缓冲区."""
 
-    def _make_emu(self, tmp_path) -> Emulator:
-        cfg = PlatformConfig(
-            num_harts=2,
-            ram_size=8 * 1024 * 1024,
-            ram_base=0x8000_0000,
-            prog_cnt=0x8000_0000,
-            periph=PeripheralConfig(),
-        )
-        emu = Emulator(cfg)
+    def _make_uart_emu(self, tmp_path) -> Emulator:
+        emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024)
         if emu._termio is None:
             pytest.skip("TerminalIO not available (非交互式 TTY 环境)")
         uart = emu.uart
@@ -637,7 +616,7 @@ class TestRxDaemonLostNotifyFallback(_RxRingHarness):
 
     def test_rx_daemon_drains_on_timeout_without_notify(self, tmp_path):
         """通知字节丢失时, 超时路径仍读出接收环形缓冲区; 修复前该路径跳过读出."""
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
         uart = emu.uart
@@ -654,6 +633,40 @@ class TestRxDaemonLostNotifyFallback(_RxRingHarness):
             assert termio._rx_wr.value == termio._rx_rd.value
         finally:
             uart.close_logs()
+            termio.stop()
+
+
+class TestRxDaemonStopNotify(_RxRingHarness):
+    """Ctrl+Q 的通知字节必须置位唤醒事件.
+
+    Rust termio 线程识别 Ctrl+Q 后直接置位 CPU 引擎的停止标志, 并向接收通知管道
+    写 1 字节; 该路径不向接收环形缓冲区写入字节, ``drain_rx`` 因而不置位
+    ``Emulator._wake_event``. 全部 hart 处于 WFI 时引擎不执行指令, 主线程阻塞在该
+    事件上, 停止标志没有别的送达途径.
+
+    修复前守护线程只经 ``drain_rx`` 置位该事件, 停顿时按 Ctrl+Q 无法让受调试程序
+    回到调试器.
+    """
+
+    def test_stop_notify_sets_wake_event(self, tmp_path):
+        """通知管道收到字节而接收环形缓冲区为空时, 唤醒事件仍被置位."""
+        emu = self._make_uart_emu(tmp_path)
+        termio = emu._termio
+        assert termio is not None
+        try:
+            emu._wake_event.clear()
+            # 接收环形缓冲区为空: 该字节不计入任何输入.
+            assert termio._rx_wr.value == termio._rx_rd.value
+            os.write(termio._rx_notify_w, b"\x01")
+            poll = select.poll()
+            poll.register(termio._rx_notify_r, select.POLLIN)
+            assert termio._rx_daemon_tick(termio._rx_notify_r, poll, timeout_ms=1)
+            assert emu._wake_event.is_set(), "Ctrl+Q 通知应置位唤醒事件"
+            assert termio._rx_wr.value == termio._rx_rd.value, "通知字节不得进入接收环形缓冲区"
+        finally:
+            uart = emu.uart
+            if uart is not None:
+                uart.close_logs()
             termio.stop()
 
 
@@ -694,7 +707,7 @@ class TestRxRoomRefill(_RxRingHarness):
         修复前读出字节只空出一个槽位, 剩余的数据要等守护线程的下一次超时轮询;
         修复后读操作内即经回调完成续写.
         """
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         uart = emu.uart
         assert termio and uart
@@ -715,7 +728,7 @@ class TestRxRoomRefill(_RxRingHarness):
 
     def test_termio_start_binds_notifier_and_stop_unbinds(self, tmp_path):
         """start() 期间绑定槽位回调, stop() 后解绑."""
-        emu = self._make_emu(tmp_path)
+        emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         uart = emu.uart
         assert termio and uart
@@ -901,3 +914,101 @@ class TestUartNativeRegsPublish:
         uart.read(0x04, 1)
         uart.clear_rx()
         assert uart._ffi_ctx is None
+
+
+# ============================================================
+#  经执行流水线写 UART TXDATA
+# ============================================================
+
+
+class TestUartFlush:
+    """UART TXDATA 字节级即时输出: 每字节写 _write_reg 立即回调."""
+
+    @staticmethod
+    def _sb(rs1: int, rs2: int, imm: int) -> int:
+        imm12 = imm & 0xFFF
+        return (
+            ((imm12 >> 5) << 25)
+            | (rs2 << 20)
+            | (rs1 << 15)
+            | (0b000 << 12)
+            | ((imm12 & 0x1F) << 7)
+            | 0b0100011
+        )
+
+    @staticmethod
+    def _lui(rd: int, imm20: int) -> int:
+        return ((imm20 & 0xFFFFF) << 12) | (rd << 7) | 0b0110111
+
+    def test_txdata_triggers_immediate_callback(self):
+        """TXDATA 写入立即触发 _tx_callback (字节级, 无行缓冲)."""
+        emu = Emulator(num_harts=1, ram_size=128 * 1024 * 1024)
+        captured: list[str] = []
+
+        def cap(text: str) -> None:
+            captured.append(text)
+
+        assert emu.uart is not None
+        emu.uart._tx_callback = cap
+        hart = emu.harts[0]
+
+        hart.gprs[11] = 0x41
+        hart.pc = 0x80000000
+        code = self._lui(10, 0x10000).to_bytes(4, "little") + self._sb(10, 11, 0).to_bytes(
+            4, "little"
+        )
+        emu.bus.write(0x80000000, code)
+
+        emu.step()  # LUI
+        emu.step()  # SB -> TXDATA -> _tx_callback('A')
+
+        assert len(captured) >= 1, f"TXDATA 写入应立即回调, 实际: {captured}"
+
+    def test_multiple_bytes_each_trigger_callback(self):
+        """多个 TXDATA 写入各自独立触发回调."""
+        emu = Emulator(num_harts=1, ram_size=128 * 1024 * 1024)
+        captured: list[str] = []
+
+        def cap(text: str) -> None:
+            captured.append(text)
+
+        assert emu.uart is not None
+        emu.uart._tx_callback = cap
+
+        uart_base = 0x10000000
+        code_addr = 0x80000000
+        lui_imm = (uart_base >> 12) & 0xFFFFF
+        code = self._lui(10, lui_imm).to_bytes(4, "little") + self._sb(10, 11, 0).to_bytes(
+            4, "little"
+        )
+        emu.bus.write(code_addr, code)
+        hart = emu.harts[0]
+        hart.gprs[11] = 0x41  # 'A'
+        hart.pc = code_addr
+
+        emu.step()  # LUI
+        emu.step()  # SB — 'A'
+
+        hart.gprs[11] = 0x42  # 'B'
+        hart.pc = code_addr
+        emu.step()  # LUI
+        emu.step()  # SB — 'B'
+
+        assert len(captured) >= 2, f"两字节应各自回调, 实际: {captured}"
+
+    def test_bus_write_to_uart_triggers_output(self):
+        """总线写 UART 地址直接输出, 无 set_writer 依赖."""
+        emu = Emulator(num_harts=2, ram_size=128 * 1024 * 1024)
+        assert emu.uart is not None
+        captured: list[str] = []
+
+        def cap(text: str) -> None:
+            captured.append(text)
+
+        emu.uart._tx_callback = cap
+
+        # 直接通过总线写 UART TXDATA — 无需 set_writer
+        emu.bus.write(0x10000000, b"X")
+        emu.bus.write(0x10000000, b"Y")
+
+        assert len(captured) >= 2, f"两字节应各自回调, 实际: {captured}"

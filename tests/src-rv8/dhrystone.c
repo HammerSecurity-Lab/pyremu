@@ -432,22 +432,27 @@ void Proc4();
 void Proc5();
 void Proc6(
 	Enumeration EnumParIn,
-	Enumeration *EnumParOut);
+	Enumeration *EnumParOut
+);
 void Proc7(
 	OneToFifty IntParI1,
 	OneToFifty IntParI2,
-	OneToFifty *IntParOut);
+	OneToFifty *IntParOut
+);
 void Proc8(
 	Array1Dim Array1Par,
 	Array2Dim Array2Par,
 	OneToFifty IntParI1,
-	OneToFifty IntParI2);
+	OneToFifty IntParI2
+);
 Enumeration Func1(
 	CapitalLetter CharPar1,
-	CapitalLetter CharPar2);
+	CapitalLetter CharPar2
+);
 boolean Func2(
 	String30 StrParI1,
-	String30 StrParI2);
+	String30 StrParI2
+);
 
 int main() {
 	Proc0();
@@ -523,15 +528,14 @@ void Proc0() {
 *****************/
 
 	gettimeofday(&endtime, NULL);
-	benchtime = (endtime.tv_sec * 1000000 + endtime.tv_usec)
-				- (starttime.tv_sec * 1000000 + starttime.tv_usec);
+	benchtime = (endtime.tv_sec * 1000000 + endtime.tv_usec) -
+				(starttime.tv_sec * 1000000 + starttime.tv_usec);
 	printf(
-		"Dhrystone(%s), %ld passes, %ld microseconds, %ld DMIPS\n",
-		Version,
-		(unsigned long)LOOPS,
-		benchtime,
+		"Dhrystone(%s), %ld passes, %ld microseconds, %ld DMIPS\n", Version,
+		(unsigned long)LOOPS, benchtime,
 		/* overflow free division by VAX DMIPS value (1757) */
-		(LOOPS * 71) / (benchtime >> 3));
+		(LOOPS * 71) / (benchtime >> 3)
+	);
 	free(PtrGlb);
 	free(PtrGlbNext);
 }
@@ -599,7 +603,8 @@ extern boolean Func3(Enumeration EnumParIn);
 
 void Proc6(
 	Enumeration EnumParIn,
-	Enumeration *EnumParOut) {
+	Enumeration *EnumParOut
+) {
 	*EnumParOut = EnumParIn;
 	if (!Func3(EnumParIn)) {
 		*EnumParOut = Ident4;
@@ -628,7 +633,8 @@ void Proc6(
 void Proc7(
 	OneToFifty IntParI1,
 	OneToFifty IntParI2,
-	OneToFifty *IntParOut) {
+	OneToFifty *IntParOut
+) {
 	OneToFifty IntLoc;
 
 	IntLoc	   = IntParI1 + 2;
@@ -639,7 +645,8 @@ void Proc8(
 	Array1Dim Array1Par,
 	Array2Dim Array2Par,
 	OneToFifty IntParI1,
-	OneToFifty IntParI2) {
+	OneToFifty IntParI2
+) {
 	OneToFifty IntLoc;
 	OneToFifty IntIndex;
 
@@ -657,7 +664,8 @@ void Proc8(
 
 Enumeration Func1(
 	CapitalLetter CharPar1,
-	CapitalLetter CharPar2) {
+	CapitalLetter CharPar2
+) {
 	CapitalLetter CharLoc1;
 	CapitalLetter CharLoc2;
 
@@ -672,7 +680,8 @@ Enumeration Func1(
 
 boolean Func2(
 	String30 StrParI1,
-	String30 StrParI2) {
+	String30 StrParI2
+) {
 	OneToThirty IntLoc;
 	CapitalLetter CharLoc;
 

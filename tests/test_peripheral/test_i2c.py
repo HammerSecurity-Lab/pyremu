@@ -18,7 +18,8 @@ from pyremu import configs_gen
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.peripheral.i2c import I2C
-from pyremu.platform import PeripheralConfig, PlatformConfig
+from pyremu.platform import PeripheralConfig
+from tests.conftest import make_test_config
 
 CTRL = I2C.REG_CTRL
 STATUS = I2C.REG_STATUS
@@ -189,31 +190,22 @@ class TestI2CBus:
 class TestI2CConfig:
     """平台配置与 DTB 节点生成."""
 
-    @staticmethod
-    def _cfg() -> PlatformConfig:
-        return PlatformConfig(
-            num_harts=1,
-            ram_base=0x8000_0000,
-            prog_cnt=0x8000_0000,
-            periph=PeripheralConfig(i2c_base=I2C_BASE),
-        )
-
     def test_default_i2c_base_follows_build_config(self):
         assert PeripheralConfig().i2c_base == configs_gen.I2C_BASE
 
     def test_emulator_registers_device(self):
         """基址非零时 Emulator 创建 I2C 并挂到 Bus 上."""
-        emu = Emulator(self._cfg(), bootargs="console=ttySIF0")
+        emu = Emulator(make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0")
         assert emu.i2c is not None
         assert emu.bus.is_device_addr(I2C_BASE)
 
     def test_dtb_contains_i2c_node(self):
         """DTB 含 /soc/i2c@... 节点, compatible 与 reg 正确."""
-        emu = Emulator(self._cfg(), bootargs="console=ttySIF0")
-        fdt = libfdt.Fdt(emu.build_dtb())
+        emu = Emulator(make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0")
+        fdt = libfdt.Fdt(emu.build_default_dtb())
         node = fdt.path_offset(f"/soc/i2c@{I2C_BASE:x}")
         assert node >= 0
-        assert bytes(fdt.getprop(node, "compatible")) == b"pyremu,i2c0\x00"
+        assert bytes(fdt.getprop(node, "compatible")) == b"i2c0\x00"
         base_hi, base_lo, size_hi, size_lo = struct.unpack(
             ">IIII", bytes(fdt.getprop(node, "reg"))
         )
@@ -222,11 +214,11 @@ class TestI2CConfig:
 
     def test_zero_base_disables_device(self):
         """基址为 0 时不注册设备, DTB 中也没有对应节点."""
-        cfg = self._cfg()
+        cfg = make_test_config(i2c_base=I2C_BASE)
         cfg.periph.i2c_base = 0
         emu = Emulator(cfg, bootargs="console=ttySIF0")
         assert emu.i2c is None
         assert not emu.bus.is_device_addr(I2C_BASE)
-        fdt = libfdt.Fdt(emu.build_dtb())
+        fdt = libfdt.Fdt(emu.build_default_dtb())
         with pytest.raises(libfdt.FdtException):
             fdt.path_offset("/soc/i2c@0")

@@ -7,22 +7,11 @@
 
 import pytest
 
+from pyremu.emulator import Emulator
 from pyremu.memory.cache_base import CacheBase
 from pyremu.memory.l2cache import L2Cache, MESIState
-
-
-def _make_ram(size=64 * 1024):
-    """构造模拟物理 RAM."""
-    ram = bytearray(size)
-
-    def read_fn(addr, size):
-        return bytes(ram[addr : addr + size])
-
-    def write_fn(addr, data):
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
+from pyremu.platform import PlatformConfig
+from tests.conftest import make_test_ram
 
 
 class TestL2CacheBasic:
@@ -30,7 +19,7 @@ class TestL2CacheBasic:
 
     @pytest.fixture
     def l2(self) -> L2Cache:
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         # 预写 RAM 以便测试缓存未命中时的加载
         wf(0x1000, b"\x01\x02\x03\x04\x05\x06\x07\x08")
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
@@ -74,7 +63,7 @@ class TestL2CacheBasic:
     def test_writeback_on_eviction(self, l2):
         """逐出 M 状态行时回写 RAM."""
         # 使用很小的缓存 (1 set, 1 way) 促使逐出
-        tiny_ram, rf, wf = _make_ram()
+        tiny_ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         wf(0x2000, b"\x00" * 64)
         tiny_l2 = L2Cache(size=64, line_size=64, ways=1)
@@ -96,7 +85,7 @@ class TestMESIState:
 
     @pytest.fixture
     def l2(self) -> L2Cache:
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
@@ -141,7 +130,7 @@ class TestL2Properties:
 
     def test_entries_property(self):
         """entries 属性返回内部 L2CacheLine 列表."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
@@ -156,7 +145,7 @@ class TestL2BusInterface:
 
     def test_bus_read_is_alias_for_read(self):
         """bus_read 应与 read 返回相同数据."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x01\x02\x03\x04\x05\x06\x07\x08")
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
         l2.set_ram_backend(rf, wf)
@@ -164,7 +153,7 @@ class TestL2BusInterface:
 
     def test_bus_write_is_alias_for_write(self):
         """bus_write 应与 write 效果相同."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
         l2.set_ram_backend(rf, wf)
@@ -177,7 +166,7 @@ class TestL2Invalidate:
 
     @pytest.fixture
     def l2(self) -> L2Cache:
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         wf(0x2000, b"\x11" * 64)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
@@ -225,12 +214,12 @@ class TestL2HitRate:
     """L2 缓存命中率统计."""
 
     def test_hit_rate_initial_zero(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
         assert l2.hit_rate == 0.0
 
     def test_hit_rate_after_all_hits(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
         l2.set_ram_backend(rf, wf)
@@ -241,7 +230,7 @@ class TestL2HitRate:
         assert l2.hit_rate == 0.75, f"期望 3/4=0.75, 实际 {l2.hit_rate}"
 
     def test_hit_rate_all_misses(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=1)
         l2.set_ram_backend(rf, wf)
@@ -256,7 +245,7 @@ class TestL2Iter:
     """L2 缓存 __iter__ 迭代器."""
 
     def test_iter_yields_valid_entries(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         wf(0x2000, b"\x11" * 64)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
@@ -270,7 +259,7 @@ class TestL2Iter:
         assert l2._addr_fields(0x2000)[0] in tags
 
     def test_iter_empty_cache(self):
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         assert list(iter(l2)) == []
 
@@ -280,7 +269,7 @@ class TestL2SingleWay:
 
     def test_direct_mapped_every_access_evicts_previous(self):
         """ways=1: 同 set 的不同 tag 访问逐出前一条 (直接映射语义)."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\xaa" * 64)
         wf(0x1040, b"\xbb" * 64)
         l2 = L2Cache(size=64, line_size=64, ways=1)  # 1 set, 1 way
@@ -298,7 +287,7 @@ class TestL2FlushAll:
 
     @pytest.fixture
     def l2(self) -> L2Cache:
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x1000, b"\x00" * 64)
         wf(0x2000, b"\x11" * 64)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
@@ -404,7 +393,7 @@ class TestL2Degenerate:
 
     def test_zero_size_cache_is_usable(self):
         """l2_size=0 自动收敛为 1 组, 不崩溃且可正常透传读写."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         wf(0x100, b"\xde\xad\xbe\xef" * 4)
         l2 = L2Cache(size=0)
         l2.set_ram_backend(rf, wf)
@@ -416,8 +405,31 @@ class TestL2Degenerate:
 
     def test_zero_size_minimal_cache_does_not_crash(self):
         """size=0 退化为 1 组最小缓存, 总线读写不崩溃."""
-        ram, rf, wf = _make_ram()
+        ram, rf, wf = make_test_ram(64 * 1024)
         l2 = L2Cache(size=0)
         l2.set_ram_backend(rf, wf)
         assert l2.read(0x0, 4) is not None
         l2.write(0x0, b"\x00" * 4)
+
+
+# ============================================================
+#  L2 缓存尺寸为 0 时的退化情形
+# ============================================================
+
+
+class TestL2SizeZero:
+    """l2_size=0 退化场景: L2 内部收敛为最小可用缓存, 不崩溃."""
+
+    def test_l2_size_zero_emulator_runs(self):
+        """l2_size=0 的 Emulator 可正常执行指令, 不触发 IndexError."""
+        cfg = PlatformConfig.basic_machine()
+        cfg.num_harts = 1
+        cfg.l2_size = 0
+        cfg.ram_base = 0x80000000
+        emu = Emulator(config=cfg)
+        # 写入两条 nop 指令
+        emu.load_code(0x80000000, b"\x13\x00\x00\x00\x13\x00\x00\x00")
+        emu.step()
+        assert emu.harts[0].pc == 0x80000004
+        emu.step()
+        assert emu.harts[0].pc == 0x80000008

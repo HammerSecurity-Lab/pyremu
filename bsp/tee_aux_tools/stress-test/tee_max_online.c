@@ -36,7 +36,8 @@
 
 static uint8_t *read_file(
 	const char *path,
-	size_t *out_sz) {
+	size_t *out_sz
+) {
 	FILE *fp = fopen(path, "rb");
 	if (!fp) {
 		return NULL;
@@ -68,7 +69,8 @@ static uint8_t *read_file(
  * 令牌恒为 0. */
 static int do_shutdown(
 	int fd,
-	uint64_t enclave_id) {
+	uint64_t enclave_id
+) {
 	struct tee_enclave_token_args args = {
 		.enclave_id = enclave_id,
 		.token		= 0,
@@ -80,7 +82,8 @@ static int do_shutdown(
 
 int main(
 	int argc,
-	char **argv) {
+	char **argv
+) {
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s <stress_payload_path>\n", argv[0]);
 		return 1;
@@ -104,8 +107,8 @@ int main(
 	}
 	printf(
 		"[info] initial: free=%lu partitions (%lu MiB)\n\n",
-		(unsigned long)mem_init.free_total,
-		(unsigned long)(mem_init.free_total * 2));
+		(unsigned long)mem_init.free_total, (unsigned long)(mem_init.free_total * 2)
+	);
 
 	/* 加载 stress_payload */
 	size_t payload_sz = 0;
@@ -128,12 +131,9 @@ int main(
 		if (rc < 0) {
 			consecutive_failures++;
 			printf(
-				"[info] CREATE #%d failed: errno=%d (%s), consecutive=%d/%d\n",
-				count + 1,
-				errno,
-				strerror(errno),
-				consecutive_failures,
-				MAX_CONSECUTIVE_FAILURES);
+				"[info] CREATE #%d failed: errno=%d (%s), consecutive=%d/%d\n", count + 1,
+				errno, strerror(errno), consecutive_failures, MAX_CONSECUTIVE_FAILURES
+			);
 			continue;
 		}
 
@@ -149,12 +149,9 @@ int main(
 		if (rc < 0) {
 			consecutive_failures++;
 			printf(
-				"[error] ENTER #%d failed: errno=%d (%s), consecutive=%d/%d\n",
-				count + 1,
-				errno,
-				strerror(errno),
-				consecutive_failures,
-				MAX_CONSECUTIVE_FAILURES);
+				"[error] ENTER #%d failed: errno=%d (%s), consecutive=%d/%d\n", count + 1,
+				errno, strerror(errno), consecutive_failures, MAX_CONSECUTIVE_FAILURES
+			);
 			/* 回退: 关停该飞地 */
 			do_shutdown(fd, enclave_id);
 			continue;
@@ -173,9 +170,9 @@ int main(
 			struct tee_mem_info mem_now;
 			if (ioctl(fd, TEE_IOC_GET_MEM, &mem_now) == 0) {
 				printf(
-					"  online=%3d  remaining=%lu partitions\n",
-					count,
-					(unsigned long)mem_now.free_total);
+					"  online=%3d  remaining=%lu partitions\n", count,
+					(unsigned long)mem_now.free_total
+				);
 			}
 		}
 	}
@@ -188,15 +185,14 @@ int main(
 	printf("max online enclaves: %d\n", count);
 	printf(
 		"initial free: %lu partitions, final free: %lu partitions\n",
-		(unsigned long)mem_init.free_total,
-		(unsigned long)mem_end.free_total);
+		(unsigned long)mem_init.free_total, (unsigned long)mem_end.free_total
+	);
 	if (count > 0) {
 		uint64_t consumed = mem_init.free_total - mem_end.free_total;
 		printf(
 			"memory per enclave: %.2f MiB (%lu partitions / %d enclaves)\n",
-			(double)consumed * 2.0 / (double)count,
-			(unsigned long)consumed,
-			count);
+			(double)consumed * 2.0 / (double)count, (unsigned long)consumed, count
+		);
 	}
 
 	/* 清理: 关停所有在线飞地 */

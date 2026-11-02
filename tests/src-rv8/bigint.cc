@@ -197,14 +197,16 @@ struct Nat {
 	static void mult(
 		const Nat &multiplicand,
 		const Nat multiplier,
-		Nat &result);
+		Nat &result
+	);
 
 	/*! base 2^limb_bits division */
 	static void divrem(
 		const Nat &dividend,
 		const Nat &divisor,
 		Nat &quotient,
-		Nat &remainder);
+		Nat &remainder
+	);
 
 	/*! multiply */
 	Nat operator*(const Nat &operand) const;
@@ -238,7 +240,8 @@ struct Nat {
 	void from_string(
 		const char *str,
 		size_t len,
-		size_t radix);
+		size_t radix
+	);
 };
 
 using limb_t  = Nat::limb_t;
@@ -249,34 +252,35 @@ using limb2_t = Nat::limb2_t;
  */
 
 /*! default constructor */
-Nat::Nat()
-: limbs{0} {}
+Nat::Nat() :
+limbs{0} {}
 
 /*! integral constructor */
-Nat::Nat(const limb_t n)
-: limbs{n} {}
+Nat::Nat(const limb_t n) :
+limbs{n} {}
 
 /*! array constructor */
-Nat::Nat(const std::initializer_list<limb_t> l)
-: limbs(l) {
+Nat::Nat(const std::initializer_list<limb_t> l) :
+limbs(l) {
 	_contract();
 }
 
 /*! string constructor */
 Nat::Nat(
 	std::string str,
-	size_t radix)
-: limbs{0} {
+	size_t radix
+) :
+limbs{0} {
 	from_string(str.c_str(), str.size(), radix);
 }
 
 /*! copy constructor  */
-Nat::Nat(const Nat &operand)
-: limbs(operand.limbs) {}
+Nat::Nat(const Nat &operand) :
+limbs(operand.limbs) {}
 
 /*! move constructor  */
-Nat::Nat(const Nat &&operand) noexcept
-: limbs(std::move(operand.limbs)) {}
+Nat::Nat(const Nat &&operand) noexcept :
+limbs(std::move(operand.limbs)) {}
 
 /*
  * assignment operators
@@ -570,14 +574,16 @@ bool Nat::operator!() const {
 void Nat::mult(
 	const Nat &multiplicand,
 	const Nat multiplier,
-	Nat &result) {
+	Nat &result
+) {
 	size_t m = multiplicand.num_limbs(), n = multiplier.num_limbs();
 	result._resize(m + n);
 	for (size_t j = 0; j < n; j++) {
 		limb_t k = 0;
 		for (size_t i = 0; i < m; i++) {
-			limb2_t t = limb2_t(multiplicand.limbs[i]) * limb2_t(multiplier.limbs[j])
-						+ limb2_t(result.limbs[i + j]) + limb2_t(k);
+			limb2_t t = limb2_t(multiplicand.limbs[i]) * limb2_t(multiplier.limbs[j]) +
+						limb2_t(result.limbs[i + j]) +
+						limb2_t(k);
 			result.limbs[i + j] = limb_t(t);
 			k					= t >> limb_bits;
 		}
@@ -591,7 +597,8 @@ void Nat::divrem(
 	const Nat &dividend,
 	const Nat &divisor,
 	Nat &quotient,
-	Nat &remainder) {
+	Nat &remainder
+) {
 	quotient	= 0;
 	remainder	= 0;
 	ptrdiff_t m = dividend.num_limbs(), n = divisor.num_limbs();
@@ -761,7 +768,8 @@ Nat Nat::pow(size_t exp) const {
 static inline ptrdiff_t _to_string_c(
 	const Nat &val,
 	std::string &s,
-	ptrdiff_t offset) {
+	ptrdiff_t offset
+) {
 	limb2_t v = limb2_t(val.limb_at(0)) | (limb2_t(val.limb_at(1)) << Nat::limb_bits);
 	do {
 		s[--offset] = '0' + char(v % 10);
@@ -775,7 +783,8 @@ static ptrdiff_t _to_string_r(
 	size_t level,
 	std::string &s,
 	size_t digits,
-	ptrdiff_t offset) {
+	ptrdiff_t offset
+) {
 	Nat q, r;
 	Nat::divrem(val, sq[level], q, r);
 	if (level > 0) {
@@ -815,8 +824,8 @@ std::string Nat::to_string(size_t radix) const {
 		/* estimate string length */
 		std::string s;
 		size_t climit =
-			(size_t)(((long long)(num_limbs()) << (limb_shift + 30)) / (long long)dgib)
-			+ 1;
+			(size_t)(((long long)(num_limbs()) << (limb_shift + 30)) / (long long)dgib) +
+			1;
 		s.resize(climit, '0');
 
 		/* square the chunk size until ~= sqrt(n) */
@@ -880,7 +889,8 @@ std::string Nat::to_string(size_t radix) const {
 void Nat::from_string(
 	const char *str,
 	size_t len,
-	size_t radix) {
+	size_t radix
+) {
 	static const Nat tenp18{0xa7640000, 0xde0b6b3};
 	static const Nat twop64{0, 0, 1};
 	if (len > 2) {
@@ -949,7 +959,8 @@ void Nat::from_string(
 // bigint.cc
 int main(
 	int argc,
-	char const *argv[]) {
+	char const *argv[]
+) {
 	int val = 23, power = 111121;
 	Nat result = Nat(val).pow(power);
 	// 23 ^ 111121 has 151317 digits

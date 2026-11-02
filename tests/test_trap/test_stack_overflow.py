@@ -13,9 +13,6 @@ from pyremu.core.hart import (
     RiscvMode,
 )
 from pyremu.core.mem_check_aux import (
-    inject_memory_backend,
-    mem_read,
-    mem_write,
     MemoryAccessError,
 )
 from pyremu.emulator import Emulator
@@ -52,7 +49,8 @@ class TestStackOverflowMmode:
     def hart(self) -> Hart:
         h = Hart(id=0)
         bus = Bus(ram_size=self.RAM_SIZE, ram_base=self.RAM_BASE)
-        inject_memory_backend(h, bus.read, bus.write)
+        h.mem_read_phy = bus.read
+        h.mem_write_phy = bus.write
         h.bus = bus
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x80000000
@@ -79,16 +77,16 @@ class TestStackOverflowMmode:
     def test_stack_boundary_access(self, hart, addr, size, is_write, expected_cause):
         """Stack boundary access: covers overflow direction, op, and edge positions."""
         if not is_write and expected_cause == 0:
-            hart._mem_write_phy(addr, b"\x42" * size)
+            hart.mem_write_phy(addr, b"\x42" * size)
 
         if is_write:
             try:
-                mem_write(hart, addr, b"\x00" * size)
+                hart.mem_write( addr, b"\x00" * size)
             except MemoryAccessError:
                 pass
         else:
             try:
-                result = mem_read(hart, addr, size)
+                result = hart.mem_read( addr, size)
             except MemoryAccessError:
                 result = None
             if expected_cause == 0:
@@ -121,7 +119,7 @@ class TestStackOverflowSmode:
     GUARD_VA = _SO_SMODE_GUARD_VA  # 0x1000
     STACK_PA = _SO_SMODE_STACK_PA  # 0x5000
 
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def ram_ctx(self):
         """2 MiB bytearray as physical memory."""
         ram = bytearray(2 * 1024 * 1024)
@@ -133,13 +131,15 @@ class TestStackOverflowSmode:
             for i, b in enumerate(data):
                 ram[addr + i] = b
 
-        return ram, read_fn, write_fn
+        self.ram_ctx = (ram, read_fn, write_fn)
+        return self.ram_ctx
 
     @pytest.fixture
-    def hart(self, ram_ctx):
-        _ram, read_fn, write_fn = ram_ctx
+    def hart(self) -> Hart:
+        _ram, read_fn, write_fn = self.ram_ctx
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy = read_fn
+        h.mem_write_phy = write_fn
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x1000
         return h
@@ -207,10 +207,10 @@ class TestStackOverflowSmode:
         (_SO_SMODE_STACK_VA + 0xFFF, 1, True,   0),  # byte at page end
     ])
     # fmt: on
-    def test_guard_page_access(self, hart, ram_ctx, case):
+    def test_guard_page_access(self, hart, case):
         """Sv39 guard page: parametrized over access direction/boundary/cross-page."""
         va, size, is_write, expected_cause = case
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._prep_smode(hart, ram)
 
         # pre-fill physical data for read tests
@@ -224,12 +224,12 @@ class TestStackOverflowSmode:
 
         if is_write:
             try:
-                mem_write(hart, va, b"\x00" * size)
+                hart.mem_write( va, b"\x00" * size)
             except MemoryAccessError:
                 pass
         else:
             try:
-                mem_read(hart, va, size)
+                hart.mem_read( va, size)
             except MemoryAccessError:
                 pass
 
@@ -243,15 +243,15 @@ class TestStackOverflowSmode:
                 f"PageFault should enter M-mode, actual={hart.mode.name}"
             )
 
-    def test_mmode_bare_no_page_fault(self, hart, ram_ctx):
+    def test_mmode_bare_no_page_fault(self, hart):
         """M-mode Bare: guard VA treated as PA, no PageFault."""
-        ram, _read_fn, _write_fn = ram_ctx
+        ram, _read_fn, _write_fn = self.ram_ctx
         self._setup_sv39_stack_only(ram)
         # no Sv39 -> Bare; M-mode MPRV=0 bypasses PMP
         hart.mode = RiscvMode.M
 
         ram[self.GUARD_VA : self.GUARD_VA + 4] = b"\xAB\xCD\xEF\x01"
-        data = mem_read(hart, self.GUARD_VA, 4)
+        data = hart.mem_read( self.GUARD_VA, 4)
         assert data == b"\xAB\xCD\xEF\x01"
         assert hart.mcause_val == 0
 
@@ -272,7 +272,7 @@ class TestStackOverflowUmode:
         fw = parse_firmware(self.ELF_PATH)
         if fw is None:
             pytest.skip(f"{self.ELF_PATH} not found or failed to parse")
-        emu = Emulator(PlatformConfig.qemu_virt())
+        emu = Emulator(PlatformConfig.basic_machine())
         emu.load_firmware(fw)
         assert emu.uart is not None
         return emu, fw

@@ -654,7 +654,7 @@ pub fn set_tid_address(addr: u64) -> u64 {
 ///   - 本飞地内已无任何可运行线程, 且表中没有尚未到期的截止时刻: 循环交还宿主。
 ///
 /// 定时等待不在此处登记截止时刻: 截止时刻由 [timer] 设施持有,
-/// 唤醒来源是定时器中断而非等待地址。
+/// 唤醒来源是截止时刻的判定而非等待地址。
 pub fn block_current(wait_addr: u64) {
 	let cur = SCHED.current();
 	THREADS.with(cur, |ctl| {
@@ -667,7 +667,7 @@ pub fn block_current(wait_addr: u64) {
 		if !is_blocked(cur) {
 			return;
 		}
-		if let Some(next) = next_runnable(cur) {
+		if let Some(next) = pick_switch_target(cur) {
 			SCHED.set_pending_target(next);
 			return;
 		}
@@ -679,7 +679,7 @@ pub fn block_current(wait_addr: u64) {
 		}
 		// 表中仍有尚未到期的截止时刻时不得交还宿主: 交还宿主时飞地的 stimecmp
 		// 随上下文保存, 该时刻到期不再触发定时器中断, 发起等待的系统调用因此
-		// 没有唤醒来源。此时留在本 hart 上, 由定时器中断结束等待。
+		// 没有唤醒来源。此时留在本 hart 上, 由下一轮循环的到期判定结束等待。
 		if timer::next_deadline().is_none() {
 			// 属空闲让出, 不参与时间片轮转: 本飞地已无运行空间且无尚未到期的
 			// 截止时刻, 交还宿主等待网卡事件。
@@ -705,6 +705,24 @@ fn make_runnable(thread_id: usize) {
 		ctl.state = ThreadState::Runnable;
 		ctl.wait_addr = 0;
 	});
+}
+
+/// 选取 *after* 之后的下一个可切换线程, 返回其槽下标; 没有可切换线程时返回 None。
+///
+/// 先按槽位顺序取可运行线程。取不到时把截止时刻不晚于当前时刻的等待定时器逐个
+/// 记为已到期并唤醒其所属线程, 再取一次。定时器中断处理函数以 [timer::elapse_due]
+/// 完成同一判定, 而陷态处理期间 sstatus.SIE 为 0, 该中断不会进入本 hart,
+/// 其余线程的截止时刻只能在此处判定。
+fn pick_switch_target(after: usize) -> Option<usize> {
+	if let Some(next) = next_runnable(after) {
+		return Some(next);
+	}
+	let now = csr::read_time();
+	let mut is_woken = false;
+	while let Some(waiter) = timer::elapse_due(now) {
+		is_woken |= wake_thread(waiter);
+	}
+	if is_woken { next_runnable(after) } else { None }
 }
 
 /// 把线程 *thread_id* 由阻塞改为就绪并清除其等待地址, 返回是否确有该线程处于阻塞。
@@ -901,5 +919,10 @@ pub mod tests {
 	/// 判断线程 *thread_id* 当前是否处于阻塞状态。
 	pub fn is_blocked(thread_id: usize) -> bool {
 		super::is_blocked(thread_id)
+	}
+
+	/// 选取 *after* 之后的下一个可切换线程, 与 [block_current] 的循环体使用同一判定。
+	pub fn pick_switch_target(after: usize) -> Option<usize> {
+		super::pick_switch_target(after)
 	}
 }

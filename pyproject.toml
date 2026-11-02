@@ -1,7 +1,7 @@
 [project]
 name = "pyremu"
 # 神了，怎么每次都是breaking change？
-version = "4.0.0"
+version = "0.5.0"
 description = "a riscv emulator"
 readme = "docs/README.md"
 requires-python = ">=3.14.15"
@@ -22,7 +22,6 @@ dependencies = [
     "packaging==26.3",
     "pluggy==1.6.0",
     "prompt-toolkit==3.0.53",
-    "pydevicetree==0.0.13",
     "pyfdt==0.3",
     "pygments==2.21.0",
     "pylibfdt==1.7.2.post2",

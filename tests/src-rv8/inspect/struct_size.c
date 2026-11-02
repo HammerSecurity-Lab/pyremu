@@ -24,7 +24,8 @@ typedef RecordType *RecordPtr;
 
 int main(
 	int argc,
-	char *argv[]) {
+	char *argv[]
+) {
 	printf("%zu\n", sizeof(RecordPtr) * 2);
 	return 0;
 }

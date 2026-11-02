@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 import unicodedata
 
+from pyremu.configs_aux import cfg_str
 from pyremu.core import trap_def
 from pyremu.core.hart import RiscvMode
-from pyremu.core.mem_check_aux import translate_addr
 from pyremu.debug.exception import UsageError
 from pyremu.utils.disassem import Opc
 from pyremu.utils.mask import mask64
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 MAX_INSTR_COUNT = 100_000  # 指令条数上限
 _TRI_SPLIT = ["", "K", "M", "B", "T", "P", "E"]
 
-_SIZE_UNITS: tuple[tuple[str, int], ...] = (
+SIZE_UNITS: tuple[tuple[str, int], ...] = (
     ("EB", 1 << 60),
     ("PB", 1 << 50),
     ("TB", 1 << 40),
@@ -39,6 +39,58 @@ _SIZE_UNITS: tuple[tuple[str, int], ...] = (
     ("KB", 1 << 10),
     ("B", 1),
 )
+
+# ============================================================
+#  异常/中断名称表
+# ============================================================
+
+EXC_NAMES: dict[int, str] = {
+    0: "InstrAddrMisaligned",
+    1: "InstrAccessFault",
+    2: "IllInstr",
+    3: "Breakpoint",
+    4: "LdAddrMisaligned",
+    5: "LdAccessFault",
+    6: "StAddrMisaligned",
+    7: "StAccessFault",
+    8: "Ecall from U",
+    9: "Ecall from S",
+    11: "Ecall from M",
+    12: "InstrPageFault",
+    13: "LdPageFault",
+    15: "StPageFault",
+}
+
+IRQ_NAMES: dict[int, str] = {
+    1: "SSIP (S 模式软件中断)",
+    3: "MSIP (M 模式软件中断)",
+    5: "STIP (S 模式定时器中断)",
+    7: "MTIP (M 模式定时器中断)",
+    9: "SEIP (S 模式外部中断)",
+    11: "MEIP (M 模式外部中断)",
+}
+
+# ============================================================
+#  断点常量
+# ============================================================
+
+INSTR_BP_NAMES: dict[str, int] = {
+    "ecall": 0x000,
+    "ebreak": 0x001,
+    "mret": 0x302,
+    "sret": 0x102,
+    "wfi": 0x105,
+}
+
+KNOWN_OPCODES: frozenset[int] = frozenset(o.value for o in Opc)
+# ============================================================
+#  历史文件
+# ============================================================
+MAX_ADDR = (1 << 64) - 1
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+# 未配置路径时使用的文件名, 位于用户主目录下.
+HISTORY_FILE_NAME = ".pyremu_history"
 
 
 def hex_addr(v: int, styled: bool = True) -> str:
@@ -54,14 +106,27 @@ def hex_addr(v: int, styled: bool = True) -> str:
 
 def fmt_size(n: int) -> str:
     """human-readable 尺寸, 超出最大单位时落到最远单位."""
-    for name, threshold in _SIZE_UNITS:
+    for name, threshold in SIZE_UNITS:
         if n >= threshold:
             return f"{n / threshold:.3f} {name}"
     return f"{n} B"
 
 
-MAX_ADDR = (1 << 64) - 1
-_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+def parse_size(text: str) -> int:
+    """解析带单位的大小, 返回字节数.
+
+    单位取 SIZE_UNITS 的写法或其中单个字母, 单位后的 B 可省略; 无单位时按字节计,
+    如 ``128M`` 与 ``128MB`` 都表示 128 MiB.
+
+    Raises:
+        ValueError: 内容不是整数与单位的组合.
+    """
+    s = text.upper().rstrip("B")
+    for name, mul in SIZE_UNITS:
+        # 多字母单位写作字母加 B, 去掉 B 后按该字母匹配.
+        if len(name) > 1 and s.endswith(name[0]):
+            return int(s[:-1]) * mul
+    return int(s)
 
 
 def parse_hex_addr(text: str) -> int:
@@ -109,10 +174,11 @@ def fmt_display_name(text: str) -> str:
 
 
 def fmt_instr_count(n: int) -> str:
+    nn = float(n)
     for idx, val in enumerate(_TRI_SPLIT):
-        if n < 1000:
-            return f"{n:.3f}{val}"
-        n /= 1000
+        if nn < 1000:
+            return f"{nn:.3f}{val}"
+        nn /= 1000.0
     return f"{n:.3f}?"
 
 
@@ -126,18 +192,32 @@ def trap_cause_name(mcause_val: int) -> str:
 # ============================================================
 
 
+def read_pa_bytes(
+    bus: Bus,
+    pa: int,
+    size: int,
+) -> bytes | None:
+    """从物理地址读取内存, 只读取主存与已注册设备的地址范围.
+
+    Returns:
+        读到的字节; 地址不是整数, 超出 64 位范围或落在未定义的物理空间时返回 None.
+    """
+    if not isinstance(pa, int) or pa < 0 or pa > MAX_ADDR:
+        return None
+    if not bus.is_valid_addr(pa):
+        return None
+    return bus.try_read(pa, size)
+
+
 def read_va_bytes(
     bus: Bus,
     hart: HartWithRegs,
     va: int,
     size: int,
-    *,
-    is_execute: bool = False,
 ) -> bytes | None:
-    """按指定的访问类型从虚拟地址读取内存, 跨越页边界时逐页翻译.
+    """从虚拟地址读取内存, 跨越页边界时逐页翻译.
 
-    取指语义只判定页面的可执行位; 数据读语义还要求 R=1, 只在 mstatus.MXR
-    置位时才由 X=1 顶替. 两者都不施加 PMP 与 PMA 判定.
+    翻译是调试器查询, 只做地址换算, 不判定页权限位.
 
     Returns:
         读到的字节; 翻译失败或读取失败时返回 None.
@@ -145,44 +225,23 @@ def read_va_bytes(
     if size <= 0 or size > 4096:
         return None
     if hart.mmu_mode == 0 or hart.mode == RiscvMode.M:
-        return bus.try_read(va, size)
+        return read_pa_bytes(bus, va, size)
     result = bytearray()
     remain = size
     cur = va
     while remain > 0:
         page_off = cur & 0xFFF
         chunk = min(remain, 0x1000 - page_off)
-        ok, pa = translate_addr(hart, cur, is_execute=is_execute, is_hart_access=False)
+        ok, pa = hart.translate_addr(cur, is_hart_access=False)
         if not ok:
             return None
-        data = bus.try_read(pa, chunk)
+        data = read_pa_bytes(bus, pa, chunk)
         if data is None:
             return None
         result.extend(data)
         remain -= chunk
         cur += chunk
     return bytes(result)
-
-
-def read_code_bytes(
-    bus: Bus,
-    hart: HartWithRegs,
-    va: int,
-    size: int,
-) -> bytes | None:
-    """按取指语义读取指令字节, 取指语义被拒时退回数据读语义.
-
-    取指只判定页面的可执行位, 数据读语义还要求 R=1. 只可执行的页面须用取指
-    语义读出; 取指语义被拒时退回数据读语义, 使 S 模式仍能读出 U 模式页面上
-    的指令字节.
-
-    Returns:
-        读到的字节; 两种语义都读不到时返回 None.
-    """
-    data = read_va_bytes(bus, hart, va, size, is_execute=True)
-    if data is not None:
-        return data
-    return read_va_bytes(bus, hart, va, size, is_execute=False)
 
 
 # ============================================================
@@ -215,60 +274,21 @@ def ip_bits() -> list[tuple[str, int, str]]:
     ]
 
 
-# ============================================================
-#  异常/中断名称表
-# ============================================================
+def history_file_path() -> Path:
+    """命令历史文件的路径.
 
-EXC_NAMES: dict[int, str] = {
-    0: "InstrAddrMisaligned",
-    1: "InstrAccessFault",
-    2: "IllInstr",
-    3: "Breakpoint",
-    4: "LdAddrMisaligned",
-    5: "LdAccessFault",
-    6: "StAddrMisaligned",
-    7: "StAccessFault",
-    8: "Ecall from U",
-    9: "Ecall from S",
-    11: "Ecall from M",
-    12: "InstrPageFault",
-    13: "LdPageFault",
-    15: "StPageFault",
-}
-
-IRQ_NAMES: dict[int, str] = {
-    1: "SSIP (S 模式软件中断)",
-    3: "MSIP (M 模式软件中断)",
-    5: "STIP (S 模式定时器中断)",
-    7: "MTIP (M 模式定时器中断)",
-    9: "SEIP (S 模式外部中断)",
-    11: "MEIP (M 模式外部中断)",
-}
-
-# ============================================================
-#  断点常量
-# ============================================================
-
-INSTR_BP_NAMES: dict[str, int] = {
-    "ecall": 0x000,
-    "ebreak": 0x001,
-    "mret": 0x302,
-    "sret": 0x102,
-    "wfi": 0x105,
-}
-
-KNOWN_OPCODES: frozenset[int] = frozenset(o.value for o in Opc)
-
-RAM_MUL: dict[str, int] = {"K": 1024, "M": 1024**2, "G": 1024**3}
-
-# ============================================================
-#  历史文件修剪
-# ============================================================
+    取环境变量 PYREMU_HISTORY_FILE 或 configs_gen 中的同名配置; 两者都没有时取用户
+    主目录下的 HISTORY_FILE_NAME.
+    """
+    configured = cfg_str("PYREMU_HISTORY_FILE")
+    if len(configured) > 0:
+        return Path(configured).expanduser()
+    return Path.home() / HISTORY_FILE_NAME
 
 
 def trim_history(max_entries: int = 10000) -> None:
     """若历史文件超过 *max_entries* 行, 仅保留最近一半."""
-    hist_path = Path.home() / ".pyremu_history"
+    hist_path = history_file_path()
     if not hist_path.is_file():
         return
     try:
@@ -279,11 +299,6 @@ def trim_history(max_entries: int = 10000) -> None:
         hist_path.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
     except OSError:
         pass  # 文件被锁或权限不足时静默跳过
-
-
-# ============================================================
-#  补全排序
-# ============================================================
 
 
 def group_order(key: str) -> tuple[int, str]:

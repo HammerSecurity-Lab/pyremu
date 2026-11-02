@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from pyremu.core.mem_check_aux import translate_addr
 from pyremu.debug.exception import DeployError, ElfFormatError
 from pyremu.debug.sym import elf_idx, model
 from pyremu.utils.mask import mask64
@@ -273,13 +272,11 @@ def _resolve_bases(
     span = sample.cover_end - sample.cover_start
     offset = sample.anchor - sample.cover_start
     bus = dbg._emu.bus
-    ram_lo = bus.ram_base
-    ram_hi = ram_lo + bus.ram_size
 
     if space == model.SPACE_PA:
         pa_base = mask64(base)
-        if not _is_window_contained(pa_base, span, ram_lo, ram_hi):
-            raise DeployError(_window_text(pa_base, span, ram_lo, ram_hi))
+        if not bus.is_storage_range(pa_base, span):
+            raise DeployError(_storage_text(bus, pa_base, span))
         return pa_base, None, mask64(pa_base + offset)
 
     if space == model.SPACE_VA:
@@ -288,10 +285,8 @@ def _resolve_bases(
         pa_last = _translate(dbg, mask64(va_base + span - 1))
         if pa_first is None or pa_last is None:
             raise DeployError(f"虚拟地址区间 [0x{va_base:x}, 0x{va_base + span:x}) 无法翻译")
-        if not (
-            _is_in_window(pa_first, ram_lo, ram_hi) and _is_in_window(pa_last, ram_lo, ram_hi)
-        ):
-            raise DeployError(_window_text(pa_first, pa_last - pa_first + 1, ram_lo, ram_hi))
+        if not (bus.is_storage_range(pa_first, 1) and bus.is_storage_range(pa_last, 1)):
+            raise DeployError(_storage_text(bus, pa_first, pa_last - pa_first + 1))
         pa_sample = _translate(dbg, mask64(va_base + offset))
         if pa_sample is None:
             raise DeployError(f"校验样本的虚拟地址 0x{va_base + offset:x} 无法翻译")
@@ -302,34 +297,28 @@ def _resolve_bases(
     if pa_sample is None:
         raise DeployError(f"校验样本的虚拟地址 0x{va_base + offset:x} 无法翻译")
     pa_base = mask64(pa_sample - offset)
-    if not _is_window_contained(pa_base, span, ram_lo, ram_hi):
-        raise DeployError(_window_text(pa_base, span, ram_lo, ram_hi))
+    if not bus.is_storage_range(pa_base, span):
+        raise DeployError(_storage_text(bus, pa_base, span))
     return pa_base, va_base, pa_sample
 
 
 def _translate(dbg, va: int) -> int | None:
-    ok, pa = translate_addr(dbg.hart, va, is_hart_access=False)
+    ok, pa = dbg.hart.translate_addr(va, is_hart_access=False)
     return mask64(pa) if ok else None
 
 
-def _is_in_window(addr: int, ram_lo: int, ram_hi: int) -> bool:
-    return ram_lo <= addr < ram_hi
-
-
-def _is_window_contained(base: int, size: int, ram_lo: int, ram_hi: int) -> bool:
-    return ram_lo <= base and base + size <= ram_hi
-
-
-def _window_text(base: int, size: int, ram_lo: int, ram_hi: int) -> str:
-    return (
-        f"部署区间 [0x{base:x}, 0x{base + size:x}) 超出 RAM 窗口 [0x{ram_lo:x}, 0x{ram_hi:x})"
+def _storage_text(bus, base: int, size: int) -> str:
+    """给出部署区间的错误说明, 列出该总线上的全部存储区间."""
+    spans = ", ".join(
+        f"{name} [0x{lo:x}, 0x{lo + extent:x})" for name, lo, extent in bus.storage_intervals
     )
+    return f"部署区间 [0x{base:x}, 0x{base + size:x}) 不在任何存储区间内: {spans}"
 
 
 def _compare_sample(dbg, sample: _Sample) -> tuple[bool, int]:
     """比较内存与文件中的样本, 返回 (是否一致, 首个不一致字节的偏移)."""
     bus = dbg._emu.bus
-    if not bus.is_ram_addr(sample.runtime_pa):
+    if not bus.is_valid_addr(sample.runtime_pa):
         return False, 0
     data = bus.try_read(sample.runtime_pa, len(sample.data))
     if data == sample.data:

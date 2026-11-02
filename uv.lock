@@ -1412,18 +1412,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pydevicetree"
-version = "0.0.13"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-dependencies = [
-    { name = "pyparsing" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/92/20/342f3a463a20b4103fc9e7d0f0eb3534c638ac75d54326a6c19473879070/pydevicetree-0.0.13.tar.gz", hash = "sha256:5700c05df89bad8fd729c11aa6f764a3323bcb3796f13b32481ae34445cfc1b7" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/9e/37/b74a7a0e75eac002799b2e88b9023d79cd47a5e54b0f6854eecc19eba5b9/pydevicetree-0.0.13-py3-none-any.whl", hash = "sha256:d61c695cec925b90a8b5740053f4b604e51154a9b36e62a2f12ed9ceaf2f8c38" },
-]
-
-[[package]]
 name = "pyfdt"
 version = "0.3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -1464,7 +1452,7 @@ wheels = [
 
 [[package]]
 name = "pyremu"
-version = "4.0.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "annotated-types" },
@@ -1529,7 +1517,6 @@ dependencies = [
     { name = "pure-eval" },
     { name = "pycparser" },
     { name = "pycryptodome" },
-    { name = "pydevicetree" },
     { name = "pyfdt" },
     { name = "pygments" },
     { name = "pylibfdt" },
@@ -1627,7 +1614,6 @@ requires-dist = [
     { name = "pure-eval", specifier = "==0.2.4" },
     { name = "pycparser", specifier = "==3.12" },
     { name = "pycryptodome", specifier = "==4.1.0" },
-    { name = "pydevicetree", specifier = "==0.0.13" },
     { name = "pyfdt", specifier = "==0.3" },
     { name = "pygments", specifier = "==2.21.0" },
     { name = "pylibfdt", specifier = "==1.7.2.post2" },

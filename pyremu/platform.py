@@ -37,6 +37,10 @@ from typing import Any
 import yaml
 
 from pyremu import configs_gen
+from pyremu.peripheral.uart import UART_IRQ
+from pyremu.peripheral.virtio_blk import VIRTIO_BLK_IRQ
+from pyremu.peripheral.virtio_net import VIRTIO_NET_M_IRQ, VIRTIO_NET_S_IRQ
+from pyremu.peripheral.watchdog import WATCHDOG_IRQ
 
 
 class InterruptMode(Enum):
@@ -48,24 +52,30 @@ class InterruptMode(Enum):
 
 @dataclass
 class PeripheralConfig:
-    """外设 MMIO 基址 (0 = 禁用). 默认值由 mk/ 下的配置分片生成并注入 configs_gen."""
+    """外设 MMIO 基址. 默认值由 mk/ 下的配置生成为 configs_gen."""
 
     uart_base: int = configs_gen.UART_BASE
+    uart_irq: int = UART_IRQ  # 串口的中断源编号
     spi_base: int = configs_gen.SPI_BASE
     i2c_base: int = configs_gen.I2C_BASE
     gpio_base: int = configs_gen.GPIO_BASE
     clint_base: int = configs_gen.CLINT_BASE
     plic_base: int = configs_gen.PLIC_BASE
-    virtio_blk_base: int = configs_gen.VIRTIO_BLK_BASE  # 0 = 禁用
+    virtio_blk_base: int = configs_gen.VIRTIO_BLK_BASE
+    virtio_blk_irq: int = VIRTIO_BLK_IRQ  # 块设备的中断源编号
     virtio_net_s_base: int = configs_gen.VIRTIO_NET_S_BASE  # 宿主侧网卡, 中断由 S 模式接受
+    virtio_net_s_irq: int = VIRTIO_NET_S_IRQ  # 宿主侧网卡的中断源编号
     virtio_net_m_base: int = configs_gen.VIRTIO_NET_M_BASE  # 飞地侧网卡, 中断由 M 模式接受
+    virtio_net_m_irq: int = VIRTIO_NET_M_IRQ  # 飞地侧网卡的中断源编号
     watchdog_base: int = configs_gen.WATCHDOG_BASE
-    crng_base: int = configs_gen.CRNG_BASE  # 模拟随机数生成器，0 = 禁用
-    # AIA 设备的基址由 mk/interrupt.mk 给出; legacy 模式不注册这些设备.
+    watchdog_irq: int = WATCHDOG_IRQ  # 看门狗的中断源编号
+    crng_base: int = configs_gen.CRNG_BASE
     imsic_m_base: int = configs_gen.IMSIC_M_BASE
     imsic_s_base: int = configs_gen.IMSIC_S_BASE
     aplic_s_base: int = configs_gen.APLIC_S_BASE
     aplic_m_base: int = configs_gen.APLIC_M_BASE
+    boot_addr_base: int = configs_gen.BOOT_REGS_ADDR
+    boot_addr_size: int = configs_gen.BOOT_REGS_SIZE
 
 
 @dataclass
@@ -132,12 +142,26 @@ class PlatformConfig:
         # 引导只读存储器与 RAM 的窗口不允许重叠: 同一物理地址只能有一条访问路径.
         if self.rom_base:
             assert self.rom_size > 0, f"rom_size={self.rom_size} 须大于 0"
-            rom_end = self.rom_base + self.rom_size
-            ram_end = self.ram_base + self.ram_size
-            assert rom_end <= self.ram_base or self.rom_base >= ram_end, (
-                f"引导只读存储器 [0x{self.rom_base:x}, 0x{rom_end:x}) "
-                f"与 RAM 窗口 [0x{self.ram_base:x}, 0x{ram_end:x}) 重叠"
+        self._check_overlap()
+
+    def _check_overlap(self) -> None:
+        """断言 RAM、引导只读存储器与启动地址寄存器的地址窗口两两不重叠.
+
+        外设窗口由 Bus.add_device 在注册时与全部已注册窗口一并校验.
+        """
+        windows = [("RAM", self.ram_base, self.ram_size)]
+        if self.rom_base:
+            windows.append(("引导只读存储器", self.rom_base, self.rom_size))
+        if self.periph.boot_addr_base:
+            windows.append(
+                ("启动地址寄存器", self.periph.boot_addr_base, self.periph.boot_addr_size)
             )
+        for index, (name_a, base_a, size_a) in enumerate(windows):
+            for name_b, base_b, size_b in windows[index + 1 :]:
+                assert base_a + size_a <= base_b or base_a >= base_b + size_b, (
+                    f"{name_a} [0x{base_a:x}, 0x{base_a + size_a:x}) 与 "
+                    f"{name_b} [0x{base_b:x}, 0x{base_b + size_b:x}) 重叠"
+                )
 
     @classmethod
     def from_dict(
@@ -209,15 +233,15 @@ class PlatformConfig:
         )
 
     @classmethod
-    def qemu_virt(cls) -> PlatformConfig:
-        """QEMU RISC-V virt 风格布局; 各字段取 mk/ 下配置分片给出的平台默认值."""
+    def basic_machine(cls) -> PlatformConfig:
         return cls()
 
     @classmethod
     def minimal(cls) -> PlatformConfig:
         """最小化单核平台 — 仅 CLINT + UART.
 
-        内存从 0x0000_0000 起始. 适用于裸金属测试和 CI.
+        RAM 自 0x0000_0000 起始并覆盖 0x0200_0000 处的 CLINT 窗口, 装配模拟器时
+        被地址窗口重叠断言拒绝.
         """
         return cls(
             num_harts=1,
@@ -234,15 +258,7 @@ class PlatformConfig:
         )
 
     @classmethod
-    def qemu_virt_aia(cls) -> PlatformConfig:
-        """QEMU virt AIA 平台 — 使用 IMSIC+APLIC 替代 PLIC.
-
-        IMSIC 与 APLIC 的基址由 mk/interrupt.mk 给出, 默认取 AIA 标准布局:
-        IMSIC M 文件 0x2400_0000, S 文件 0x2800_0000, 每 hart stride 0x1000;
-        APLIC S 域 0x0C00_0000 (复用 PLIC 地址空间), M 域 0x0C00_8000
-        (S 域实例的 MMIO 覆盖为 0x6000).
-        定时器仍由 CLINT mtimecmp 提供.
-        """
-        cfg = cls.qemu_virt()
+    def basic_aia_machine(cls) -> PlatformConfig:
+        cfg = cls.basic_machine()
         cfg.interrupt_mode = InterruptMode.AIA
         return cfg

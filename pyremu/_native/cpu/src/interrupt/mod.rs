@@ -127,15 +127,19 @@ pub(crate) fn compute_stopi(state: &mut HartState, mtime: u64) -> (u64, u8) {
 	}
 	// 3. STIP 对应 IID=5, 即 IRQ_S_TIMER.
 	//
-	// 1. stip_deadline 非 0 时按本 hart 的指令计数判定， 其他 hart
-	//    推进共享 mtime 越过刚写入的 stimecmp 后, mip.STIP 重新置位.
-	// 2. stip_deadline 为 0 时按共享 mtime 比较.
+	// 1. stimecmp 为 0 表示本 hart 未使用 sstc 定时器, 例如设备树未声明 sstc 时固件
+	//    以 mtimecmp 承担 S 模式定时器并经 ``csrw mip`` 置位 mip.STIP, 挂起状态取该位.
+	// 2. stimecmp 不为 0 时挂起状态只取定时器比较结果: stip_deadline 非 0 时按本 hart
+	//    的指令计数判定, 其他 hart 推进共享 mtime 越过刚写入的 stimecmp 后 mip.STIP
+	//    重新置位; stip_deadline 为 0 时按共享 mtime 比较.
 	// 3. 陷态处理函数清除 mip.STIP, 并在 stimecmp 不晚于当前 mtime 时把它上调为
 	//    当前 mtime 加 4, 因此再次读取 STOPI 得到 0.
-	let sti_pending = if state.stip_deadline != 0 {
+	let sti_pending = if state.stimecmp == 0 {
+		(state.mip.load(Ordering::Acquire) & (1 << 5)) != 0
+	} else if state.stip_deadline != 0 {
 		state.total_instrs >= state.stip_deadline
 	} else {
-		state.stimecmp > 0 && mtime >= state.stimecmp
+		mtime >= state.stimecmp
 	};
 	if (state.mie & (1 << 5)) != 0 && sti_pending {
 		let val = 5u64 << 16 | 1;

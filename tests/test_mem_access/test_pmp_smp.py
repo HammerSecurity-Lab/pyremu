@@ -32,7 +32,7 @@ import pytest
 from pyremu._native import FfiPmpCtx, native_available, PmpInfo
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
-from pyremu.platform import PeripheralConfig, PlatformConfig
+from tests.conftest import make_test_emu
 
 pytestmark = pytest.mark.skipif(
     not native_available(), reason="native 加速库不可用, 跳过 native 并发 PMP 测试"
@@ -61,19 +61,6 @@ def _run_wfi_firmware(emu: Emulator) -> None:
         timer.cancel()
 
 
-def _make_emu(num_harts: int) -> Emulator:
-    cfg = PlatformConfig(
-        num_harts=num_harts,
-        ram_size=8 * 1024 * 1024,
-        ram_base=RAM_BASE,
-        prog_cnt=RAM_BASE,
-        pmp_entries=16,
-        periph=PeripheralConfig(),
-    )
-    emu = Emulator(cfg)
-    return emu
-
-
 def _set_pmpaddr(hart, idx: int, val: int) -> None:
     hart.csrs[f"pmpaddr{idx}"].val = val
     hart._pmp.invalidate_cache()
@@ -81,7 +68,7 @@ def _set_pmpaddr(hart, idx: int, val: int) -> None:
 
 def test_per_hart_pmp_roundtrip_not_mirrored():
     """各 hart 的 PMP 经 native 批次后保持独立, 不被镜像成同一值."""
-    emu = _make_emu(2)
+    emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024, pmp_entries=16)
     # 两个 hart 执行 WFI (不触碰 PMP), 仅验证 PMP 往返隔离。
     emu.load_code(RAM_BASE, struct.pack("<I", WFI))
     for h in emu.harts:
@@ -100,7 +87,7 @@ def test_per_hart_pmp_roundtrip_not_mirrored():
 
 def test_per_hart_pmp_concurrent_write_isolated():
     """一个 hart 在批次内写 pmpaddr 不影响其它 hart."""
-    emu = _make_emu(2)
+    emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024, pmp_entries=16)
     prog = struct.pack("<II", CSRW_PMPADDR1_X5, WFI)
     emu.load_code(RAM_BASE, prog)
     for h in emu.harts:
@@ -118,7 +105,7 @@ def test_per_hart_pmp_concurrent_write_isolated():
 
 def test_four_hart_pmp_all_distinct():
     """4 hart 各持不同 PMP, 经 native 批次后互不干扰."""
-    emu = _make_emu(4)
+    emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024, pmp_entries=16)
     emu.load_code(RAM_BASE, struct.pack("<I", WFI))
     vals = [0x1000, 0x2000, 0x3000, 0x4000]
     for i, h in enumerate(emu.harts):

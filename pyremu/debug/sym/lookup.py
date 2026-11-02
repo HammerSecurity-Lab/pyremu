@@ -5,9 +5,8 @@
 
 """SymLookupOps — 符号解析、内核符号加载、符号模块查找与段查找.
 
-load_kernel_symbols 与 _resolve_sym_addr 与 translate_addr 定义在同一模块:
-既有测试替换本模块的 parse_firmware 与 translate_addr, 只有同一模块内的
-调用会用到替换后的名字.
+load_kernel_symbols 与 parse_firmware 定义在同一模块, 调用经模块全局名字解析;
+地址翻译调用 hart 的方法.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from pathlib import Path
 
 from pyremu import configs_gen
 from pyremu.core.hart import RiscvMode
-from pyremu.core.mem_check_aux import translate_addr
 from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.sym import model, registry
@@ -197,7 +195,7 @@ class SymLookupOps(SharedAttrs):
         hart = self.hart
         if hart.mmu_mode == 0:
             return mask64((va_like + self._sym_load_offset))
-        ok, pa = translate_addr(hart, va_like, is_hart_access=False)
+        ok, pa = hart.translate_addr(va_like, is_hart_access=False)
         return pa if ok else va_like
 
     def _sym_lookup_name(self, addr: int) -> str | None:
@@ -218,7 +216,7 @@ class SymLookupOps(SharedAttrs):
         """在已加载的符号模块中查找 *runtime_addr* 的符号名.
 
         先按原值在模块的物理区间与虚拟区间中查找. 未命中而当前特权级不是 M 时,
-        把 *runtime_addr* 当作虚拟地址经页表翻译为物理地址, 再按物理地址查找一次.
+        把 *runtime_addr* 当作虚拟地址翻译为物理地址, 再按物理地址查找一次.
         只在 pa: 部署的模块没有虚拟区间, S 模式与 U 模式的虚拟地址只能经这次查找命中.
         """
         mods = registry.lookup_modules(self)
@@ -228,10 +226,10 @@ class SymLookupOps(SharedAttrs):
         hart = self.hart
         if hart.mmu_mode == 0 or hart.mode == RiscvMode.M:
             return None
-        ok, pa = translate_addr(hart, runtime_addr, is_hart_access=False)
+        ok, pa = hart.translate_addr(runtime_addr, is_hart_access=False)
         if not ok:
             return None
-        hit = model.select_module(mods, pa)
+        hit = model.select_module(mods, mask64(pa))
         return hit[2] if hit is not None else None
 
     def _module_runtime_addr_of_name(self, name: str) -> int | None:

@@ -3,21 +3,17 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import RiscvMode
+from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
     AccessFaultError,
-    inject_memory_backend,
-    mem_read,
-    mem_write,
     MemoryAccessError,
 )
 from pyremu.core.trap_def import trap_cause_code, TrapType
-from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.memory.l2cache import L2CacheLine
 from pyremu.memory.pmp import Pmp, PmpAccessInfo
 from pyremu.memory.tlb import TLB, TLBLine
-from pyremu.platform import PlatformConfig
+from tests.conftest import make_test_emu
 
 # ============================================================
 #  mdid / pmpsplit CSR 寄存器
@@ -29,32 +25,24 @@ L3_BASE = 0x3000
 DATA_PA = 0x100000
 
 
-def _make_emu(ram_size: int = 8 * 1024 * 1024, num_harts: int = 1):
-    """创建小内存 Emulator — 控制 4 GiB ulimit 内存压力."""
-    cfg = PlatformConfig.qemu_virt()
-    cfg.ram_size = ram_size
-    cfg.num_harts = num_harts
-    return Emulator(cfg)
-
-
 class TestMdidCSR:
     """mdid (0x5C0) 和 pmpsplit (0x5C1) CSR 基本属性."""
 
     def test_mdid_exists_and_defaults_to_zero(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         assert "mdid" in h.csrs, "mdid CSR 应存在"
         assert h.csrs["mdid"].val == 0, "mdid 默认值应为 0"
 
     def test_pmpsplit_exists_and_defaults_to_zero(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         assert "pmpsplit" in h.csrs, "pmpsplit CSR 应存在"
         assert h.csrs["pmpsplit"].val == 0, "pmpsplit 默认值应为 0"
 
     def test_mdid_mmode_rw(self):
         """M 模式可读写 mdid."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         assert h.mode == RiscvMode.M
         # 写
@@ -66,7 +54,7 @@ class TestMdidCSR:
 
     def test_mdid_write_read_roundtrip(self):
         """mdid 写入任意 64 位值的往返测试."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         for val in (1, 0xDEADBEEF, 0xFFFF_FFFF_FFFF_FFFF, 0x12345678_9ABCDEF0):
             h.write_csr(0x5C0, val)
@@ -74,7 +62,7 @@ class TestMdidCSR:
 
     def test_mdid_property(self):
         """HartWithRegs.mdid_val property 快捷访问."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         h.mdid_val = 0xC0FFEE
         assert h.mdid_val == 0xC0FFEE
@@ -82,7 +70,7 @@ class TestMdidCSR:
 
     def test_umode_access_mdid_traps(self):
         """U 模式访问 mdid (M-mode only) 应触发 IllInstr."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         # 切换到 U 模式
         h.mode = RiscvMode.U
@@ -110,7 +98,7 @@ class TestMfenceDid:
 
     def test_exec_does_not_trap(self):
         """mfence.did 是合法指令, 不应触发陷态."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         h.pc = 0x80000000
         trap_before = h.mcause_val
@@ -119,7 +107,7 @@ class TestMfenceDid:
 
     def test_invalid_funct12_traps(self):
         """funct12 非法编码应触发 IllInstr (funct3=000, 未注册的 funct12)."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         h.pc = 0x80000000
         # funct12=0xFF0 (未实现), funct3=0, rd=rs1=0
@@ -132,7 +120,7 @@ class TestMfenceDid:
     # -- TLB 刷新的隔离性 --
 
     def test_flushes_only_matching_mdid(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         # 插入 3 条: mdid=0, mdid=1, mdid=2
@@ -156,7 +144,7 @@ class TestMfenceDid:
         assert hit2, "mdid=2 不应被刷掉"
 
     def test_flushes_itlb_and_dtlb_both(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         h.itlb.insert(vpn=0x100, ppn=0x10, perm=5, mdid=1)
@@ -171,7 +159,7 @@ class TestMfenceDid:
 
     def test_nonzero_mdid_flushes_nothing_when_no_match(self):
         """mdid=3 但没有任何条目带此标记, 则刷新为空操作."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         h.dtlb.insert(vpn=0x1000, ppn=0xAAA, perm=7, mdid=1)
@@ -187,7 +175,7 @@ class TestMfenceDid:
 
     def test_flushes_l2_cache_matching_mdid(self):
         """mfence.did 同时刷新 L2 缓存中匹配 mdid 的条目."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         # 通过 bus 写入数据, 触发 L2 缓存分配
         addr_a = 0x80001000
@@ -220,7 +208,7 @@ class TestMfenceDid:
 
     def test_broadcasts_to_all_harts(self):
         """hart 0 执行 mfence.did, 全部 hart 的 TLB 均被刷新."""
-        emu = _make_emu(num_harts=4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         for h in emu.harts:
             h.dtlb.insert(vpn=0x42, ppn=0x42, perm=7, mdid=1)
 
@@ -235,7 +223,7 @@ class TestMfenceDid:
 
     def test_broadcast_only_flushes_matching_harts(self):
         """不同 hart 的 TLB 带有不同 mdid, 仅匹配的被刷."""
-        emu = _make_emu(num_harts=2)
+        emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024)
         h0, h1 = emu.harts
 
         # hart 0: mdid=1, hart 1: mdid=2
@@ -297,7 +285,7 @@ class TestTLBAutoMdid:
             ram[addr : addr + len(data)] = data
 
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy, h.mem_write_phy = read_fn, write_fn
         h.bus = None  # 无 Bus, 绕过 PMA 检查
 
         # 标记此飞地为 mdid=7
@@ -337,7 +325,7 @@ class TestTLBAutoMdid:
 
         # 触发地址翻译, TLB 插入
         try:
-            mem_read(h, 0x0, 4)
+            h.mem_read(0x0, 4)
         except MemoryAccessError:
             pass  # PMP/Access 拒绝时 TLB 不插入, 测试下面断言自然失败
 
@@ -389,7 +377,8 @@ class TestBareModeMdid:
             ram[addr : addr + len(data)] = data
 
         h = Hart(id=0)
-        inject_memory_backend(h, read_fn, write_fn)
+        h.mem_read_phy = read_fn
+        h.mem_write_phy = write_fn
         h.mdid_val = 3
         h.bus = None  # 绕过 PMA 检查
 
@@ -397,12 +386,12 @@ class TestBareModeMdid:
         assert h.mmu_mode == 0
 
         # 访问内存 — 不应插入 TLB
-        mem_read(h, 0x1000, 4)
+        h.mem_read(0x1000, 4)
         assert len(h.dtlb) == 0, "Bare 模式不应自动填充 TLB"
 
     def test_manual_tlb_entries_still_flushed(self):
         """Bare 模式下手动插入的 TLB 条目 (通过 mfence.did) 仍可被刷新."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         # Bare 模式, 手动插入
@@ -466,7 +455,7 @@ class TestL2AutoMdid:
 
     def test_l2_read_hit_updates_mdid(self):
         """读命中时 L2 缓存条目 mdid 更新为当前 hart 的 mdid."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         l2 = emu.bus._l2
         assert l2 is not None
         addr = 0x80001000
@@ -493,7 +482,7 @@ class TestL2AutoMdid:
         设备 DMA 不经过 CPU 缓存, 只有 CPU 访存才填充缓存行.
         因此用 8-byte store 测试 L2 缓存 mdid 行为.
         """
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         l2 = emu.bus._l2
         assert l2 is not None
         addr = 0x80001000
@@ -517,7 +506,7 @@ class TestL2AutoMdid:
 
     def test_l2_auto_tag_then_selective_flush(self):
         """不同 mdid 的 hart 访问不同地址, 则 mfence.did 仅刷匹配的."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         l2 = emu.bus._l2
         assert l2 is not None
@@ -552,7 +541,7 @@ class TestL2AutoMdid:
 
     def test_emulator_step_sets_current_mdid(self):
         """emulator.step() 自动将 hart.mdid 同步到 L2 缓存的 current_mdid."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         l2 = emu.bus._l2
 
@@ -588,12 +577,12 @@ class TestPmpsplitCSR:
     """pmpsplit (0x5C1) CSR 基本属性."""
 
     def test_pmpsplit_defaults_to_zero(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         assert h.pmpsplit_val == 0, "pmpsplit 默认值应为 0"
 
     def test_pmpsplit_write_read_roundtrip(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         for val in (0, 8, 16, 32, 63, 0xFFFF_FFFF_FFFF_FFFF):
             h.write_csr(0x5C1, val)
@@ -601,14 +590,14 @@ class TestPmpsplitCSR:
             assert h.pmpsplit_val == val, "cached pmpsplit_val 应同步"
 
     def test_pmpsplit_property_sync(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         h.pmpsplit_val = 32
         assert h.csrs["pmpsplit"].val == 32
         assert h._pmpsplit_val == 32
 
     def test_umode_access_pmpsplit_traps(self):
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
         h.mode = RiscvMode.U
         instr = (0x5C1 << 20) | (5 << 15) | (0b001 << 12) | (6 << 7) | 0x73
@@ -723,7 +712,7 @@ class TestMultiEnclaveMdid:
 
     def test_three_enclaves_tlb_isolation(self):
         """3 个飞地各插入 TLB 条目, mfence.did 仅刷匹配的."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         # 飞地 A (mdid=1): vpn=0x100
@@ -753,7 +742,7 @@ class TestMultiEnclaveMdid:
 
     def test_multi_enclave_l2_isolation(self):
         """4 个伪飞地访问不同地址, 各自 L2 缓存条目标不同 mdid, 按域刷新互不干扰."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         l2 = emu.bus._l2
         assert l2 is not None
 
@@ -798,7 +787,7 @@ class TestMultiEnclaveMdid:
 
     def test_mdid_zero_host_entries_isolated_from_enclave(self):
         """host (mdid=0) 的 TLB 条目不受飞地 mfence.did 影响."""
-        emu = _make_emu()
+        emu = make_test_emu(ram_size=8 * 1024 * 1024)
         h = emu.harts[0]
 
         h.dtlb.insert(vpn=0x100, ppn=0xA00, perm=7, mdid=0)  # host
@@ -889,7 +878,7 @@ class TestPmpsplitMdidIntegration:
 
     def test_emulator_multi_hart_different_mdid(self):
         """多 hart 各自运行不同飞地, mdid + pmpsplit 独立配置."""
-        emu = _make_emu(num_harts=4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         hart_configs = [
             (0, 1, 8),  # hart 0: mdid=1, pmpsplit=8
             (1, 2, 8),  # hart 1: mdid=2, pmpsplit=8
@@ -909,9 +898,10 @@ class TestPmpsplitMdidIntegration:
 
     def test_pmpsplit_pmp_fault_on_enclave_access_host_region(self):
         """通过 hart 执行 store 触发 trap, 验证 pmpsplit 阻止飞地访问 host 内存."""
-        hart = Hart(id=0, pmp_entries=8)
+        hart = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=8))
         bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
-        inject_memory_backend(hart, bus.read, bus.write)
+        hart.mem_read_phy = bus.read
+        hart.mem_write_phy = bus.write
         hart.bus = bus
         hart.csrs["mtvec"].val = 0x80000000
         hart.pc = 0x1000
@@ -935,12 +925,12 @@ class TestPmpsplitMdidIntegration:
         hart.mode = RiscvMode.S
 
         # 飞地写入自己的区域, 即条目 4 覆盖的区间
-        mem_write(hart, 0x8000_2000, b"\xaa\xbb")
+        hart.mem_write(0x8000_2000, b"\xaa\xbb")
         assert hart.mcause_val == 0, f"飞地写自己的区域应成功: mcause={hart.mcause_val}"
 
         # 飞地写 host 区域, 落入 StAccessFault
         try:
-            mem_write(hart, 0x8000_1000, b"\xcc\xdd")
+            hart.mem_write(0x8000_1000, b"\xcc\xdd")
         except AccessFaultError:
             pass
         assert hart.mcause_val == 7, (

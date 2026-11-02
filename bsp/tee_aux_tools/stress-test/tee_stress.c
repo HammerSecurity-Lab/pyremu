@@ -45,7 +45,8 @@ static void die(const char *msg) {
 
 static uint8_t *read_file(
 	const char *path,
-	size_t *size) {
+	size_t *size
+) {
 	FILE *fp = fopen(path, "rb");
 	if (!fp) {
 		return NULL;
@@ -146,18 +147,15 @@ static void run_batch(int count) {
 
 	for (int i = 0; i < count; i++) {
 		int rc = pthread_create(
-			&threads[i],
-			NULL,
+			&threads[i], NULL,
 			worker, // 流程： create -> enter -> shutdown
-			NULL);
+			NULL
+		);
 		if (rc != 0) {
 			fprintf(
-				stderr,
-				"  [%d] pthread_create failed at %d/%d (errno=%d)\n",
-				count,
-				i + 1,
-				count,
-				rc);
+				stderr, "  [%d] pthread_create failed at %d/%d (errno=%d)\n", count,
+				i + 1, count, rc
+			);
 			/* 继续等待已创建的线程 */
 		}
 	}
@@ -185,7 +183,8 @@ static void run_batch(int count) {
 
 int main(
 	int argc,
-	char **argv) {
+	char **argv
+) {
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s <stress_payload_path>\n", argv[0]);
 		return 1;
@@ -205,8 +204,8 @@ int main(
 		puts("=== TEE Enclave Concurrent Stress Test ===\n");
 		printf(
 			"[info] initial memory: free=%lu max_contiguous=%lu (2MiB units)\n\n",
-			mem.free_total,
-			mem.max_contiguous);
+			mem.free_total, mem.max_contiguous
+		);
 	}
 	close(info_fd);
 

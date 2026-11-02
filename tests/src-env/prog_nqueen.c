@@ -21,32 +21,38 @@ static unsigned int row_mask, col_mask, xl_mask, xr_mask;
 // ---- 位掩码辅助 ----
 static int check_pos(
 	int pos,
-	unsigned int v) {
+	unsigned int v
+) {
 	return (v >> pos) & 1;
 }
 static void set_pos(
 	int pos,
-	unsigned int *v) {
+	unsigned int *v
+) {
 	*v |= (1u << pos);
 }
 static void unset_pos(
 	int pos,
-	unsigned int *v) {
+	unsigned int *v
+) {
 	*v &= ~(1u << pos);
 }
 
 // ---- DFS (与原版 n-queen.cc 一致) ----
 static void dfs(
 	int pos,
-	int num) {
+	int num
+) {
 	if (num >= n) {
 		solutions++;
 		return;
 	}
 	for (int curr = pos; curr < n * n; curr++) {
 		int i = curr / n, j = curr % n;
-		if (check_pos(i, row_mask) || check_pos(j, col_mask) || check_pos(i + j, xl_mask)
-			|| check_pos(i - j + n, xr_mask)) {
+		if (check_pos(i, row_mask) ||
+			check_pos(j, col_mask) ||
+			check_pos(i + j, xl_mask) ||
+			check_pos(i - j + n, xr_mask)) {
 			continue;
 		}
 		set_pos(i, &row_mask);

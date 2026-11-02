@@ -6,20 +6,20 @@ from unittest import mock
 
 import pytest
 
+from pyremu import configs_gen
 from pyremu.configs_aux import examed_elf_dir
-from pyremu.emulator import Emulator
-from pyremu.platform import PlatformConfig
 from pyremu.utils.parse_bin import parse_firmware
+from tests.conftest import make_test_emu
 from tests.loader import MultiProgramLoader
 
 
-def _make_emu(*procs: str):
+def _make_kernel_emu(*procs: str):
     if not examed_elf_dir("kernel.elf").exists():
         pytest.skip("KERNEL_ELF 不存在")
 
     kernel = parse_firmware(str(examed_elf_dir("kernel.elf")))
     assert kernel is not None, "KERNEL_ELF 解析失败"
-    emu = Emulator(PlatformConfig.qemu_virt())
+    emu = make_test_emu(num_harts=configs_gen.NUM_HARTS, ram_size=configs_gen.RAM_SIZE)
     emu.load_firmware(kernel)
     # 内核在全部进程终止后执行停机序列, 随后转入 stop_machine_idle 的 WFI 自旋.
     # 内联服务打开时引擎在停机序列处停止; 关闭时该序列按普通断点投递后进入自旋.
@@ -35,14 +35,14 @@ class TestPreemptInterleave:
     """A+B 交替输出: 验证抢占下进程轮流执行."""
 
     def test_interleaved(self):
-        _, loader = _make_emu("u_prog_a_entry", "u_prog_b_entry")
+        _, loader = _make_kernel_emu("u_prog_a_entry", "u_prog_b_entry")
         out = loader.run()
         seq = "".join(c for c in out if c in "AB")
         transitions = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
         assert transitions > 1, f"未交错, transitions={transitions}"
 
     def test_both_produce_output(self):
-        _, loader = _make_emu("u_prog_a_entry", "u_prog_b_entry")
+        _, loader = _make_kernel_emu("u_prog_a_entry", "u_prog_b_entry")
         out = loader.run()
         assert out.count("A") >= 50, f"A count too low: {out.count('A')}"
         assert out.count("B") >= 50, f"B count too low: {out.count('B')}"
@@ -51,15 +51,15 @@ class TestPreemptInterleave:
 class TestPreemptPurePython:
     """回归: 关闭 native 加速后, 纯 Python 路径下抢占交错仍成立.
 
-    ``_make_emu`` 构造 Emulator 时调用 ``_init_for_speedup_lib``, 后者调用公开的
-    ``native_available()`` 判断加速执行是否可用, 该函数在 emulator.py 构造期读取
-    全局标志. patch ``native_available()`` 返回 False, 使 ``_speedup_hart_states``
-    保持 None, 故 ``run()`` 走纯 Python ``step()`` 路径 — 无需触及私有库加载状态.
+    ``_make_kernel_emu`` 构造 Emulator 时调用 ``_init_for_speedup_lib``, 后者调用公开的
+    ``native_available()`` 判断加速执行是否可用, 该函数在装配阶段读取全局标志.
+    patch ``native_available()`` 返回 False, 使 ``_speedup_hart_states`` 保持
+    None, 故 ``run()`` 走纯 Python ``step()`` 路径 — 无需触及私有库加载状态.
     """
 
     def test_interleaved_pure_python(self):
-        with mock.patch("pyremu.emulator.native_available", return_value=False):
-            emu, loader = _make_emu("u_prog_a_entry", "u_prog_b_entry")
+        with mock.patch("pyremu.emu.setup.native_available", return_value=False):
+            emu, loader = _make_kernel_emu("u_prog_a_entry", "u_prog_b_entry")
             assert emu._speedup_hart_states is None, "应走纯 Python 路径"
             out = loader.run()
         seq = "".join(c for c in out if c in "AB")
@@ -73,19 +73,19 @@ class TestPreemptCorrectness:
     @pytest.mark.parametrize("n,expected", [(2, 1), (5, 5), (7, 13)])
     def test_fib_alone(self, n, expected):
         """fib 单独运行 (无其他进程抢占)."""
-        _, loader = _make_emu("u_fib_entry")
+        _, loader = _make_kernel_emu("u_fib_entry")
         out = loader.run(uart_input=f"{n}\n".encode())
         assert f"fib({n})={expected}" in out
 
     def test_nqueen_alone(self):
         """nqueen 单独运行."""
-        _, loader = _make_emu("u_nqueen_entry")
+        _, loader = _make_kernel_emu("u_nqueen_entry")
         out = loader.run()
         for n, v in [(1, 1), (2, 0), (3, 0), (4, 2)]:
             assert f"nq({n})={v}" in out, f"nq({n})={v} 未找到"
 
     def test_fib_nqueen_together(self):
         """fib + nqueen 同时运行 — 基本正确性."""
-        _, loader = _make_emu("u_nqueen_entry", "u_fib_entry")
+        _, loader = _make_kernel_emu("u_nqueen_entry", "u_fib_entry")
         out = loader.run(uart_input=b"7\n")
         assert "fib(7)=13" in out and "exit: code=0" in out

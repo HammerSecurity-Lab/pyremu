@@ -18,7 +18,6 @@ from __future__ import annotations
 import pytest
 
 from pyremu import configs_gen
-from pyremu.emulator import Emulator
 from pyremu.interrupt.plic import (
     PLIC_CONTEXT_BASE,
     PLIC_CONTEXT_STRIDE,
@@ -26,7 +25,7 @@ from pyremu.interrupt.plic import (
     PLIC_ENABLE_STRIDE,
     PLIC_PRIORITY_STRIDE,
 )
-from pyremu.platform import PeripheralConfig, PlatformConfig
+from tests.conftest import make_test_emu
 
 
 @pytest.fixture(autouse=True)
@@ -38,17 +37,6 @@ def _disable_aia_compile_override(monkeypatch):
 _SRC = 1  # 中断源号 (对齐 virtio-blk)
 SEIP = 1 << 9
 MEIP = 1 << 11
-
-
-def _make_emu(num_harts: int = 1) -> Emulator:
-    cfg = PlatformConfig(
-        num_harts=num_harts,
-        ram_size=8 * 1024 * 1024,
-        ram_base=0x8000_0000,
-        prog_cnt=0x8000_0000,
-        periph=PeripheralConfig(),
-    )
-    return Emulator(cfg)
 
 
 def _plic_program(plic, context: int, source: int) -> None:
@@ -64,7 +52,7 @@ def _plic_program(plic, context: int, source: int) -> None:
 
 def test_native_sync_sets_seip_from_s_context():
     """源在 hart0 的 S-context ctx1 使能且挂起时, 同步后 mip 含 SEIP."""
-    emu = _make_emu(1)
+    emu = make_test_emu(num_harts=1, ram_size=8 * 1024 * 1024)
     _plic_program(emu.plic, context=1, source=_SRC)  # ctx1 = hart0 S
     assert emu.plic
     emu.plic.set_irq(_SRC, True)
@@ -77,7 +65,7 @@ def test_native_sync_sets_seip_from_s_context():
 
 def test_native_sync_sets_meip_from_m_context():
     """源在 hart0 的 M-context ctx0 使能时, 同步后 mip 含 MEIP."""
-    emu = _make_emu(1)
+    emu = make_test_emu(num_harts=1, ram_size=8 * 1024 * 1024)
     _plic_program(emu.plic, context=0, source=_SRC)  # ctx0 = hart0 M
     assert emu.plic
     emu.plic.set_irq(_SRC, True)
@@ -89,7 +77,7 @@ def test_native_sync_sets_meip_from_m_context():
 
 def test_native_sync_clears_when_not_pending():
     """PLIC 撤除挂起后, 同步应清掉 mip 的 SEIP (不残留)."""
-    emu = _make_emu(1)
+    emu = make_test_emu(num_harts=1, ram_size=8 * 1024 * 1024)
     _plic_program(emu.plic, context=1, source=_SRC)
     assert emu.plic
     emu.plic.set_irq(_SRC, True)
@@ -103,7 +91,7 @@ def test_native_sync_clears_when_not_pending():
 
 def test_native_sync_per_hart_isolated():
     """多 hart: 源仅在 hart1 S-context 使能时, 只有 hart1 得 SEIP."""
-    emu = _make_emu(2)
+    emu = make_test_emu(num_harts=2, ram_size=8 * 1024 * 1024)
     # hart1 的 S-context = 2*1+1 = 3
     _plic_program(emu.plic, context=3, source=_SRC)
     assert emu.plic
@@ -116,7 +104,7 @@ def test_native_sync_per_hart_isolated():
 
 def test_native_sync_preserves_software_mip_bits():
     """同步只替换 MEIP/SEIP, 不动软件/CLINT 位 (如 MSIP bit3)."""
-    emu = _make_emu(1)
+    emu = make_test_emu(num_harts=1, ram_size=8 * 1024 * 1024)
     emu.harts[0].mip_val = 1 << 3  # 预置 MSIP
     emu._native_sync_plic_mip()  # PLIC 无挂起
     assert emu.harts[0].mip_val & (1 << 3) == (1 << 3)  # MSIP 保留

@@ -20,11 +20,16 @@ MASK08: int = (MASK04 << 4) | MASK04
 MASK12: int = (MASK08 << 4) | MASK04
 MASK16: int = (MASK12 << 4) | MASK04
 MASK32: int = (MASK16 << 16) | MASK16
+MASK48: int = (MASK32 << 16) | MASK16
 MASK64: int = (MASK32 << 32) | MASK32
 
 
 def mask64(val: int) -> int:
     return val & MASK64
+
+
+def mask48(val: int) -> int:
+    return val & MASK48
 
 
 def mask32(val: int) -> int:
@@ -50,6 +55,33 @@ def mask04(val: int) -> int:
 def is_power_of_two_in(value: int, minimum: int, maximum: int) -> bool:
     """判定 *value* 是 2 的幂且落在 [minimum, maximum] 内."""
     return minimum <= value <= maximum and (value & (value - 1)) == 0
+
+
+# ---------------------------------------------------------------
+#  64 位寄存器的字节窗口 — 按小端字节序读出与写入
+# ---------------------------------------------------------------
+
+
+def read_u64_bytes(val: int, byte_off: int, size: int) -> bytes:
+    """从 64 位寄存器的第 byte_off 个字节起取出 size 个字节.
+
+    取值先经 mask64 截断; 越过寄存器末尾的部分读为 0.
+    """
+    raw = mask64(val).to_bytes(8, "little", signed=False)
+    chunk = raw[byte_off : byte_off + size]
+    return chunk + b"\x00" * (size - len(chunk))
+
+
+def write_u64_bytes(cur: int, byte_off: int, data: bytes) -> int | None:
+    """把 data 自 64 位寄存器的第 byte_off 个字节起写入, 返回合并后的值.
+
+    写入越过寄存器末尾时返回 None, 调用方据此丢弃该次写入.
+    """
+    if byte_off + len(data) > 8:
+        return None
+    raw = bytearray(mask64(cur).to_bytes(8, "little", signed=False))
+    raw[byte_off : byte_off + len(data)] = data
+    return int.from_bytes(raw, "little", signed=False)
 
 
 # ---------------------------------------------------------------
@@ -123,3 +155,13 @@ def sext16(val: int) -> int:
 def sext32(val: int) -> int:
     """Sign-extend from 32 bits -> canonical 64-bit unsigned."""
     return mask64((val & 0x7FFF_FFFF) - (val & 0x8000_0000))
+
+
+def sint64(val: int) -> int:
+    """把 64 位无符号值按二进制补码解释为有符号整数, 取值范围 [-2^63, 2^63).
+
+    有符号比较、算术右移与有符号乘法的取高位都要先取得该解释, 与 ``mask64``
+    互为反向操作。
+    """
+    v = val & MASK64
+    return v - (1 << 64) if v >> 63 else v

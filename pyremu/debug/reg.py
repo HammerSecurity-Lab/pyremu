@@ -132,13 +132,16 @@ class RegisterOps(SharedAttrs):
 
         lines: list[str] = []
         for n in wanted:
-            csr = h.csrs[n]
-            line = f" [cyan]{n:<{max_w}}[/] = [green]{hex_addr(csr.val)}[/] (dec: {csr.val})"
+            # 按名称读取: sie 与 sip 是 mie 与 mip 的视图, sstatus 是 mstatus 的
+            # 视图, time 与 timeh 取 CLINT 的当前计数值, 直接取 csrs[n].val 得到
+            # 的只是这些 CSR 对象自身的存储值.
+            val = h.read_csr_by_name(n)
+            line = f" [cyan]{n:<{max_w}}[/] = [green]{hex_addr(val)}[/] (dec: {val})"
             if n in ("mstatus", "mstatush"):
                 line += f"  [dim]模式 [bold]{h.mode.name}[/][/]"
             elif n in ("mcause", "scause"):
-                if csr.val != 0:
-                    line += f"  [dim]{trap_cause_name(csr.val)}[/]"
+                if val != 0:
+                    line += f"  [dim]{trap_cause_name(val)}[/]"
                 else:
                     line += "  [dim](无)[/]"
             lines.append(line)

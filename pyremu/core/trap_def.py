@@ -7,9 +7,15 @@
 
 """
 RISC-V 特权架构定义的 trap 类型及对应的 mcause/scause 编码。
+
+另收录中断优先级、硬件中断源占用的 mip 位与 semihosting 序列常数。
 """
 
 from enum import Enum
+import os
+
+from pyremu.core.priv_defs import RiscvMode
+from pyremu.interrupt.controller import INT_SOURCE_MIP_MASK, IntSource
 
 TrapType = Enum(
     "TrapType",
@@ -113,6 +119,67 @@ def trap_is_interrupt(trap: TrapType) -> bool:
     """判断该 TrapType 是否为中断 (而非异常)."""
     code = _TRAP_CAUSE_CODE.get(trap, 0)
     return (code >> 63) & 1 == 1
+
+
+# ============================================================
+#  中断优先级与硬件中断源的 mip 位
+# ============================================================
+
+# 中断优先级列表, 按优先级从高到低排列.
+# 预计算为模块级常量, 避免每条指令分配 list 与 6 个 tuple.
+INT_PRIORITY: list[tuple[int, TrapType]] = [
+    (1 << 11, TrapType.MmodeExternInterrupt),  # MEI
+    (1 << 3, TrapType.MmodeSoftInterrupt),  # MSI
+    (1 << 7, TrapType.MmodeTimerInterrupt),  # MTI
+    (1 << 9, TrapType.SmodeExternInterrupt),  # SEI
+    (1 << 1, TrapType.SmodeSoftInterrupt),  # SSI
+    (1 << 5, TrapType.SmodeTimerInterrupt),  # STI
+]
+
+# 硬件源管理的 mip 位掩码 (只读位, 反映外部中断信号).
+# 这些位在中断检查中必须用硬件当前状态替换, 不能与旧值按位或累加,
+# 否则硬件源撤除后旧位仍留在 mip CSR 中, 引起无限重投递.
+HW_MIP_MASK: int = (
+    INT_SOURCE_MIP_MASK[IntSource.MSI]  # bit 3 — CLINT _msip[hart_id]
+    | INT_SOURCE_MIP_MASK[IntSource.MTI]  # bit 7 — CLINT _mtimecmp
+    | INT_SOURCE_MIP_MASK[IntSource.STI]  # bit 5 — sstc stimecmp 或软件写入
+    | INT_SOURCE_MIP_MASK[IntSource.MEI]  # bit 11 — PLIC
+    | INT_SOURCE_MIP_MASK[IntSource.SEI]  # bit 9 — PLIC
+)
+
+# S 模式编码, 供中断检查比较特权级数值时免去枚举成员取值.
+MODE_S_VALUE: int = RiscvMode.S.value
+
+
+# ============================================================
+#  RISC-V semihosting 序列
+# ============================================================
+# 调用序列为 ``slli x0,x0,0x1f; ebreak; srai x0,x0,7``, a0 存放操作码, a1 存放
+# 参数块指针; marker 指令编码与加速执行引擎 handlers.rs 的 SEMIHOSTING_PRE/POST 一致.
+# 带 marker 的 ebreak 内联服务 SYS_WRITE / SYS_WRITEC / SYS_OPEN / SYS_ISTTY,
+# SYS_EXIT 置停机标记供 run() 返回; 两者都不投递断点 trap.
+
+SEMIHOSTING_SYS_OPEN: int = 0x01
+SEMIHOSTING_SYS_WRITEC: int = 0x03
+SEMIHOSTING_SYS_WRITE: int = 0x05
+SEMIHOSTING_SYS_ISTTY: int = 0x09
+SEMIHOSTING_SYS_EXIT: int = 0x18
+SEMIHOSTING_PRE: int = 0x01F01013  # slli x0, x0, 0x1f
+SEMIHOSTING_POST: int = 0x40705013  # srai x0, x0, 7
+# 加速执行引擎的 semihosting_dispatch 对不可识别的操作码与非法参数一律返回 -1.
+SEMIHOSTING_ERR: int = 0xFFFF_FFFF_FFFF_FFFF  # -1 的 64 位表示
+
+
+def semihosting_write_stderr(data: bytes) -> None:
+    """把 semihosting 输出写到 stderr (fd 2), 与加速执行引擎的处理一致.
+
+    写到 stderr 可避免污染 stdout 上的调试器界面与 UART 转发行; os.write 绕过
+    Python 的 stdio 缓冲, 与 Rust 侧 write(2, ...) 等价.
+    """
+    try:
+        os.write(2, data)
+    except OSError, ValueError:
+        pass
 
 
 # mcause/scause 编码到 TrapType 名称的逆向映射

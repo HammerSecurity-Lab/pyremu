@@ -4,18 +4,12 @@ Verifies that data written through the Python L2 cache path is correctly
 visible to the Rust native batch engine, and vice versa.
 """
 
-from pyremu.emulator import Emulator
-from pyremu.platform import PlatformConfig
-
-
-def _make_emu(ram_size_mb: int = 32):
-    cfg = PlatformConfig(num_harts=1, ram_size=ram_size_mb * 1024 * 1024)
-    return Emulator(cfg)
+from tests.conftest import make_test_emu
 
 
 def test_python_write_visible_to_native_read():
     """Data written via bus.write() (L2 path) must be readable by native batch."""
-    emu = _make_emu()
+    emu = make_test_emu(ram_size=32 * 1024 * 1024, uart_base=0)
 
     # Write a 64-bit value through the L2 cache
     test_pa = emu.bus.ram_base + 0x1000
@@ -41,7 +35,7 @@ def test_python_write_visible_to_native_read():
 
 def test_l2_flush_preserves_full_64bit_pointer():
     """A 64-bit pointer with upper bits set must survive L2 flush/invalidate."""
-    emu = _make_emu()
+    emu = make_test_emu(ram_size=32 * 1024 * 1024, uart_base=0)
 
     # Simulate a typical 64-bit pointer (like ld-linux / libc addresses)
     pointers = [
@@ -73,7 +67,7 @@ def test_l2_flush_preserves_full_64bit_pointer():
 
 def test_multiple_flush_invalidate_cycles():
     """Repeated flush/invalidate cycles must not corrupt RAM."""
-    emu = _make_emu()
+    emu = make_test_emu(ram_size=32 * 1024 * 1024, uart_base=0)
 
     pa = emu.bus.ram_base + 0x3000
     ptr = 0x3FF7_FD00_1234  # realistic high pointer
@@ -97,7 +91,7 @@ def test_multiple_flush_invalidate_cycles():
 
 def test_l2_write_straddling_cache_lines():
     """An 8-byte write spanning two L2 cache lines must be correctly flushed."""
-    emu = _make_emu()
+    emu = make_test_emu(ram_size=32 * 1024 * 1024, uart_base=0)
 
     # Place write near a 64-byte boundary
     # L2 line size is typically 64 bytes

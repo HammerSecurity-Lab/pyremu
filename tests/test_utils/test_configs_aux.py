@@ -90,8 +90,9 @@ class TestCfgFloat:
 
     def test_falls_back_to_configs_gen(self, monkeypatch):
         """环境变量未设置时回退到 configs_gen 中的同名取值."""
-        monkeypatch.delenv("WFI_MAX_SLEEP", raising=False)
-        assert cfg_float("WFI_MAX_SLEEP") == float(configs_gen.WFI_MAX_SLEEP)
+        monkeypatch.delenv(ENV_NAME, raising=False)
+        monkeypatch.setattr(configs_gen, ENV_NAME, 0.25, raising=False)
+        assert cfg_float(ENV_NAME) == 0.25
 
     def test_unknown_name_falls_back_to_zero(self, monkeypatch):
         """configs_gen 中没有该名称时回退为 0.0."""

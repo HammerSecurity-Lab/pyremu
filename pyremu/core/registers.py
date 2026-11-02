@@ -17,7 +17,7 @@ from copy import deepcopy
 from enum import Enum
 from functools import partial
 
-from pyremu.configs_gen import PYREMU_AIA, PYREMU_H_EXT
+from pyremu.configs_gen import PMP_ENTRIES, PYREMU_AIA, PYREMU_H_EXT
 from pyremu.utils.regname import init_csr_map, init_gpr_map
 
 # ============================================================
@@ -353,7 +353,6 @@ csr_bank: dict[int, CSR] = {
     0xB00: _MmodeCSR(name="mcycle", xlen=64),
     0xB02: _MmodeCSR(name="minstret", xlen=64),
     0xB80: _MmodeCSR(name="mcycleh", xlen=32),
-    0xB81: _MmodeCSR(name="mtimeh", xlen=32),
     0xB82: _MmodeCSR(name="minstreth", xlen=32),
     0xC00: _UmodeCSR(name="cycle").strip_w(),
     0xC01: _UmodeCSR(name="time").strip_w(),
@@ -447,10 +446,12 @@ for i in range(0, 4):
     csr_bank[0x60C + i] = _HmodeCSR(name=f"hstateen{i}")
     csr_bank[0x61C + i] = _HmodeCSR(name=f"hstateen{i}h", xlen=32)
 
-for i in range(0, 16):
-    csr_bank[0x3A0 + i] = _MmodeCSR(name=f"pmpcfg{i}")
+# RV64 的 pmpcfg 每个覆盖 8 个条目, 只有偶数编号的寄存器可用;
+# 地址空间容纳 pmpaddr0 至 pmpaddr63 共 64 个条目.
+for i in range(0, (min(PMP_ENTRIES, 64) + 7) // 8):
+    csr_bank[0x3A0 + i * 2] = _MmodeCSR(name=f"pmpcfg{i * 2}")
 
-for i in range(0, 64):
+for i in range(0, min(PMP_ENTRIES, 64)):
     csr_bank[0x3B0 + i] = _MmodeCSR(name=f"pmpaddr{i}")
 
 for i in range(3, 32):

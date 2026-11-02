@@ -20,7 +20,8 @@
 static long module_ioctl(
 	int fd,
 	unsigned long cmd,
-	struct tee_enclave_args *args) {
+	struct tee_enclave_args *args
+) {
 	long rc = syscall(SYS_ioctl, fd, cmd, args);
 	if (rc < 0) {
 		return -errno;
@@ -31,7 +32,8 @@ static long module_ioctl(
 /* 在表中查找模块. 未登记时返回 NULL. */
 static const struct tee_ext_mod_entry *module_lookup(
 	const struct tee_ext_mod_table *table,
-	uint32_t module_id) {
+	uint32_t module_id
+) {
 	for (int i = 0; i < table->count; i++) {
 		if (table->entries[i].module_id == module_id) {
 			return &table->entries[i];
@@ -53,11 +55,13 @@ static const struct module_image MODULE_IMAGES[] = {
 
 _Static_assert(
 	sizeof(MODULE_IMAGES) / sizeof(MODULE_IMAGES[0]) <= TEE_EXT_MOD_TABLE_MAX,
-	"module count exceeds TEE_EXT_MOD_TABLE_MAX");
+	"module count exceeds TEE_EXT_MOD_TABLE_MAX"
+);
 
 int tee_ext_mod_table_init(
 	struct tee_ext_mod_table *table,
-	const char *dir) {
+	const char *dir
+) {
 	const size_t count = sizeof(MODULE_IMAGES) / sizeof(MODULE_IMAGES[0]);
 
 	table->count = 0;
@@ -91,7 +95,8 @@ static int report_size(
 	int fd,
 	uint64_t enclave_id,
 	uint64_t token,
-	uint64_t size) {
+	uint64_t size
+) {
 	struct tee_enclave_args args;
 	memset(&args, 0, sizeof(args));
 	args.enclave_id = enclave_id;
@@ -107,7 +112,8 @@ static int deliver_image(
 	uint64_t enclave_id,
 	uint64_t token,
 	const void *image,
-	uint64_t size) {
+	uint64_t size
+) {
 	struct tee_enclave_args args;
 	memset(&args, 0, sizeof(args));
 	args.enclave_id	   = enclave_id;
@@ -122,7 +128,8 @@ int tee_ext_mod_serve(
 	int fd,
 	const struct tee_ext_mod_table *table,
 	uint64_t enclave_id,
-	uint64_t token) {
+	uint64_t token
+) {
 	struct tee_enclave_args args;
 	memset(&args, 0, sizeof(args));
 	args.enclave_id = enclave_id;
@@ -152,8 +159,8 @@ int tee_ext_mod_serve(
 		if (!entry) {
 			printf(
 				"req enclave=%llu id=%u kind=load -> absent\n",
-				(unsigned long long)enclave_id,
-				module_id);
+				(unsigned long long)enclave_id, module_id
+			);
 			return report_size(fd, enclave_id, token, 0) < 0 ? -1 : 1;
 		}
 
@@ -162,8 +169,8 @@ int tee_ext_mod_serve(
 		if (!fp) {
 			printf(
 				"req enclave=%llu id=%u kind=load -> unreadable\n",
-				(unsigned long long)enclave_id,
-				module_id);
+				(unsigned long long)enclave_id, module_id
+			);
 			return report_size(fd, enclave_id, token, 0) < 0 ? -1 : 1;
 		}
 
@@ -186,10 +193,8 @@ int tee_ext_mod_serve(
 		}
 		printf(
 			"req enclave=%llu id=%u kind=load -> %zu bytes from %s\n",
-			(unsigned long long)enclave_id,
-			module_id,
-			got,
-			entry->path);
+			(unsigned long long)enclave_id, module_id, got, entry->path
+		);
 		return 1;
 	}
 

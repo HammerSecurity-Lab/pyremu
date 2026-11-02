@@ -13,7 +13,6 @@ NaN-boxing、fcsr 累积与 mstatus.FS 门控。
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.mem_check_aux import inject_memory_backend
 
 # 单/双精度位模式常量
 BOX = 0xFFFF_FFFF_0000_0000  # NaN-boxing 掩码
@@ -28,19 +27,6 @@ D2_0 = 0x4000_0000_0000_0000  # 2.0
 D3_0 = 0x4008_0000_0000_0000  # 3.0
 
 MSTATUS_FS_INIT = 1 << 13  # FS = Initial
-
-
-def _make_ram():
-    ram = bytearray(2 * 1024 * 1024)
-
-    def read_fn(addr, size):
-        return bytes(ram[addr : addr + size])
-
-    def write_fn(addr, data):
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
 
 
 def _boxf(v32: int) -> int:
@@ -61,13 +47,10 @@ def fma(opcode: int, fmt: int, src: tuple[int, int, int], rd: int, rm: int = 0) 
 
 
 @pytest.fixture
-def hart() -> Hart:
-    h = Hart(id=0)
-    ram, rf, wf = _make_ram()
-    inject_memory_backend(h, rf, wf)
-    # 启用浮点单元 (FS = Initial)。
-    h.mstatus_val = h.mstatus_val | MSTATUS_FS_INIT
-    return h
+def hart(hart) -> Hart:
+    """在通用 hart 之上启用浮点单元 (FS = Initial)."""
+    hart.mstatus_val = hart.mstatus_val | MSTATUS_FS_INIT
+    return hart
 
 
 # ============================================================
@@ -220,14 +203,14 @@ class TestFpLoadStore:
     def test_flw_nanboxes(self, hart):
         # 在 RAM 写入 1.0f, FLW 加载并 NaN-box。
         hart.gprs[2] = 0x1000
-        hart._mem_write_phy(0x1000, S1_0.to_bytes(4, "little"))
+        hart.mem_write_phy(0x1000, S1_0.to_bytes(4, "little"))
         instr = (0 << 20) | (2 << 15) | (0b010 << 12) | (1 << 7) | 0b0000111  # FLW f1, 0(x2)
         hart.exec_instr(instr)
         assert hart._fpr_bits[1] == _boxf(S1_0)
 
     def test_fld_full64(self, hart):
         hart.gprs[2] = 0x1000
-        hart._mem_write_phy(0x1000, D2_0.to_bytes(8, "little"))
+        hart.mem_write_phy(0x1000, D2_0.to_bytes(8, "little"))
         instr = (0 << 20) | (2 << 15) | (0b011 << 12) | (1 << 7) | 0b0000111  # FLD f1, 0(x2)
         hart.exec_instr(instr)
         assert hart._fpr_bits[1] == D2_0
@@ -237,14 +220,14 @@ class TestFpLoadStore:
         hart._fpr_bits[3] = _boxf(S3_0)
         instr = (3 << 20) | (2 << 15) | (0b010 << 12) | (0 << 7) | 0b0100111  # FSW f3, 0(x2)
         hart.exec_instr(instr)
-        assert hart._mem_read_phy(0x1000, 4) == S3_0.to_bytes(4, "little")
+        assert hart.mem_read_phy(0x1000, 4) == S3_0.to_bytes(4, "little")
 
     def test_fsd_stores64(self, hart):
         hart.gprs[2] = 0x1000
         hart._fpr_bits[3] = D3_0
         instr = (3 << 20) | (2 << 15) | (0b011 << 12) | (0 << 7) | 0b0100111  # FSD f3, 0(x2)
         hart.exec_instr(instr)
-        assert hart._mem_read_phy(0x1000, 8) == D3_0.to_bytes(8, "little")
+        assert hart.mem_read_phy(0x1000, 8) == D3_0.to_bytes(8, "little")
 
 
 # ============================================================

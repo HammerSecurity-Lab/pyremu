@@ -32,18 +32,20 @@ impl Alu64 {
 
 /// RISC-V R 型 ALU: funct3 选择运算, funct7 选择变体.
 ///
-/// | funct3 | funct7=0 | funct7=1 | funct7=0x20 |
-/// |--------|----------|----------|-------------|
-/// | 000    | ADD      | MUL      | SUB         |
-/// | 001    | SLL      | MULH     |             |
-/// | 010    | SLT      | MULHSU   |             |
-/// | 011    | SLTU     | MULHU    |             |
-/// | 100    | XOR      | DIV      |             |
-/// | 101    | SRL      | DIVU     | SRA         |
-/// | 110    | OR       | REM      |             |
-/// | 111    | AND      | REMU     |             |
+/// | funct3 | 0    | 1      | 0x05 | 0x10   | 0x14 | 0x20 | 0x24 | 0x30 | 0x34 |
+/// |--------|------|--------|------|--------|------|------|------|------|------|
+/// | 000    | ADD  | MUL    |      |        |      | SUB  |      |      |      |
+/// | 001    | SLL  | MULH   |      |        | BSET |      | BCLR | ROL  | BINV |
+/// | 010    | SLT  | MULHSU |      | SH1ADD |      |      |      |      |      |
+/// | 011    | SLTU | MULHU  |      |        |      |      |      |      |      |
+/// | 100    | XOR  | DIV    | MIN  | SH2ADD |      | XNOR |      |      |      |
+/// | 101    | SRL  | DIVU   | MINU |        |      | SRA  | BEXT | ROR  |      |
+/// | 110    | OR   | REM    | MAX  | SH3ADD |      | ORN  |      |      |      |
+/// | 111    | AND  | REMU   | MAXU |        |      | ANDN |      |      |      |
 #[no_mangle]
 pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
+	let shamt = (v2 & 0x3F) as u32;
+
 	match funct3 {
 		0b000 => match funct7 {
 			0 => Alu64::ok(v1.wrapping_add(v2)),
@@ -52,12 +54,16 @@ pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64
 			_ => Alu64::ill(),
 		},
 		0b001 => match funct7 {
-			0 => Alu64::ok(v1 << (v2 & 0x3F)),
+			0 => Alu64::ok(v1 << shamt),
 			1 => {
 				let s1 = v1 as i64 as i128;
 				let s2 = v2 as i64 as i128;
 				Alu64::ok(((s1 * s2) >> 64) as u64)
 			}
+			0x14 => Alu64::ok(v1 | (1u64 << shamt)),
+			0x24 => Alu64::ok(v1 & !(1u64 << shamt)),
+			0x30 => Alu64::ok(v1.rotate_left(shamt)),
+			0x34 => Alu64::ok(v1 ^ (1u64 << shamt)),
 			_ => Alu64::ill(),
 		},
 		0b010 => match funct7 {
@@ -67,6 +73,7 @@ pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64
 				let u2 = v2 as i128;
 				Alu64::ok(((s1 * u2) >> 64) as u64)
 			}
+			0x10 => Alu64::ok((v1 << 1).wrapping_add(v2)),
 			_ => Alu64::ill(),
 		},
 		0b011 => match funct7 {
@@ -92,12 +99,18 @@ pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64
 				};
 				Alu64::ok(val)
 			}
+			0x05 => Alu64::ok(if (v1 as i64) < (v2 as i64) { v1 } else { v2 }),
+			0x10 => Alu64::ok((v1 << 2).wrapping_add(v2)),
+			0x20 => Alu64::ok(!(v1 ^ v2)),
 			_ => Alu64::ill(),
 		},
 		0b101 => match funct7 {
-			0 => Alu64::ok(v1 >> (v2 & 0x3F)),
+			0 => Alu64::ok(v1 >> shamt),
 			1 => Alu64::ok(if v2 == 0 { u64::MAX } else { v1 / v2 }),
-			0x20 => Alu64::ok(((v1 as i64) >> (v2 & 0x3F)) as u64),
+			0x05 => Alu64::ok(if v1 < v2 { v1 } else { v2 }),
+			0x20 => Alu64::ok(((v1 as i64) >> shamt) as u64),
+			0x24 => Alu64::ok((v1 >> shamt) & 1),
+			0x30 => Alu64::ok(v1.rotate_right(shamt)),
 			_ => Alu64::ill(),
 		},
 		0b110 => match funct7 {
@@ -114,11 +127,16 @@ pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64
 				};
 				Alu64::ok(val)
 			}
+			0x05 => Alu64::ok(if (v1 as i64) > (v2 as i64) { v1 } else { v2 }),
+			0x10 => Alu64::ok((v1 << 3).wrapping_add(v2)),
+			0x20 => Alu64::ok(v1 | !v2),
 			_ => Alu64::ill(),
 		},
 		0b111 => match funct7 {
 			0 => Alu64::ok(v1 & v2),
 			1 => Alu64::ok(if v2 == 0 { v1 } else { v1 % v2 }),
+			0x05 => Alu64::ok(if v1 > v2 { v1 } else { v2 }),
+			0x20 => Alu64::ok(v1 & !v2),
 			_ => Alu64::ill(),
 		},
 		_ => Alu64::ill(),
@@ -132,27 +150,33 @@ pub extern "C" fn exec_alu_op(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64
 /// RISC-V I 型立即数 ALU: funct3 选择运算.
 ///
 /// `imm` 为已经符号扩展的 12 位立即数.
-/// `funct7` 的高 6 位即 funct6 字段, 对应 bits[31:26], 用于区分 SRLI 与 SRAI.
+/// `funct7` 的高 6 位即 funct6 字段, 对应 bits[31:26], 用于区分 SRLI 与 SRAI,
+/// 以及 Zbb 与 Zbs 中由该字段选择的各子指令.
 #[no_mangle]
 pub extern "C" fn exec_op_imm(funct3: u8, funct7: u8, v1: u64, imm: u64) -> Alu64 {
-	let shamt = imm & 0x3F;
+	let shamt = (imm & 0x3F) as u32;
 	let funct6 = funct7 >> 1;
 
 	match funct3 {
 		0b000 => Alu64::ok(v1.wrapping_add(imm)),
-		0b001 => {
-			if funct6 != 0 {
-				Alu64::ill()
-			} else {
-				Alu64::ok(v1 << shamt)
-			}
-		}
+		0b001 => match funct6 {
+			0 => Alu64::ok(v1 << shamt),
+			0x0A => Alu64::ok(v1 | (1u64 << shamt)),
+			0x12 => Alu64::ok(v1 & !(1u64 << shamt)),
+			0x18 => zbb_unary_imm(v1, shamt),
+			0x1A => Alu64::ok(v1 ^ (1u64 << shamt)),
+			_ => Alu64::ill(),
+		},
 		0b010 => Alu64::ok(if (v1 as i64) < (imm as i64) { 1 } else { 0 }),
 		0b011 => Alu64::ok(if v1 < imm { 1 } else { 0 }),
 		0b100 => Alu64::ok(v1 ^ imm),
 		0b101 => match funct6 {
 			0 => Alu64::ok(v1 >> shamt),
+			0x0A if imm == 0x287 => Alu64::ok(orc_b(v1)),
 			0x10 => Alu64::ok(((v1 as i64) >> shamt) as u64),
+			0x12 => Alu64::ok((v1 >> shamt) & 1),
+			0x18 => Alu64::ok(v1.rotate_right(shamt)),
+			0x1A if imm == 0x6B8 => Alu64::ok(v1.swap_bytes()),
 			_ => Alu64::ill(),
 		},
 		0b110 => Alu64::ok(v1 | imm),
@@ -161,22 +185,60 @@ pub extern "C" fn exec_op_imm(funct3: u8, funct7: u8, v1: u64, imm: u64) -> Alu6
 	}
 }
 
+/// Zbb 中由立即数低 5 位选择的一元运算: clz、ctz、cpop、sext.b、sext.h.
+///
+/// 其余取值不是有效编码, 返回非法编码的结果.
+fn zbb_unary_imm(v: u64, shamt: u32) -> Alu64 {
+	match shamt {
+		0 => Alu64::ok(v.leading_zeros() as u64),
+		1 => Alu64::ok(v.trailing_zeros() as u64),
+		2 => Alu64::ok(v.count_ones() as u64),
+		4 => Alu64::ok(((v as i8) as i64) as u64),
+		5 => Alu64::ok(((v as i16) as i64) as u64),
+		_ => Alu64::ill(),
+	}
+}
+
+/// orc.b: 每个字节只要有一位为 1, 该字节的 8 位全部置为 1, 否则全部置为 0.
+fn orc_b(v: u64) -> u64 {
+	let mut out = 0u64;
+	for i in 0..8u32 {
+		if (v >> (i * 8)) & 0xFF != 0 {
+			out |= 0xFFu64 << (i * 8);
+		}
+	}
+	out
+}
+
 // ============================================================
 //  RV64 32 位字运算
 // ============================================================
 
 /// RISC-V RV64 32 位字 ALU: 只对低 32 位运算, 结果符号扩展到 64 位.
+/// Zba 的 uw 形式例外, 结果取值 64 位, 不作符号扩展.
 ///
-/// | funct3 | funct7=0 | funct7=1 | funct7=0x20 |
-/// |--------|----------|----------|-------------|
-/// | 000    | ADDW     | MULW     | SUBW        |
-/// | 001    | SLLW     |          |             |
-/// | 100    |          | DIVW     |             |
-/// | 101    | SRLW     | DIVUW    | SRAW        |
-/// | 110    |          | REMW     |             |
-/// | 111    |          | REMUW    |             |
+/// | funct3 | 0     | 1      | 0x04   | 0x10      | 0x20  | 0x30 |
+/// |--------|-------|--------|--------|-----------|-------|------|
+/// | 000    | ADDW  | MULW   | ADD.UW |           | SUBW  |      |
+/// | 001    | SLLW  |        |        |           |       | ROLW |
+/// | 010    |       |        |        | SH1ADD.UW |       |      |
+/// | 100    |       | DIVW   |        | SH2ADD.UW |       |      |
+/// | 101    | SRLW  | DIVUW  |        |           | SRAW  | RORW |
+/// | 110    |       | REMW   |        | SH3ADD.UW |       |      |
+/// | 111    |       | REMUW  |        |           |       |      |
 #[no_mangle]
 pub extern "C" fn exec_op32(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
+	let uw1 = v1 & 0xFFFF_FFFF;
+
+	// Zba 的 uw 形式: 只有 rs1 取低 32 位, rs2 取完整的 64 位参与加法
+	match (funct3, funct7) {
+		(0b000, 0x04) => return Alu64::ok(uw1.wrapping_add(v2)),
+		(0b010, 0x10) => return Alu64::ok((uw1 << 1).wrapping_add(v2)),
+		(0b100, 0x10) => return Alu64::ok((uw1 << 2).wrapping_add(v2)),
+		(0b110, 0x10) => return Alu64::ok((uw1 << 3).wrapping_add(v2)),
+		_ => {}
+	}
+
 	let w1 = (v1 & 0xFFFF_FFFF) as i32;
 	let w2 = (v2 & 0xFFFF_FFFF) as i32;
 
@@ -187,12 +249,11 @@ pub extern "C" fn exec_op32(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
 			0x20 => w1.wrapping_sub(w2),
 			_ => return Alu64::ill(),
 		},
-		0b001 => {
-			if funct7 != 0 {
-				return Alu64::ill();
-			}
-			w1 << (w2 & 0x1F)
-		}
+		0b001 => match funct7 {
+			0 => w1 << (w2 & 0x1F),
+			0x30 => w1.rotate_left((w2 as u32) & 0x1F),
+			_ => return Alu64::ill(),
+		},
 		0b100 => {
 			if funct7 != 1 {
 				return Alu64::ill();
@@ -217,6 +278,7 @@ pub extern "C" fn exec_op32(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
 				}
 			}
 			0x20 => w1 >> (w2 & 0x1F),
+			0x30 => w1.rotate_right((w2 as u32) & 0x1F),
 			_ => return Alu64::ill(),
 		},
 		0b110 => {
@@ -254,33 +316,41 @@ pub extern "C" fn exec_op32(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
 // ============================================================
 
 /// RISC-V RV64 32 位字立即数 ALU: 对低 32 位运算, 结果符号扩展到 64 位.
+/// slli.uw 例外, 结果为 64 位, 不作符号扩展.
 ///
-/// | funct3 | 运算 |
-/// |--------|-----------|
-/// | 000    | ADDIW     |
-/// | 001    | SLLIW     |
-/// | 101    | SRLIW / SRAIW |
+/// | funct3 | 0     | 0x04 / 0x05 | 0x20  | 0x30                |
+/// |--------|-------|-------------|-------|---------------------|
+/// | 000    | ADDIW |             |       |                     |
+/// | 001    | SLLIW | SLLI.UW     |       | CLZW / CTZW / CPOPW |
+/// | 101    | SRLIW |             | SRAIW | RORIW               |
 #[no_mangle]
 pub extern "C" fn exec_op_imm32(funct3: u8, funct7: u8, v1: u64, imm: u64) -> Alu64 {
 	let w1 = (v1 & 0xFFFF_FFFF) as i32;
 	let shamt = imm as u32 & 0x1F;
 
+	// slli.uw 的移位量为 6 位, 第 6 位落在 funct7 的最低位, 故 funct7 取 0x04 或 0x05
+	if funct3 == 0b001 && (funct7 >> 1) == 0x02 {
+		return Alu64::ok((v1 & 0xFFFF_FFFF) << (imm as u32 & 0x3F));
+	}
+
 	let result_i32: i32 = match funct3 {
 		0b000 => w1.wrapping_add(imm as i32),
-		0b001 => {
-			if funct7 != 0 {
-				return Alu64::ill();
-			}
-			w1 << shamt
-		}
-		0b101 => {
-			let funct6 = funct7 >> 1;
-			match funct6 {
-				0 => ((w1 as u32) >> shamt) as i32,
-				0x10 => w1 >> shamt,
+		0b001 => match funct7 {
+			0 => w1 << shamt,
+			0x30 => match shamt {
+				0 => w1.leading_zeros() as i32,
+				1 => w1.trailing_zeros() as i32,
+				2 => w1.count_ones() as i32,
 				_ => return Alu64::ill(),
-			}
-		}
+			},
+			_ => return Alu64::ill(),
+		},
+		0b101 => match funct7 {
+			0 => ((w1 as u32) >> shamt) as i32,
+			0x20 => w1 >> shamt,
+			0x30 => w1.rotate_right(shamt),
+			_ => return Alu64::ill(),
+		},
 		_ => return Alu64::ill(),
 	};
 
@@ -614,5 +684,180 @@ mod tests {
 	#[test]
 	fn test_op_imm32_ill() {
 		assert!(trap(exec_op_imm32(1, 1, 0x100, 2)));
+	}
+
+	// ---- Zbb OP-IMM: clz、ctz、cpop、sext.b、sext.h、rori、orc.b、rev8 ----
+	#[test]
+	fn test_clz_counts_leading_zeros() {
+		assert_eq!(v(exec_op_imm(1, 0x30, 0x00FF_FFFF_FFFF_FFFF, 0x600)), 8);
+		assert_eq!(v(exec_op_imm(1, 0x30, 0, 0x600)), 64);
+	}
+	#[test]
+	fn test_ctz_counts_trailing_zeros() {
+		assert_eq!(v(exec_op_imm(1, 0x30, 0xFFFF_FFFF_FFFF_FF00, 0x601)), 8);
+		assert_eq!(v(exec_op_imm(1, 0x30, 0, 0x601)), 64);
+	}
+	#[test]
+	fn test_cpop_counts_ones() {
+		assert_eq!(v(exec_op_imm(1, 0x30, 0xFF, 0x602)), 8);
+		assert_eq!(v(exec_op_imm(1, 0x30, u64::MAX, 0x602)), 64);
+	}
+	#[test]
+	fn test_sext_b_sign_extends_low_byte() {
+		assert_eq!(v(exec_op_imm(1, 0x30, 0x80, 0x604)), 0xFFFF_FFFF_FFFF_FF80);
+		assert_eq!(v(exec_op_imm(1, 0x30, 0x7F, 0x604)), 0x7F);
+	}
+	#[test]
+	fn test_sext_h_sign_extends_low_halfword() {
+		assert_eq!(
+			v(exec_op_imm(1, 0x30, 0x8000, 0x605)),
+			0xFFFF_FFFF_FFFF_8000
+		);
+		assert_eq!(v(exec_op_imm(1, 0x30, 0x7FFF, 0x605)), 0x7FFF);
+	}
+	#[test]
+	fn test_rori() {
+		assert_eq!(
+			v(exec_op_imm(5, 0x30, 0x8000_0000_0000_0001, 0x601)),
+			0xC000_0000_0000_0000
+		);
+	}
+	#[test]
+	fn test_orc_b_expands_nonzero_bytes() {
+		assert_eq!(v(exec_op_imm(5, 0x14, 0x0F07, 0x287)), 0xFFFF);
+		assert_eq!(v(exec_op_imm(5, 0x14, 0, 0x287)), 0);
+	}
+	#[test]
+	fn test_rev8_reverses_bytes() {
+		assert_eq!(
+			v(exec_op_imm(5, 0x35, 0x0123_4567_89AB_CDEF, 0x6B8)),
+			0xEFCD_AB89_6745_2301
+		);
+	}
+	#[test]
+	fn test_rev8_reserved_immediate_traps() {
+		// rev8 的立即数固定为 0x6B8, 相邻取值为保留编码
+		assert!(trap(exec_op_imm(5, 0x35, 0, 0x6B9)));
+	}
+	#[test]
+	fn test_zbb_unary_reserved_shamt_traps() {
+		// funct3=001 与 funct6=0x18 时 shamt 只允许取 0、1、2、4、5
+		assert!(trap(exec_op_imm(1, 0x30, 0xFF, 0x603)));
+	}
+
+	// ---- Zbb R 型: andn、orn、xnor、min、minu、max、maxu、rol、ror ----
+	#[test]
+	fn test_andn() {
+		assert_eq!(v(exec_alu_op(7, 0x20, 0xFF00, 0x0F0F)), 0xF000);
+	}
+	#[test]
+	fn test_orn() {
+		assert_eq!(
+			v(exec_alu_op(6, 0x20, 0x00FF, 0x0F0F)),
+			0xFFFF_FFFF_FFFF_F0FF
+		);
+	}
+	#[test]
+	fn test_xnor() {
+		assert_eq!(v(exec_alu_op(4, 0x20, 0xFF, 0x0F)), 0xFFFF_FFFF_FFFF_FF0F);
+	}
+	#[test]
+	fn test_min_and_max_compare_signed() {
+		assert_eq!(v(exec_alu_op(4, 0x05, u64::MAX, 0x10)), u64::MAX);
+		assert_eq!(v(exec_alu_op(6, 0x05, u64::MAX, 0x10)), 0x10);
+	}
+	#[test]
+	fn test_minu_and_maxu_compare_unsigned() {
+		assert_eq!(v(exec_alu_op(5, 0x05, u64::MAX, 0x10)), 0x10);
+		assert_eq!(v(exec_alu_op(7, 0x05, u64::MAX, 0x10)), u64::MAX);
+	}
+	#[test]
+	fn test_rol_and_ror() {
+		assert_eq!(v(exec_alu_op(1, 0x30, 0x8000_0000_0000_0001, 1)), 3);
+		assert_eq!(
+			v(exec_alu_op(5, 0x30, 0x8000_0000_0000_0001, 1)),
+			0xC000_0000_0000_0000
+		);
+	}
+	#[test]
+	fn test_rolw_and_rorw_sign_extend() {
+		assert_eq!(v(exec_op32(1, 0x30, 0x4000_0000, 1)), 0xFFFF_FFFF_8000_0000);
+		assert_eq!(v(exec_op32(5, 0x30, 0x0000_0001, 1)), 0xFFFF_FFFF_8000_0000);
+	}
+	#[test]
+	fn test_clzw_ctzw_cpopw_ignore_high_half() {
+		assert_eq!(v(exec_op_imm32(1, 0x30, 0xFFFF_FFFF_0000_0001, 0x600)), 31);
+		assert_eq!(v(exec_op_imm32(1, 0x30, 0xFFFF_FFFF_0000_0100, 0x601)), 8);
+		assert_eq!(v(exec_op_imm32(1, 0x30, 0xFFFF_FFFF_0000_000F, 0x602)), 4);
+	}
+	#[test]
+	fn test_roriw_rotates_word() {
+		assert_eq!(
+			v(exec_op_imm32(5, 0x30, 0x1234_5678, 0x604)),
+			0xFFFF_FFFF_8123_4567
+		);
+	}
+
+	// ---- Zba: sh1add、sh2add、sh3add、add.uw、slli.uw ----
+	#[test]
+	fn test_sh1add_sh2add_sh3add() {
+		assert_eq!(v(exec_alu_op(2, 0x10, 5, 3)), 13);
+		assert_eq!(v(exec_alu_op(4, 0x10, 5, 3)), 23);
+		assert_eq!(v(exec_alu_op(6, 0x10, 5, 3)), 43);
+	}
+	#[test]
+	fn test_add_uw_zero_extends_rs1() {
+		// zext32(0xFFFFFFFFFFFFFFFF) + 1 = 0x1_0000_0000;
+		// 若按符号扩展把 rs1 取作 -1, 结果会变成 0
+		assert_eq!(v(exec_op32(0, 0x04, u64::MAX, 1)), 0x1_0000_0000);
+	}
+	#[test]
+	fn test_sh_add_uw_keeps_rs2_high_half() {
+		assert_eq!(
+			v(exec_op32(2, 0x10, 0x1_0000_0001, 0x1_0000_0000)),
+			0x1_0000_0002
+		);
+		assert_eq!(
+			v(exec_op32(4, 0x10, 0x1_0000_0001, 0x1_0000_0000)),
+			0x1_0000_0004
+		);
+		assert_eq!(
+			v(exec_op32(6, 0x10, 0x1_0000_0001, 0x1_0000_0000)),
+			0x1_0000_0008
+		);
+	}
+	#[test]
+	fn test_slli_uw_zero_extends_rs1() {
+		assert_eq!(v(exec_op_imm32(1, 0x04, 0x1_0000_0001, 0x087)), 0x80);
+	}
+	#[test]
+	fn test_slli_uw_shamt_above_31() {
+		// shamt=33 使 funct7 的最低位为 1, 与移位量 1 的编码区别只在该位
+		assert_eq!(v(exec_op_imm32(1, 0x05, 1, 0xA1)), 0x2_0000_0000);
+		assert_eq!(v(exec_op_imm32(1, 0x04, 1, 0x081)), 0x2);
+	}
+
+	// ---- Zbs: bset、bclr、binv、bext 与对应的立即数形式 ----
+	#[test]
+	fn test_bset_bclr_binv() {
+		assert_eq!(v(exec_alu_op(1, 0x14, 0, 5)), 0x20);
+		assert_eq!(v(exec_alu_op(1, 0x24, 0xFF, 3)), 0xF7);
+		assert_eq!(v(exec_alu_op(1, 0x34, 0xFF, 3)), 0xF7);
+	}
+	#[test]
+	fn test_bext_extracts_bit() {
+		assert_eq!(v(exec_alu_op(5, 0x24, 0x80, 7)), 1);
+		assert_eq!(v(exec_alu_op(5, 0x24, 0x80, 6)), 0);
+	}
+	#[test]
+	fn test_bseti_bclri_binvi() {
+		assert_eq!(v(exec_op_imm(1, 0x14, 0, 5)), 0x20);
+		assert_eq!(v(exec_op_imm(1, 0x24, 0xFF, 3)), 0xF7);
+		assert_eq!(v(exec_op_imm(1, 0x34, 0xFF, 3)), 0xF7);
+	}
+	#[test]
+	fn test_bexti_extracts_bit() {
+		assert_eq!(v(exec_op_imm(5, 0x24, 0x80, 7)), 1);
+		assert_eq!(v(exec_op_imm(5, 0x24, 0x80, 6)), 0);
 	}
 }

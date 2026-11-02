@@ -205,7 +205,7 @@ class DispatchOps(SharedAttrs):
             "\n".join(
                 [
                     f"Harts: [bold cyan]{self._emu.num_harts}[/]   "
-                    f"Active hart: [bold cyan]{self._hart_id}[/]",
+                    f"Active Harts: [bold cyan]{self._hart_id}[/]",
                     f"Prog Cnt: [bold yellow]{self._emu.prog_cnt:#018x}[/]  "
                     f"RAM: [dim]{fmt_size(self._emu.bus.ram_size)}"
                     f" @ 0x{self._emu.bus.ram_base:x}[/]  "
@@ -252,7 +252,6 @@ class DispatchOps(SharedAttrs):
                     parts = raw.split()
                     parts[1] = hex(self._vdisasm_next_addr)
                     raw = " ".join(parts)
-                self._console.print(f"[dim](重复) {raw}[/]")
 
             parts = raw.split()
             try:

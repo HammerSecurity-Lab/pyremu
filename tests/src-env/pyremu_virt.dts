@@ -24,8 +24,8 @@
 / {
 	#address-cells = <2>;
 	#size-cells = <2>;
-	compatible = "pyremu,riscv64";
-	model = "pyremu,rv64ima";
+	compatible = "riscv64";
+	model = "rv64ima";
 
 	aliases {
 		serial0 = &uart0;
@@ -81,17 +81,17 @@
 		};
 
 		spi@10001000 {
-			compatible = "pyremu,spi0";
+			compatible = "spi0";
 			reg = <0x0 0x10001000 0x0 0x1000>;
 		};
 
 		i2c@10002000 {
-			compatible = "pyremu,i2c0";
+			compatible = "i2c0";
 			reg = <0x0 0x10002000 0x0 0x1000>;
 		};
 
 		gpio@10003000 {
-			compatible = "pyremu,gpio0";
+			compatible = "gpio0";
 			reg = <0x0 0x10003000 0x0 0x1000>;
 		};
 	};

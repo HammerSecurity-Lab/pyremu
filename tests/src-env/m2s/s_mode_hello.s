@@ -1,8 +1,6 @@
 // SPDX-LICENSE-IDENTIFIER: MIT
 // (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-// M 模式 -> S 模式启动移交: 模拟 OpenSBI 将控制权移交给操作系统的 boot 片段.
-//
 // 流程:
 //   1. M 模式初始化 UART, 保存 mstatus 到共享内存, 设置 mtvec 和 mstatus.MPP=S
 //   2. MRET 切换到 S 模式
@@ -16,16 +14,10 @@
 .section .text
 .globl _start
 
-// ============================================================
-//  UART 基址 (qemu_virt 默认)
-// ============================================================
 .equ UART_BASE,    0x10000000
 .equ UART_TX,      0x00
 .equ UART_TXCTRL,  0x08
 
-// ============================================================
-//  M 模式入口 — _start
-// ============================================================
 _start:
     // 设置栈指针 (M 模式用)
     la   sp, stack_top_m

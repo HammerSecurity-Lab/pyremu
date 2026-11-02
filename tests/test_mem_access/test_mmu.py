@@ -9,7 +9,6 @@ import pytest
 
 from pyremu.core.decoder import Hart
 from pyremu.core.hart import HartWithRegs, RiscvMode
-from pyremu.core.mem_check_aux import inject_memory_backend, translate_addr
 from pyremu.memory.bus import Bus
 from pyremu.memory.mmu import (
     MemAccessMode,
@@ -27,21 +26,7 @@ from pyremu.memory.mmu import (
     sv39_vpn,
     translate_va,
 )
-
-
-def _make_ram(size_bytes: int = 2 * 1024 * 1024) -> tuple:
-    """创建一个 bytearray 模拟物理内存, 返回 (ram, read_fn, write_fn)."""
-    ram = bytearray(size_bytes)
-
-    def read_fn(addr: int, length: int) -> bytes:
-        return bytes(ram[addr : addr + length])
-
-    def write_fn(addr: int, data: bytes):
-        for i, b in enumerate(data):
-            ram[addr + i] = b
-
-    return ram, read_fn, write_fn
-
+from tests.conftest import make_test_ram
 
 # ============================================================
 #  PTE 字段读写
@@ -311,7 +296,7 @@ class TestSv39Walk:
     @pytest.fixture
     def ram_ctx(self):
         """提供一个 2 MiB 的物理内存."""
-        return _make_ram()
+        return make_test_ram()
 
     def _write_pte(self, ram, write_fn, addr: int, pte: PTE):
         """向物理内存写入一个 PTE."""
@@ -508,7 +493,8 @@ class TestHartMMUIntegration:
     def hart(self) -> HartWithRegs:
         h = HartWithRegs(id=0)
         bus = Bus(ram_size=self.RAM_SIZE, ram_base=self.RAM_BASE)
-        inject_memory_backend(h, bus.read, bus.write)
+        h.mem_read_phy = bus.read
+        h.mem_write_phy = bus.write
         h.bus = bus
         h.pc = self.RAM_BASE
         h.mode = RiscvMode.S  # S-mode: 走 MMU 翻译 (非 M 模式)
@@ -546,8 +532,8 @@ class TestHartMMUIntegration:
 
     def _write_pte(self, hart: HartWithRegs, pa: int, value: int) -> None:
         """向物理地址写入一个 PTE (8 字节 LE)."""
-        assert hart._mem_write_phy is not None
-        hart._mem_write_phy(pa, value.to_bytes(8, "little"))
+        assert hart.mem_write_phy is not None
+        hart.mem_write_phy(pa, value.to_bytes(8, "little"))
 
     # ---- 4 KiB 普通页: patp 经二级页表到三级页表的遍历 ----
 
@@ -574,23 +560,23 @@ class TestHartMMUIntegration:
 
         # 写入魔数到物理地址
         magic = b"\xde\xad\xbe\xef\xca\xfe\xba\xbe"
-        hart._mem_write_phy(self.RAM_BASE, magic)
+        hart.mem_write_phy(self.RAM_BASE, magic)
 
         # 使能 Sv39
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
         assert hart.mmu_mode == SATP_MODE_SV39
 
         # ---- translate_addr ----
-        ok, pa = translate_addr(hart, self.RAM_BASE)
+        ok, pa = hart.translate_addr(self.RAM_BASE)
         assert ok, "identity 4 KiB 页应翻译成功"
         assert pa == self.RAM_BASE, f"PA=0x{pa:x}, 期望=0x{self.RAM_BASE:x}"
 
         # ---- TLB 命中: 第二次访问应走 TLB 快捷路径 ----
-        ok2, pa2 = translate_addr(hart, self.RAM_BASE)
+        ok2, pa2 = hart.translate_addr(self.RAM_BASE)
         assert ok2 and pa2 == self.RAM_BASE
 
         # ---- 读取数据 ----
-        data = hart._mem_read_phy(pa, 8)
+        data = hart.mem_read_phy(pa, 8)
         assert data == magic, f"读到 0x{data.hex()}, 期望 0x{magic.hex()}"
 
     def test_identity_4kib_translate_only(self, hart):
@@ -613,7 +599,7 @@ class TestHartMMUIntegration:
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
-        ok, pa = translate_addr(hart, 0x0)
+        ok, pa = hart.translate_addr(0x0)
         assert ok, "translate_addr 应成功"
         assert pa == 0x80000000, f"PA=0x{pa:x}"
 
@@ -639,7 +625,7 @@ class TestHartMMUIntegration:
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
         # VA 0x80000000 应翻译到 PA 0x80000000
-        ok, pa = translate_addr(hart, 0x80000000)
+        ok, pa = hart.translate_addr(0x80000000)
         assert ok, "2 MiB mega page 应翻译成功"
         assert pa == 0x80000000, f"PA=0x{pa:x}"
 
@@ -662,7 +648,7 @@ class TestHartMMUIntegration:
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
         # VA=0x1A000 -> offset 0xA000, PA 应 = 0x10000 + 0xA000 = 0x1A000
-        ok, pa = translate_addr(hart, 0x1A000)
+        ok, pa = hart.translate_addr(0x1A000)
         assert ok
         assert pa == 0x1A000, f"PA=0x{pa:x} (大页内偏移应保留)"
 
@@ -687,11 +673,11 @@ class TestHartMMUIntegration:
         assert len(hart.dtlb) == 0, "初始 TLB 应为空"
 
         # 首次: miss -> walk -> insert
-        ok, _ = translate_addr(hart, 0x1000)
+        ok, _ = hart.translate_addr(0x1000)
         assert ok
         assert len(hart.dtlb) == 1, "首次翻译后 TLB 应有 1 条"
 
-        ok2, _ = translate_addr(hart, 0x1000)
+        ok2, _ = hart.translate_addr(0x1000)
         assert ok2
         assert len(hart.dtlb) == 1, "TLB 命中不应增加条目"
 
@@ -712,7 +698,7 @@ class TestHartMMUIntegration:
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
         # 填充 DTLB
-        translate_addr(hart, 0x1000)
+        hart.translate_addr(0x1000)
         assert len(hart.dtlb) == 1
 
         # SFENCE.VMA 全刷新
@@ -728,7 +714,7 @@ class TestHartMMUIntegration:
         hart.satp_val = SATP_MODE_BARE << 60
         assert hart.mmu_mode == 0
 
-        ok, pa = translate_addr(hart, 0x80001000)
+        ok, pa = hart.translate_addr(0x80001000)
         assert ok
         assert pa == 0x80001000
 
@@ -743,7 +729,7 @@ class TestHartMMUIntegration:
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
         hart.mode = RiscvMode.M  # 切换到 M 模式
 
-        ok, pa = translate_addr(hart, 0x80001000)
+        ok, pa = hart.translate_addr(0x80001000)
         assert ok
         assert pa == 0x80001000, "M 模式应绕过 MMU"
 
@@ -759,7 +745,7 @@ class TestHartMMUIntegration:
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
-        ok, pa = translate_addr(hart, 0x0)
+        ok, pa = hart.translate_addr(0x0)
         assert not ok, "无效 PTE 应导致翻译失败"
 
     def test_walk_past_valid_range_fails(self, hart):
@@ -775,7 +761,7 @@ class TestHartMMUIntegration:
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
-        ok, pa = translate_addr(hart, 0x0)
+        ok, pa = hart.translate_addr(0x0)
         assert not ok, "中间表 V=0 应导致失败"
 
     # ---- 非零 ASID 不影响翻译 ----
@@ -799,7 +785,7 @@ class TestHartMMUIntegration:
         assert hart.mmu_mode == SATP_MODE_SV39
 
         # VA=0x0 -> vpn[0]=0, mega PPN[9:0]=0 -> PA=0x800000
-        ok, pa = translate_addr(hart, 0x0)
+        ok, pa = hart.translate_addr(0x0)
         assert ok and pa == 0x800000, f"PA=0x{pa:x}, ASID 不影响页表遍历"
 
 

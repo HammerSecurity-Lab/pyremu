@@ -256,9 +256,6 @@ def parse_compressed(instr: int) -> bool:
     return (instr & 0x3) != 3
 
 
-# 可能会有指令别名，不过那是反编译器关心的事情
-
-
 def decode_c_sdsp(half: int) -> tuple[int, int] | None:
     """If *half* is ``c.sdsp rs2, uimm(sp)``, return ``(rs2, uimm)``; else None.
 
@@ -339,13 +336,27 @@ def _rs2(instr: int) -> str:
 
 _R_FUNCT3_MAP: dict[int, dict[int, str]] = {
     0b000: {0x00: "add", 0x01: "mul", 0x20: "sub"},
-    0b001: {0x00: "sll", 0x01: "mulh"},
-    0b010: {0x00: "slt", 0x01: "mulhsu"},
+    0b001: {
+        0x00: "sll",
+        0x01: "mulh",
+        0x14: "bset",
+        0x24: "bclr",
+        0x30: "rol",
+        0x34: "binv",
+    },
+    0b010: {0x00: "slt", 0x01: "mulhsu", 0x10: "sh1add"},
     0b011: {0x00: "sltu", 0x01: "mulhu"},
-    0b100: {0x00: "xor", 0x01: "div"},
-    0b101: {0x00: "srl", 0x01: "divu", 0x20: "sra"},
-    0b110: {0x00: "or", 0x01: "rem"},
-    0b111: {0x00: "and", 0x01: "remu"},
+    0b100: {0x00: "xor", 0x01: "div", 0x05: "min", 0x10: "sh2add", 0x20: "xnor"},
+    0b101: {
+        0x00: "srl",
+        0x01: "divu",
+        0x05: "minu",
+        0x20: "sra",
+        0x24: "bext",
+        0x30: "ror",
+    },
+    0b110: {0x00: "or", 0x01: "rem", 0x05: "max", 0x10: "sh3add", 0x20: "orn"},
+    0b111: {0x00: "and", 0x01: "remu", 0x05: "maxu", 0x20: "andn"},
 }
 
 
@@ -386,22 +397,76 @@ def _dis_itype(instr: int) -> str:
     return f"{mnemonic:<12} {_rd(instr)}, {_rs1(instr)}, {_fmt_imm(imm)}"
 
 
+# funct3=001 中由 funct6 确定助记符的立即数指令
+_SHIFT_IMM_SLL: dict[int, str] = {
+    0x00: "slli",
+    0x0A: "bseti",
+    0x12: "bclri",
+    0x1A: "binvi",
+}
+
+# funct3=101 中由 funct6 确定助记符, 并由 shamt 给出移位量的立即数指令
+_SHIFT_IMM_SRL: dict[int, str] = {
+    0x00: "srli",
+    0x10: "srai",
+    0x12: "bexti",
+    0x18: "rori",
+}
+
+# funct3=101 中立即数固定的指令: funct6 -> (助记符, 12 位立即数)
+_SHIFT_IMM_FIXED: dict[int, tuple[str, int]] = {
+    0x0A: ("orc.b", 0x287),
+    0x1A: ("rev8", 0x6B8),
+}
+
+# Zbb 单目立即数子指令: shamt -> 助记符
+_ZBB_UNARY_IMM: dict[int, str] = {
+    0: "clz",
+    1: "ctz",
+    2: "cpop",
+    4: "sext.b",
+    5: "sext.h",
+}
+
+
 def _dis_shift_imm(instr: int, f3: int) -> str:
-    """移位立即数: SLLI 用 funct6, SRLI 与 SRAI 由 funct6 区分.
+    """移位与位操作立即数: 由 funct6 与 shamt 判别.
 
     bit 25 属于 shamt, 故移位类指令不按 funct7 判别.
     """
     shamt = (instr >> 20) & 0x3F
     f6 = parse_func6(instr)
+    rd, rs1 = _rd(instr), _rs1(instr)
     if f3 == 0b001:
-        if f6 != 0:
+        return _dis_shift_imm_sll(f6, shamt, rd, rs1)
+    return _dis_shift_imm_srl(instr, f6, shamt, rd, rs1)
+
+
+def _dis_shift_imm_sll(f6: int, shamt: int, rd: str, rs1: str) -> str:
+    """funct3=001: SLLI 与 Zbs、Zbb 的立即数形式."""
+    if f6 == 0x18:
+        mnemonic = _ZBB_UNARY_IMM.get(shamt)
+        if mnemonic is None:
             return _UNKNOWN
-        return f"slli         {_rd(instr)}, {_rs1(instr)}, {shamt}"
-    if f6 == 0x00:  # SRLI (funct6=0b000000)
-        return f"srli         {_rd(instr)}, {_rs1(instr)}, {shamt}"
-    if f6 == 0x10:  # SRAI (funct6=0b010000)
-        return f"srai         {_rd(instr)}, {_rs1(instr)}, {shamt}"
-    return _UNKNOWN
+        return f"{mnemonic:<12} {rd}, {rs1}"
+    mnemonic = _SHIFT_IMM_SLL.get(f6)
+    if mnemonic is None:
+        return _UNKNOWN
+    return f"{mnemonic:<12} {rd}, {rs1}, {shamt}"
+
+
+def _dis_shift_imm_srl(instr: int, f6: int, shamt: int, rd: str, rs1: str) -> str:
+    """funct3=101: SRLI、SRAI、RORI、BEXTI、ORC.B 与 REV8."""
+    fixed = _SHIFT_IMM_FIXED.get(f6)
+    if fixed is not None:
+        mnemonic, imm = fixed
+        if parse_imm12_se(instr) != imm:
+            return _UNKNOWN
+        return f"{mnemonic:<12} {rd}, {rs1}"
+    mnemonic = _SHIFT_IMM_SRL.get(f6)
+    if mnemonic is None:
+        return _UNKNOWN
+    return f"{mnemonic:<12} {rd}, {rs1}, {shamt}"
 
 
 # ============================================================
@@ -409,13 +474,13 @@ def _dis_shift_imm(instr: int, f3: int) -> str:
 # ============================================================
 
 _OP32_FUNCT3_MAP: dict[int, dict[int, str]] = {
-    0b000: {0x00: "addw", 0x01: "mulw", 0x20: "subw"},
-    0b001: {0x00: "sllw", 0x01: "mulhw"},
-    0b010: {0x00: "sltw", 0x01: "mulhsuw"},
+    0b000: {0x00: "addw", 0x01: "mulw", 0x04: "add.uw", 0x20: "subw"},
+    0b001: {0x00: "sllw", 0x01: "mulhw", 0x30: "rolw"},
+    0b010: {0x00: "sltw", 0x01: "mulhsuw", 0x10: "sh1add.uw"},
     0b011: {0x00: "sltuw", 0x01: "mulhuw"},
-    0b100: {0x00: "xorw", 0x01: "divw"},
-    0b101: {0x00: "srlw", 0x01: "divuw", 0x20: "sraw"},
-    0b110: {0x00: "orw", 0x01: "remw"},
+    0b100: {0x00: "xorw", 0x01: "divw", 0x10: "sh2add.uw"},
+    0b101: {0x00: "srlw", 0x01: "divuw", 0x20: "sraw", 0x30: "rorw"},
+    0b110: {0x00: "orw", 0x01: "remw", 0x10: "sh3add.uw"},
     0b111: {0x00: "andw", 0x01: "remuw"},
 }
 
@@ -430,24 +495,46 @@ def _dis_op32(instr: int) -> str:
     return f"{mnemonic:<12} {_rd(instr)}, {_rs1(instr)}, {_rs2(instr)}"
 
 
+# funct3=001 的 32 位字立即数单目子指令: shamt -> 助记符
+_ZBB_UNARY_IMM32: dict[int, str] = {
+    0: "clzw",
+    1: "ctzw",
+    2: "cpopw",
+}
+
+
 def _dis_op_imm32(instr: int) -> str:
-    """RV64 32-bit I-type: ADDIW / SLLIW / SRLIW / SRAIW."""
+    """RV64 32-bit I-type: ADDIW / SLLIW / SRLIW / SRAIW 与 Zba、Zbb 的立即数形式."""
     f3 = parse_func3(instr)
     f7 = parse_func7(instr)
+    rd, rs1 = _rd(instr), _rs1(instr)
     if f3 == 0b000:
-        imm = parse_imm12_se(instr)
-        return f"addiw        {_rd(instr)}, {_rs1(instr)}, {_fmt_imm(imm)}"
+        return f"addiw        {rd}, {rs1}, {_fmt_imm(parse_imm12_se(instr))}"
     if f3 == 0b001:
-        if f7 != 0:
-            return _UNKNOWN
-        shamt = (instr >> 20) & 0x1F
-        return f"slliw        {_rd(instr)}, {_rs1(instr)}, {shamt}"
+        return _dis_op_imm32_sll(instr, f7, rd, rs1)
     if f3 == 0b101:
         shamt = (instr >> 20) & 0x1F
         if f7 == 0x00:
-            return f"srliw        {_rd(instr)}, {_rs1(instr)}, {shamt}"
+            return f"srliw        {rd}, {rs1}, {shamt}"
         if f7 == 0x20:
-            return f"sraiw        {_rd(instr)}, {_rs1(instr)}, {shamt}"
+            return f"sraiw        {rd}, {rs1}, {shamt}"
+        if f7 == 0x30:
+            return f"roriw        {rd}, {rs1}, {shamt}"
+    return _UNKNOWN
+
+
+def _dis_op_imm32_sll(instr: int, f7: int, rd: str, rs1: str) -> str:
+    """funct3=001: SLLIW、SLLI.UW 与 Zbb 的 clzw、ctzw、cpopw."""
+    shamt = (instr >> 20) & 0x3F
+    if f7 >> 1 == 0x02:  # slli.uw, 移位量为 6 位
+        return f"slli.uw      {rd}, {rs1}, {shamt}"
+    if f7 == 0x00:
+        return f"slliw        {rd}, {rs1}, {shamt}"
+    if f7 == 0x30:
+        mnemonic = _ZBB_UNARY_IMM32.get(shamt)
+        if mnemonic is None:
+            return _UNKNOWN
+        return f"{mnemonic:<12} {rd}, {rs1}"
     return _UNKNOWN
 
 

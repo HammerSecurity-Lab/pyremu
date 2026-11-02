@@ -21,127 +21,13 @@
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 
+#include "tee_enclave_drv.h"
+
 #define DEVICE_NAME "tee_enclave"
 
-/* SBI enclave extension */
-#define SBI_ENCLAVE_EXT_ID	 0x20221222ULL
-#define SBI_ENCLAVE_CREATE	 400
-#define SBI_ENCLAVE_ENTER	 401
-#define SBI_ENCLAVE_SHUTDOWN 403
-#define SBI_ENCLAVE_SUSPEND	 404
-#define SBI_ENCLAVE_RESUME	 405
-#define SBI_ENCLAVE_GET_ID	 407
-#define SBI_ENCLAVE_GET_MEM	 409
-
-/* 410 需两个参数 (enclave_id, mgmt_token), 见 request_shutdown.c. */
-#define SBI_ENCLAVE_REQUEST_SHUTDOWN 410
-/* 503 至 505: 宿主应答飞地挂起的模块请求, 三者均以 "飞地编号 + 管理令牌" 鉴权
- * (见 enclave_api/ext_mod/). */
-#define SBI_ENCLAVE_MODULE_REQ	503
-#define SBI_ENCLAVE_MODULE_SIZE 504
-#define SBI_ENCLAVE_MODULE_IMG	505
-
-/* ---- ioctl command codes (must match userspace tee_enclave.h) ---- */
-
-#define TEE_IOC_MAGIC			 'T'
-#define TEE_IOC_CREATE			 _IO(TEE_IOC_MAGIC, 0)
-#define TEE_IOC_ENTER			 _IOW(TEE_IOC_MAGIC, 1, struct tee_enclave_args)
-#define TEE_IOC_GET_ID			 _IOR(TEE_IOC_MAGIC, 2, unsigned long long)
-#define TEE_IOC_GET_MEM			 _IOR(TEE_IOC_MAGIC, 3, struct tee_mem_info)
-#define TEE_IOC_SUSPEND			 _IO(TEE_IOC_MAGIC, 4)
-#define TEE_IOC_RESUME			 _IOW(TEE_IOC_MAGIC, 5, struct tee_enclave_token_args)
-#define TEE_IOC_SHUTDOWN		 _IOW(TEE_IOC_MAGIC, 6, struct tee_enclave_token_args)
-#define TEE_IOC_REQUEST_SHUTDOWN _IOWR(TEE_IOC_MAGIC, 7, struct tee_enclave_token_args)
-#define TEE_IOC_CREATE_EX		 _IOWR(TEE_IOC_MAGIC, 8, struct tee_enclave_token_args)
-#define TEE_IOC_MODULE_REQ		 _IOWR(TEE_IOC_MAGIC, 9, struct tee_enclave_args)
-#define TEE_IOC_MODULE_SIZE		 _IOWR(TEE_IOC_MAGIC, 10, struct tee_enclave_args)
-#define TEE_IOC_MODULE_IMG		 _IOWR(TEE_IOC_MAGIC, 11, struct tee_enclave_args)
-
-/* argv 序列化上限: 防御恶意超大 argc 或超长字符串导致内核过量分配. */
-#define TEE_MAX_ARGC	  128
-#define TEE_MAX_ARGSTRLEN 4096
-
-struct tee_mem_info {
-	unsigned long long free_total;
-	unsigned long long max_contiguous;
-};
-
-/* {enclave_id, tee_token}被 CREATE_EX(400)、SHUTDOWN(403)、RESUME(405)、REQUEST_SHUTDOWN(410)
- * 共用, 令牌由M模式通过比对后才执行.
- *
- * CREATE_EX 的 enclave_id 是出参 (令牌入参), 其余三者两者皆入参;
- * 沿用 ABI 的 TEE_IOC_CREATE 只能登记令牌 0,
- * 故需要真令牌时用 TEE_IOC_CREATE_EX.
- */
-struct tee_enclave_token_args {
-	unsigned long long enclave_id;
-	unsigned long long token;
-};
-
-/* 模块请求的类别, 与 M 模式 ENCLAVE_MODULE_KIND_ 及用户态 tee_module_kind 对应.
- */
-#define TEE_MODULE_KIND_NONE 0
-#define TEE_MODULE_KIND_SIZE 1
-#define TEE_MODULE_KIND_LOAD 2
-
-/* 模块编号取该值表示无挂起请求. */
-#define TEE_MODULE_ID_NONE 0xFFFFFFFFULL
-
-/* ENTER 与模块三个命令 (MODULE_REQ / MODULE_SIZE / MODULE_IMG) 共用的参数结构体.
- * enclave_id 与 token 为四者共有的入参: token 是创建该飞地时登记的管理令牌,
- * M 模式在锁内比对后才载入飞地;
- * 各命令的专属字段在匿名 union 中按命令取用. 505 号调用交付的字节写入该飞地的
- * S 模式运行时经 509 号调用登记的接收缓冲区, 其物理地址按该运行时自己的页表查询
- * 得到, 宿主不指定. */
-struct tee_enclave_args {
-	unsigned long long enclave_id;
-	unsigned long long token;
-	union {
-		/* ENTER: 载荷指针与长度, 以及交给载荷的 argv. */
-		struct {
-			unsigned long long payload_ptr;
-			unsigned long long payload_size;
-			unsigned long long argc;
-			unsigned long long argv_ptr;
-		} enter;
-		/* MODULE_REQ: 模块编号与请求类别均为出参. */
-		struct {
-			unsigned long long module_id;
-			unsigned long long kind;
-		} req;
-		/* MODULE_SIZE: size 为入参, 取 0 表示宿主侧不存在该模块; status 为出参. */
-		struct {
-			unsigned long long size;
-			unsigned long long status;
-		} size;
-		/* MODULE_IMG: buf_ptr 与 size 为入参 (用户缓冲区), 其余为出参.
-		 * 505 号调用还以 a2 回传实际写入的字节数, 而内核的 sbi_ecall 只取回
-		 * a0 与 a1, 故该值不回传用户态; 成功时它等于入参 size (见
-		 * ext_mod/load.c), 飞地侧另经 508 号调用读取它. */
-		struct {
-			unsigned long long buf_ptr;
-			unsigned long long size;
-			unsigned long long status;
-			unsigned long long pa;
-		} image;
-	};
-};
-
-/* ---- 转入飞地期间的 RCU 静默态 ----
- *
- * CREATE / CREATE_EX / ENTER / RESUME 成功时把控制交给飞地, 直到飞地 SUSPEND
- * 或结束才回到本驱动, 期间该 hart 一直在 M 模式驻留, 而内核对它的视角仍是
- * "在线且在内核上下文". 于是 RCU 在 stall 阈值过半后开始等待本 hart 报静止态
- *
- * 该区间可能先包含 M 模式内的等待: 目标飞地已被另一个 hart 承载, 或 CREATE
- * 所争用的空闲槽位与空闲分区尚未同时具备时, 请求方 hart 入队后在本区间内等待,
- * 条件成立才继续把这次请求做完, 见固件的 enclave_ext/req_queue.h. SHUTDOWN 的
- * 等待也属这一类: 它不转入飞地, 但同样在 M 模式内驻留到目标飞地消失. 故本区间
- * 的长度不由本飞地的一次运行决定, 而由其它 hart 的进度决定, 无上界.
- *
- * 按 KVM 处理客户机态的做法, 在这五个 ecall 前后成对标记: tee_guest_enter 让 RCU
- * 不再等待本 hart 进入 RCU 扩展静默态, tee_guest_exit 在控制交还后恢复.
- * 两者要求关中断 且 current->mm 非空.
+/*
+ * tee_guest_enter 让 RCU 不再等待本 hart 进入 RCU 扩展静默态,
+ * tee_guest_exit 在控制交还后恢复. 两者要求关中断 且 current->mm 非空.
  * 关中断同时使这期间到达的宿主 IPI 推迟到控制交还之后处理.
  *
  * 用 local_irq_save/restore 而非 disable/enable: 交还与进入时的中断状态一致.
@@ -167,13 +53,17 @@ static inline struct sbiret sbi_enclave_ecall_5(
 	unsigned long a1_val,
 	unsigned long a2_val,
 	unsigned long a3_val,
-	unsigned long a4_val) {
+	unsigned long a4_val
+) {
 	return sbi_ecall(
-		SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, a4_val, 0);
+		SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, a4_val, 0
+	);
 }
 
-/* ENTER 需六个参数: a0..a4 为 enclave_id/argc/argv/payload/载荷长度,
- * a5 为管理令牌. */
+/* ENTER 需六个参数:
+ * a0..a4 为 enclave_id,argc,argv,payload地址,载荷长度,
+ * a5 为管理令牌.
+ */
 static inline struct sbiret sbi_enclave_ecall_6(
 	unsigned long func_id,
 	unsigned long a0_val,
@@ -181,34 +71,39 @@ static inline struct sbiret sbi_enclave_ecall_6(
 	unsigned long a2_val,
 	unsigned long a3_val,
 	unsigned long a4_val,
-	unsigned long a5_val) {
+	unsigned long a5_val
+) {
 	return sbi_ecall(
-		SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, a4_val, a5_val);
+		SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, a4_val, a5_val
+	);
 }
 
 static inline struct sbiret sbi_enclave_ecall_2(
 	unsigned long func_id,
 	unsigned long a0_val,
-	unsigned long a1_val) {
+	unsigned long a1_val
+) {
 	return sbi_ecall(SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, 0, 0, 0, 0);
 }
 
-/* MODULE_SIZE: a0..a2 为 enclave_id/token/映像字节数. */
+/* MODULE_SIZE: a0..a2 为 enclave_id,token,映像字节数. */
 static inline struct sbiret sbi_enclave_ecall_3(
 	unsigned long func_id,
 	unsigned long a0_val,
 	unsigned long a1_val,
-	unsigned long a2_val) {
+	unsigned long a2_val
+) {
 	return sbi_ecall(SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, 0, 0, 0);
 }
 
-/* MODULE_IMG: a0..a3 为 enclave_id/token/宿主缓冲区地址/映像字节数. */
+/* MODULE_IMG: a0..a3 为 enclave_id,token,宿主缓冲区地址,映像字节数. */
 static inline struct sbiret sbi_enclave_ecall_4(
 	unsigned long func_id,
 	unsigned long a0_val,
 	unsigned long a1_val,
 	unsigned long a2_val,
-	unsigned long a3_val) {
+	unsigned long a3_val
+) {
 	return sbi_ecall(SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, 0, 0);
 }
 
@@ -218,14 +113,16 @@ static inline struct sbiret sbi_enclave_ecall_0(unsigned long func_id) {
 
 static inline struct sbiret sbi_enclave_ecall_1(
 	unsigned long func_id,
-	unsigned long a0_val) {
+	unsigned long a0_val
+) {
 	return sbi_ecall(SBI_ENCLAVE_EXT_ID, func_id, a0_val, 0, 0, 0, 0, 0);
 }
 
 static int serialize_argv(
 	unsigned long long argv_ptr,
 	unsigned long long argc,
-	void **out_buf) {
+	void **out_buf
+) {
 	unsigned long *uargv = NULL;
 	size_t *lens		 = NULL;
 	void *buf			 = NULL;
@@ -245,10 +142,12 @@ static int serialize_argv(
 	if (!uargv) {
 		return -ENOMEM;
 	}
-	if (copy_from_user(
-			uargv,
-			(void __user *)(unsigned long)argv_ptr,
-			nargc * sizeof(unsigned long))) {
+	if (
+		copy_from_user(
+			uargv, (void __user *)(unsigned long)argv_ptr,
+			nargc * sizeof(unsigned long)
+		) //
+	) {
 		rc = -EFAULT;
 		goto out;
 	}
@@ -302,11 +201,6 @@ out:
 	return rc;
 }
 
-/* 飞地扩展专用的两个 SBI 错误码, 取值与固件的 enclave_types.h 一致.
-   两者都不在asm/sbi.h 内故需要在此定义. */
-#define SBI_ERR_ENCLAVE_QUEUE_FULL (-15)
-#define SBI_ERR_ENCLAVE_GONE	   (-16)
-
 /* SBI 错误码解释 */
 static int sbi_err_to_errno(long err) {
 	switch (err) {
@@ -344,18 +238,17 @@ static int sbi_err_to_errno(long err) {
 	}
 }
 
-/* ---- ioctl dispatch ---- */
-
 static long tee_ioctl(
 	struct file *filp,
 	unsigned int cmd,
-	unsigned long arg) {
+	unsigned long arg
+) {
 	struct sbiret ret;
 	long rc = 0;
 
 	switch (cmd) {
 
-	/* ---- CREATE: 创建新可信应用并移交控制权 ---- */
+	/* CREATE: 创建新可信应用并移交执行权 */
 	case TEE_IOC_CREATE: {
 		unsigned long ct_flags = tee_guest_enter();
 		ret					   = sbi_enclave_ecall_0(SBI_ENCLAVE_CREATE);
@@ -394,9 +287,9 @@ static long tee_ioctl(
 		}
 
 		if (copy_from_user(
-				payload_buf,
-				(void __user *)(unsigned long)kargs.enter.payload_ptr,
-				kargs.enter.payload_size)) {
+				payload_buf, (void __user *)(unsigned long)kargs.enter.payload_ptr,
+				kargs.enter.payload_size
+			)) {
 			rc = -EFAULT;
 			goto out_free_payload;
 		}
@@ -409,21 +302,16 @@ static long tee_ioctl(
 
 		unsigned long ct_flags = tee_guest_enter();
 		ret					   = sbi_enclave_ecall_6(
-			SBI_ENCLAVE_ENTER,
-			kargs.enclave_id,
-			kargs.enter.argc,
-			(unsigned long)argv_buf,
-			(unsigned long)payload_buf,
-			kargs.enter.payload_size,
-			kargs.token);
+			SBI_ENCLAVE_ENTER, kargs.enclave_id, kargs.enter.argc,
+			(unsigned long)argv_buf, (unsigned long)payload_buf, kargs.enter.payload_size,
+			kargs.token
+		);
 		tee_guest_exit(ct_flags);
 
 		if ((long)ret.error < 0) {
 			pr_err("tee_enclave: ENTER(401) failed, error=%ld\n", ret.error);
 			rc = sbi_err_to_errno((long)ret.error);
 		} else {
-			/* 控制已交还 host (a0 >= 0, 无 SBI 错误): a1 即运行状态枚举
-			 * tee_run_state, 作为 ioctl 返回值交给用户态分辨飞地情形. */
 			rc = (long)ret.value;
 		}
 
@@ -433,21 +321,24 @@ static long tee_ioctl(
 		return rc;
 	}
 
-	/* ---- GET_ID: query current mdid (0 = host) ---- */
+	/* ---- GET_ID: 获取当前mdid的值 */
 	case TEE_IOC_GET_ID: {
 		ret = sbi_enclave_ecall_0(SBI_ENCLAVE_GET_ID);
-		/* a0 = current enclave id */
+		/* a0 = 当前mdid的取值 */
 		if (copy_to_user((void __user *)arg, &ret.error, sizeof(unsigned long long))) {
 			return -EFAULT;
 		}
 		return 0;
 	}
 
-	/* ---- GET_MEM: query free memory pool (2 MiB units) ---- */
+	// GET_MEM: 查询可信应用内存池可用的容量
 	case TEE_IOC_GET_MEM: {
 		struct tee_mem_info info;
 		ret = sbi_enclave_ecall_0(SBI_ENCLAVE_GET_MEM);
-		/* a0 = free_total, a1 = max_contiguous */
+		/*
+            a0 = free_total,
+            a1 = max_contiguous
+        */
 		info.free_total		= ret.error;
 		info.max_contiguous = ret.value;
 		if (copy_to_user((void __user *)arg, &info, sizeof(info))) {
@@ -468,7 +359,7 @@ static long tee_ioctl(
 		return 0;
 	}
 
-	/* ---- RESUME: resume a suspended enclave by id ---- */
+	// RESUME: 按照enclave_id尝试恢复其执行
 	case TEE_IOC_RESUME: {
 		struct tee_enclave_token_args kargs;
 
@@ -478,12 +369,11 @@ static long tee_ioctl(
 		unsigned long ct_flags = tee_guest_enter();
 		ret = sbi_enclave_ecall_2(SBI_ENCLAVE_RESUME, kargs.enclave_id, kargs.token);
 		tee_guest_exit(ct_flags);
-		/* On success, transfers into enclave (does not return). */
 		if ((long)ret.error < 0) {
 			pr_err(
-				"tee_enclave: RESUME(405) id=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				ret.error);
+				"tee_enclave: RESUME(405) id=%llu failed, error=%ld\n", kargs.enclave_id,
+				ret.error
+			);
 			rc = sbi_err_to_errno((long)ret.error);
 		} else {
 			/* 同 ENTER: 控制已交还 host, a1 即运行状态枚举 tee_run_state. */
@@ -492,31 +382,24 @@ static long tee_ioctl(
 		return rc;
 	}
 
-	/* ---- SHUTDOWN: host-initiated enclave destruction ---- */
 	case TEE_IOC_SHUTDOWN: {
 		struct tee_enclave_token_args kargs;
-
 		if (copy_from_user(&kargs, (void __user *)arg, sizeof(kargs))) {
 			return -EFAULT;
 		}
-		/* 目标飞地仍被另一个 hart 承载时本 ecall 不立即返回: M 模式向该 hart 发出
-		 * 终止通知, 随后在本飞地的请求队列上等待到该编号的飞地消失为止, 见固件的
-		 * enclave_ext/req_queue.h. 故本调用返回即该飞地已不存在, 驱动不需要重试.
-		 * 该等待与本驱动其余四个转入飞地的调用同型, 故同样标记 RCU 静默态. */
 		unsigned long ct_flags = tee_guest_enter();
 		ret = sbi_enclave_ecall_2(SBI_ENCLAVE_SHUTDOWN, kargs.enclave_id, kargs.token);
 		tee_guest_exit(ct_flags);
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: SHUTDOWN(403) id=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				ret.error);
+				kargs.enclave_id, ret.error
+			);
 			return sbi_err_to_errno((long)ret.error);
 		}
 		return 0;
 	}
 
-	/* ---- CREATE_EX: 同 CREATE, 但由 host 指定管理令牌 ---- */
 	case TEE_IOC_CREATE_EX: {
 		struct tee_enclave_token_args kargs;
 
@@ -532,7 +415,7 @@ static long tee_ioctl(
 			pr_err("tee_enclave: CREATE_EX(400) failed, error=%ld\n", ret.error);
 			return sbi_err_to_errno((long)ret.error);
 		}
-		/* 同 CREATE: 成功时 a0 为 enclave_id (飞地 SUSPEND 交还后才走到这里). */
+		/* 同 CREATE: 成功时 a0 为 enclave_id. */
 		kargs.enclave_id = (unsigned long long)ret.error;
 		if (copy_to_user((void __user *)arg, &kargs, sizeof(kargs))) {
 			return -EFAULT;
@@ -540,12 +423,7 @@ static long tee_ioctl(
 		return 0;
 	}
 
-	/* ---- REQUEST_SHUTDOWN: 请求持有飞地的 hart 自行终止它 ----
-	 *
-	 * 与 SHUTDOWN 的分工: SHUTDOWN 由调用方所在 hart 直接终止, 飞地正跑在别的
-	 * hart 上时 M 模式会拒绝同步终止并转为本请求 (返回 -EACCES), 结果由那条
-	 * hart 上阻塞中的 ENTER/RESUME 回传. 本命令则是直接发起该请求: 不返回终止
-	 * 结果, 只表示请求已受理并经 IPI 送达, 令牌在 M 模式锁内校验后才置位. */
+	// REQUEST_SHUTDOWN: 请求持有飞地的 hart 终止
 	case TEE_IOC_REQUEST_SHUTDOWN: {
 		struct tee_enclave_token_args kargs;
 
@@ -554,21 +432,22 @@ static long tee_ioctl(
 		}
 
 		ret = sbi_enclave_ecall_2(
-			SBI_ENCLAVE_REQUEST_SHUTDOWN, kargs.enclave_id, kargs.token);
+			SBI_ENCLAVE_REQUEST_SHUTDOWN, kargs.enclave_id, kargs.token
+		);
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: REQUEST_SHUTDOWN(410) id=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				ret.error);
+				kargs.enclave_id, ret.error
+			);
 			return sbi_err_to_errno((long)ret.error);
 		}
 		return 0;
 	}
 
-	/* ---- MODULE_REQ: 取回飞地挂起的模块请求 (503) ----
-	 *
-	 * 读取不改动请求, 故宿主取映像文件失败后可在下次 RESUME 循环中重试 (见
-	 * ext_mod/req.c). 无挂起请求时 module_id 取 TEE_MODULE_ID_NONE. */
+	/*
+     * MODULE_REQ: 取回飞地挂起的模块请求 (503)
+	 * 读取映像文件失败后可在下次 RESUME 循环中重试
+	*/
 	case TEE_IOC_MODULE_REQ: {
 		struct tee_enclave_args kargs;
 
@@ -580,8 +459,8 @@ static long tee_ioctl(
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: MODULE_REQ(503) id=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				ret.error);
+				kargs.enclave_id, ret.error
+			);
 			return sbi_err_to_errno((long)ret.error);
 		}
 		kargs.req.module_id = (unsigned long long)ret.error;
@@ -605,13 +484,13 @@ static long tee_ioctl(
 		}
 
 		ret = sbi_enclave_ecall_3(
-			SBI_ENCLAVE_MODULE_SIZE, kargs.enclave_id, kargs.token, kargs.size.size);
+			SBI_ENCLAVE_MODULE_SIZE, kargs.enclave_id, kargs.token, kargs.size.size
+		);
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: MODULE_SIZE(504) id=%llu size=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				kargs.size.size,
-				ret.error);
+				kargs.enclave_id, kargs.size.size, ret.error
+			);
 			return sbi_err_to_errno((long)ret.error);
 		}
 		kargs.size.status = (unsigned long long)ret.error;
@@ -621,12 +500,12 @@ static long tee_ioctl(
 		return 0;
 	}
 
-	/* ---- MODULE_IMG: 交付映像字节 (505) ----
+	/* ---- MODULE_IMG: 传递映像字节 (505) ----
 	 *
 	 * M 模式经 sbi_load_* 在置位 MPRV 的条件下读取该缓冲区, 该系列只访问 U=0
-	 * 的页, 故用户缓冲区的页不可直接交给它, 先经内核缓冲区中转 (同 ENTER 的
-	 * 载荷). 写入的目标物理地址按该飞地的 S 模式运行时自己的页表查询得到, 用户态
-	 * 不指定. */
+	 * 的页, 故用户缓冲区的页不可直接交给它, 先经内核缓冲区中转.
+     * 写入的目标物理地址按该飞地的 S 模式运行时自己的页表查询得到, 用户态不指定.
+     */
 	case TEE_IOC_MODULE_IMG: {
 		struct tee_enclave_args kargs;
 		void *image_buf = NULL;
@@ -643,25 +522,22 @@ static long tee_ioctl(
 			return -ENOMEM;
 		}
 		if (copy_from_user(
-				image_buf,
-				(void __user *)(unsigned long)kargs.image.buf_ptr,
-				kargs.image.size)) {
+				image_buf, (void __user *)(unsigned long)kargs.image.buf_ptr,
+				kargs.image.size
+			)) {
 			rc = -EFAULT;
 			goto out_free_image;
 		}
 
 		ret = sbi_enclave_ecall_4(
-			SBI_ENCLAVE_MODULE_IMG,
-			kargs.enclave_id,
-			kargs.token,
-			(unsigned long)image_buf,
-			kargs.image.size);
+			SBI_ENCLAVE_MODULE_IMG, kargs.enclave_id, kargs.token,
+			(unsigned long)image_buf, kargs.image.size
+		);
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: MODULE_IMG(505) id=%llu size=%llu failed, error=%ld\n",
-				kargs.enclave_id,
-				kargs.image.size,
-				ret.error);
+				kargs.enclave_id, kargs.image.size, ret.error
+			);
 			rc = sbi_err_to_errno((long)ret.error);
 			goto out_free_image;
 		}
@@ -683,8 +559,6 @@ static long tee_ioctl(
 	return rc;
 }
 
-/* ---- file_operations ---- */
-
 static const struct file_operations tee_fops = {
 	.owner			= THIS_MODULE,
 	.unlocked_ioctl = tee_ioctl,
@@ -696,8 +570,7 @@ static struct miscdevice tee_miscdev = {
 	.fops  = &tee_fops,
 };
 
-/* ---- module lifecycle ---- */
-
+/// init
 static int __init tee_init(void) {
 	int rc = misc_register(&tee_miscdev);
 	if (rc) {
@@ -708,6 +581,7 @@ static int __init tee_init(void) {
 	return rc;
 }
 
+/// exit
 static void __exit tee_exit(void) {
 	misc_deregister(&tee_miscdev);
 	pr_info("tee_enclave: unloaded\n");
@@ -717,5 +591,5 @@ module_init(tee_init);
 module_exit(tee_exit);
 
 MODULE_LICENSE("Dual MIT/GPL");
-MODULE_AUTHOR("Abydos");
+MODULE_AUTHOR("Abydos Lab");
 MODULE_DESCRIPTION("TEE enclave driver interacting with sbi");

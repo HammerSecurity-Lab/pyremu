@@ -33,7 +33,7 @@ class MemoryChange:
 
 
 class MemWriteTracker:
-    """内存写入追踪器 — 代理 hart 的 _mem_write_phy, 记录旧值供指令回滚.
+    """内存写入追踪器 — 代理 hart 的 mem_write_phy, 记录旧值供指令回滚.
 
     在每条指令执行前实例化, 注入 hart 的写后端; 指令执行后取出 changes
     列表供 rollback 使用, 同时恢复原始写后端.

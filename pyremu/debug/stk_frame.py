@@ -82,8 +82,7 @@ class StackWalkOps(SharedAttrs):
             return 0
 
         # -- 尝试 ra-2: 16-bit 压缩调用 --
-        # 调用点位于被调用函数的代码段内, 该段可能只可执行, 故按取指语义读取
-        raw = self._try_read_code_va(ra - 2, 2)
+        raw = self._try_read_va(ra - 2, 2)
         if raw:
             h = int.from_bytes(raw, "little", signed=False)
             if (h & 0x3) != 3 and (
@@ -93,7 +92,7 @@ class StackWalkOps(SharedAttrs):
                 return ra - 2
 
         # -- 尝试 ra-4: 32-bit 调用 --
-        _ = self._try_read_code_va(ra - 4, 4)
+        _ = self._try_read_va(ra - 4, 4)
         return ra - 4
 
     # ----------------------------------------------------------
@@ -129,7 +128,7 @@ class StackWalkOps(SharedAttrs):
           sd x8, OFF(sp) / c.sdsp x8, OFF(sp)   -> fp_off = OFF
         的寄存器保存操作.  必须至少找到 RA 偏移才视为成功.
         """
-        raw = self._try_read_code_va(tvec, max_instrs * 4)
+        raw = self._try_read_va(tvec, max_instrs * 4)
         if raw is None:
             return None
 
@@ -223,34 +222,33 @@ class StackWalkOps(SharedAttrs):
             or saved_ra == 0
         )
 
-    def _resolve_prev_ra(self, frames: list[StackFrame], saved_ra: int) -> tuple[int, bool]:
-        """解析当前帧的调用者 RA.
+    def _append_live_ra_frame(self, frames: list[StackFrame], saved_ra: int) -> None:
+        """当前函数没有自己的帧时, 用寄存器 x1 补出调用者帧.
 
-        帧 #1 (len(frames)==1): 优先当前 hart 的 live x1 (ra);
-          若已被函数破坏则降级为栈上 *saved_ra*; 两者均无效时设
-          ra_corrupted=True 并返回最佳猜测值 (供 call_site 推算).
-        更深帧: 直接使用栈上 *saved_ra*.
-
-        Returns (prev_ra, ra_corrupted).
+        fp 指向调用者的帧, [fp-8] 保存的是调用者自己的返回地址; 当前函数的
+        返回地址只存在于 x1.
         """
-        # -- 更深帧: 直接使用栈上 saved_ra --
-        if len(frames) != 1:
-            ok = self._check_return_addr(saved_ra)
-            return saved_ra, (not ok)
-
-        # -- 帧 #1: 优先 live ra, 再 fallback 到栈上 saved_ra --
         live_ra = frames[0].ra
-        if self._check_return_addr(live_ra):
-            return live_ra, False
-        if self._check_return_addr(saved_ra):
-            return saved_ra, False
-        guess = live_ra if live_ra != 0 else saved_ra
-        return guess, True
+        if saved_ra == live_ra or not self._check_return_addr(live_ra):
+            return
+        frames.append(
+            StackFrame(
+                idx=len(frames),
+                fp=frames[0].fp,
+                sp=frames[0].sp,
+                ra=live_ra,
+                pc=self._call_site_pc(live_ra),
+                mode=frames[0].mode,
+            )
+        )
 
     def _append_ra_inferred_frames(self, frames: list[StackFrame]) -> None:
-        """FP 链终止后, 从最后有效 RA 推断额外调用者帧."""
+        """FP 链终止后, 从最后一帧的返回地址推断调用者帧."""
         choice = frames[-1] if len(frames) >= 1 else None
         if choice is None or not self._check_return_addr(choice.ra):
+            return
+        pc = self._call_site_pc(choice.ra)
+        if any(abs(f.pc - pc) <= 4 for f in frames):
             return
         frames.append(
             StackFrame(
@@ -258,7 +256,7 @@ class StackWalkOps(SharedAttrs):
                 fp=0,
                 sp=choice.fp,
                 ra=0,
-                pc=self._call_site_pc(choice.ra),
+                pc=pc,
                 mode=choice.mode,
                 note="无显式返回地址",
             )
@@ -290,6 +288,9 @@ class StackWalkOps(SharedAttrs):
                 break
             saved_ra, saved_fp = link
 
+            if len(frames) == 1:
+                self._append_live_ra_frame(frames, saved_ra)
+
             if self._is_invalid_link(
                 saved_fp,
                 saved_ra,
@@ -300,8 +301,8 @@ class StackWalkOps(SharedAttrs):
                 break
             visited.add(saved_fp)
 
-            prev_ra, ra_corrupted = self._resolve_prev_ra(frames, saved_ra)
-            call_site = self._call_site_pc(prev_ra)
+            call_site = self._call_site_pc(saved_ra)
+            ra_corrupted = not self._check_return_addr(saved_ra)
             note = "RA 可能已被当前函数覆盖 (非合法代码地址)" if ra_corrupted else ""
 
             if not _seen_lower_mode:

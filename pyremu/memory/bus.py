@@ -80,8 +80,21 @@ class Device(ABC):
         """
 
 
+def ranges_overlap(
+    st_a: int,
+    ed_a: int,
+    st_b: int,
+    ed_b: int,
+) -> bool:
+    """左闭右开区间 [st_a, ed_a) 与 [st_b, ed_b) 是否重叠.
+
+    端点相接不算重叠.
+    """
+    return st_a < ed_b and st_b < ed_a
+
+
 class AccessFaultError(Exception):
-    """PMA 访问违规 地址不在任何有效区域 (非内存、非设备)."""
+    """PMA 访问违规 地址不在任何有效区域."""
 
     def __init__(self, addr: int, is_write: bool = False) -> None:
         self.addr = addr
@@ -105,6 +118,10 @@ class BootRom(Device):
     def contains(self, addr: int) -> bool:
         """判定 addr 是否属于本设备的地址范围."""
         return self.base_addr <= addr < self.base_addr + self.size
+
+    def contains_range(self, addr: int, size: int) -> bool:
+        """判定区间 [addr, addr + size) 是否完整落在本设备的地址范围内."""
+        return self.contains(addr) and addr + size <= self.base_addr + self.size
 
     def load(self, ofs: int, data: bytes) -> None:
         """尝试将 data 写入自 ofs 起的位置.
@@ -225,6 +242,12 @@ class DirectRam:
             return True
         return self._pie_ofs_to_ram(addr, 1) is not None
 
+    def is_ram_range(self, addr: int, size: int) -> bool:
+        """
+        判断区间 [addr, addr + size) 是否完整落在 RAM 的范围[ram_base, ram_base + ram_size)内
+        """
+        return self._addr_in_range(addr, size, self._ram_base, self._ram_size)
+
     @staticmethod
     def _addr_in_range(addr: int, size: int, base: int, extent: int) -> bool:
         """判定区间 [*addr*, *addr* + *size*) 是否落在 [*base*, *base* + *extent*) 之内."""
@@ -238,10 +261,6 @@ class DirectRam:
 
     def read(self, addr: int, size: int) -> bytes:
         """直接从 RAM 读取 (绕过 L2 缓存)."""
-        # 越界地址在此处即行返回, 不进入 Rust 快路径. 调用方可能传入任意
-        # 64 位取值, 其中包含由栈帧指针一类故障现场算出的负数地址
-        # (如 bt 读 fp-16 得到 -1); 这类取值经 ctypes 转为无符号数后不再
-        # 落在任何窗口内, 由本判断挡在 FFI 之外.
         off = self._ram_offset(addr, size)
         if off is None:
             return b"\x00" * size
@@ -393,6 +412,14 @@ class Bus:
         # 登记.
         self._boot_rom: BootRom | None = None
 
+        # 存放映像的存储区间 — 每项为 (名称, 起址, 字节数). 主存在构造时登记,
+        # 引导只读存储器由 add_boot_rom 登记; 其余存储器 (例如静态随机存取存储器与
+        # 闪存) 注册时按同一形式登记. 调试器按这些区间判定符号文件能否部署到给定的
+        # 物理地址.
+        self._storage_intervals: list[tuple[str, int, int]] = [
+            ("主存", ram_base, ram_size),
+        ]
+
         # 若 L2 缓存存在, 注入 RAM 后端回调. L2 缓存只缓存 RAM, 不缓存设备.
         # 后端取 DirectRam 的方法而不取 Bus 的: Bus 持有 L2 缓存并按主存访问路径
         # 调用它, 后端再持有 Bus 的方法会使二者之间形成环形引用.
@@ -417,10 +444,29 @@ class Bus:
     # ----------------------------------------------------------
 
     def add_device(self, base_addr: int, device: Device) -> None:
-        """注册一个内存映射设备"""
+        """注册一个内存映射设备.
+
+        新设备的地址范围与 RAM、已注册设备的地址范围两两不重叠, 否则断言失败:
+        同一物理地址只能对应一条访问路径.
+        """
+        self._check_overlap(base_addr, device.size)
         device.base_addr = base_addr
         self._devices[base_addr] = device
         self._device_cache = None  # 下次 _find_device 时重建
+
+    def _check_overlap(self, base_addr: int, size: int) -> None:
+        """断言 [base_addr, base_addr + size) 不与 RAM 及已注册设备的范围重叠."""
+        end = base_addr + size
+        assert end <= self.ram_base or base_addr >= self.ram_end, (
+            f"设备地址范围 [0x{base_addr:x}, 0x{end:x}) "
+            f"与 RAM [0x{self.ram_base:x}, 0x{self.ram_end:x}) 重叠"
+        )
+        for other_base, other in self._devices.items():
+            other_end = other_base + other.size
+            assert end <= other_base or base_addr >= other_end, (
+                f"设备地址范围 [0x{base_addr:x}, 0x{end:x}) 与基址 0x{other_base:x} "
+                f"的设备地址范围 [0x{other_base:x}, 0x{other_end:x}) 重叠"
+            )
 
     def add_boot_rom(self, base_addr: int, size: int) -> BootRom:
         """在 *base_addr* 注册宽度为 *size* 的引导只读存储器, 返回该对象.
@@ -431,6 +477,7 @@ class Bus:
         rom = BootRom(size)
         self.add_device(base_addr, rom)
         self._boot_rom = rom
+        self._storage_intervals.append(("引导只读存储器", base_addr, size))
         return rom
 
     def _find_device(self, addr: int) -> tuple[Device | None, int]:
@@ -472,6 +519,14 @@ class Bus:
         """判断物理地址是否属于主存 (Main Memory)."""
         return self._ram_direct.is_ram_addr(addr)
 
+    def is_ram_range(self, addr: int, size: int) -> bool:
+        """判断区间 [addr, addr + size) 是否完整落在 RAM 窗口内."""
+        return self._ram_direct.is_ram_range(addr, size)
+
+    def is_rom_range(self, addr: int, size: int) -> bool:
+        """判断区间 [addr, addr + size) 是否完整落在引导只读存储器的窗口内."""
+        return self._boot_rom is not None and self._boot_rom.contains_range(addr, size)
+
     def is_device_addr(self, addr: int) -> bool:
         """判断物理地址是否属于 MMIO 设备区域 (不可缓存).
 
@@ -495,12 +550,28 @@ class Bus:
         return self.is_ram_addr(addr) or self.is_device_addr(addr)
 
     @property
+    def storage_intervals(self) -> tuple[tuple[str, int, int], ...]:
+        """返回存放映像的存储区间, 每项为 (名称, 起址, 字节数)."""
+        return tuple(self._storage_intervals)
+
+    def is_storage_range(self, addr: int, size: int) -> bool:
+        """判断区间 [addr, addr + size) 是否完整落在某个存储区间内."""
+        return any(
+            base <= addr and addr + size <= base + extent
+            for _name, base, extent in self._storage_intervals
+        )
+
+    @property
     def ram_base(self) -> int:
         return self._ram_direct._ram_base
 
     @property
     def ram_size(self) -> int:
         return self._ram_direct._ram_size
+
+    @property
+    def ram_end(self) -> int:
+        return self._ram_direct._ram_end
 
     @property
     def main_mem(self) -> MainMem:
@@ -568,7 +639,7 @@ class Bus:
         return self._l2.invalidate_all() if self._l2 is not None else 0
 
     # ----------------------------------------------------------
-    #  总线读写 (外部接口 — Hart 的 _mem_read_phy / _mem_write_phy 使用)
+    #  总线读写 (外部接口 — Hart 的 mem_read_phy / mem_write_phy 使用)
     # ----------------------------------------------------------
 
     def read(self, addr: int, size: int) -> bytes:

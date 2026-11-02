@@ -9,17 +9,10 @@ import struct
 
 import pytest
 
-from pyremu.core import trap_handler
+from pyremu.core import trap_def, trap_handler
 from pyremu.core.decoder import Hart
 from pyremu.core.hart import (
     RiscvMode,
-)
-from pyremu.core.mem_check_aux import (
-    inject_memory_backend,
-)
-from pyremu.core.trap_handler import (
-    trap_ebreak,
-    trap_ecall,
 )
 from pyremu.memory.bus import Bus
 from tests.test_trap.support import (
@@ -40,22 +33,22 @@ class TestEcallEbreak:
 
     def test_ecall_from_m_mode(self, hart):
         hart.mode = RiscvMode.M
-        trap_ecall(hart)
+        hart.trap_ecall()
         assert hart.mcause_val == 11, "M 模式 ecall -> mcause=11"
         assert hart.mepc_val == 0x2000
 
     def test_ecall_from_s_mode(self, hart):
         hart.mode = RiscvMode.S
-        trap_ecall(hart)
+        hart.trap_ecall()
         assert hart.mcause_val == 9, "S 模式 ecall -> mcause=9"
 
     def test_ecall_from_u_mode(self, hart):
         hart.mode = RiscvMode.U
-        trap_ecall(hart)
+        hart.trap_ecall()
         assert hart.mcause_val == 8, "U 模式 ecall -> mcause=8"
 
     def test_ebreak(self, hart):
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.mcause_val == 3, "ebreak -> mcause=3"
         assert hart.mtval_val == 0x2000, "mtval 应保存断点地址"
 
@@ -85,7 +78,8 @@ class TestSemihostingEbreak:
     def sh(self):
         bus = Bus(ram_size=0x100000, ram_base=0x80000000)
         hart = Hart(id=0)
-        inject_memory_backend(hart, bus.read, bus.write)
+        hart.mem_read_phy = bus.read
+        hart.mem_write_phy = bus.write
         hart.bus = bus
         hart.csrs["mtvec"].val = 0x80010000
         return hart, bus
@@ -104,7 +98,7 @@ class TestSemihostingEbreak:
         """无 marker 的 ebreak 维持断点 trap 语义."""
         hart, _ = sh
         hart.pc = self._EBREAK_PC
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.mcause_val == 3, "普通 ebreak -> mcause=3"
 
     def test_sys_write_emits_and_advances(self, sh, capfd):
@@ -118,7 +112,7 @@ class TestSemihostingEbreak:
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x05
         hart.gprs[11] = param
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert text in capfd.readouterr().err.encode()
         assert hart.gprs[10] == 0, "SYS_WRITE 成功 -> a0=0"
         assert hart.pc == self._EBREAK_PC + 8, "越过 ebreak + 退出 marker"
@@ -134,7 +128,7 @@ class TestSemihostingEbreak:
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x05
         hart.gprs[11] = param
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0xFFFF_FFFF_FFFF_FFFF, "越界缓冲 -> -1"
         assert hart.pc == self._EBREAK_PC + 8
         assert capfd.readouterr().err == ""
@@ -148,7 +142,7 @@ class TestSemihostingEbreak:
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x03
         hart.gprs[11] = param
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert capfd.readouterr().err == "Z"
         assert hart.gprs[10] == 0
         assert hart.pc == self._EBREAK_PC + 8
@@ -159,7 +153,7 @@ class TestSemihostingEbreak:
         self._place_ebreak(bus)
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x18
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert getattr(hart, "_semihosting_sys_exit", False) is True
         assert hart.mcause_val == 0, "SYS_EXIT 不得投递断点 trap"
 
@@ -174,7 +168,7 @@ class TestSemihostingEbreak:
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x18
         monkeypatch.setattr(trap_handler, "PYREMU_HAS_SEMIHOSTING", 0)
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.mcause_val == 3, "内联服务关闭 -> 断点 trap"
         assert hart.mepc_val == self._EBREAK_PC, "mepc 指向 ebreak 本身"
         assert hart.pc == 0x80010000, "跳转到 mtvec"
@@ -187,7 +181,7 @@ class TestSemihostingEbreak:
         self._place_ebreak(bus)
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x63
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0xFFFF_FFFF_FFFF_FFFF
         assert hart.pc == self._EBREAK_PC + 8
         assert capfd.readouterr().err == ""
@@ -206,7 +200,8 @@ class TestSemihostingBranches:
     def sh(self):
         bus = Bus(ram_size=0x1_0000, ram_base=0x8000_0000)
         hart = Hart(id=0)
-        inject_memory_backend(hart, bus.read, bus.write)
+        hart.mem_read_phy = bus.read
+        hart.mem_write_phy = bus.write
         hart.bus = bus
         hart.csrs["mtvec"].val = MTVEC
         hart.pc = self._EBREAK_PC
@@ -226,7 +221,7 @@ class TestSemihostingBranches:
     def test_missing_bus_falls_back_to_breakpoint(self, sh):
         hart, _ = sh
         hart.bus = None
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.mcause_val == 3
 
     def test_short_marker_read_falls_back_to_breakpoint(self, sh):
@@ -238,7 +233,7 @@ class TestSemihostingBranches:
                 return b"\x13"
 
         hart.bus = _ShortBus()
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.mcause_val == 3
 
     def test_writec_outside_ram_emits_nul(self, sh, capfd):
@@ -246,7 +241,7 @@ class TestSemihostingBranches:
         hart, _ = sh
         hart.gprs[10] = 0x03
         hart.gprs[11] = 0x9000_0000
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0
         assert capfd.readouterr().err == "\x00"
         assert hart.pc == self._EBREAK_PC + 8
@@ -255,7 +250,7 @@ class TestSemihostingBranches:
         hart, bus = sh
         hart.gprs[10] = 0x05
         hart.gprs[11] = self._write_param(bus, (1, 0x8000_3000, 0))
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0
         assert capfd.readouterr().err == ""
 
@@ -263,14 +258,14 @@ class TestSemihostingBranches:
         hart, bus = sh
         hart.gprs[10] = 0x05
         hart.gprs[11] = self._write_param(bus, (3, 0x8000_3000, 4))
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == SEMIHOSTING_ERR
         assert capfd.readouterr().err == ""
 
     def test_open_reports_valid_fd(self, sh):
         hart, _ = sh
         hart.gprs[10] = 0x01
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 1
         assert hart.pc == self._EBREAK_PC + 8
 
@@ -278,13 +273,13 @@ class TestSemihostingBranches:
         hart, bus = sh
         hart.gprs[10] = 0x09
         hart.gprs[11] = self._write_param(bus, (2,))
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 1
 
         hart.pc = self._EBREAK_PC
         hart.gprs[10] = 0x09
         hart.gprs[11] = self._write_param(bus, (3,))
-        trap_ebreak(hart)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0
 
     def test_stderr_failure_is_ignored(self, sh, monkeypatch):
@@ -295,7 +290,7 @@ class TestSemihostingBranches:
         def _raise_oserror(fd: int, data: bytes) -> int:
             raise OSError(5, "input/output error")
 
-        monkeypatch.setattr(trap_handler.os, "write", _raise_oserror)
-        trap_ebreak(hart)
+        monkeypatch.setattr(trap_def.os, "write", _raise_oserror)
+        hart.trap_ebreak()
         assert hart.gprs[10] == 0
         assert hart.pc == self._EBREAK_PC + 8

@@ -8,7 +8,8 @@
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import (
+from pyremu.core.hart import RiscvMode
+from pyremu.core.priv_defs import (
     MSTATUS_MIE,
     MSTATUS_MPIE,
     MSTATUS_MPP,
@@ -16,22 +17,13 @@ from pyremu.core.hart import (
     MSTATUS_SPIE,
     MSTATUS_SPP,
     MSTATUS_TW,
-    RiscvMode,
-)
-from pyremu.core.mem_check_aux import (
-    inject_memory_backend,
 )
 from pyremu.core.trap_def import TrapType
-from pyremu.core.trap_handler import (
-    deliver_trap,
-    trap_mret,
-    trap_sret,
-)
 from pyremu.memory.bus import Bus
 from pyremu.utils.disassem import Opc
 from tests.test_trap.support import (
-    make_hart,
     MTVEC,
+    STVEC,
 )
 
 
@@ -39,95 +31,100 @@ class TestMretSret:
     """验证从 trap 返回 (MRET/SRET) 的上下文恢复."""
 
     @pytest.fixture
-    def hart_after_m_trap(self) -> Hart:
+    def hart_after_m_trap(self, hart) -> Hart:
         """模拟: 从 M 模式进入 trap 后的 hart 状态."""
-        h = Hart(id=0)
-        h.csrs["mtvec"].val = 0x80000000
-        h.pc = 0x1000
-        h.mode = RiscvMode.M
-        h.mstatus_val = MSTATUS_MIE  # 初始 MIE=1
-        deliver_trap(h, TrapType.IllInstr, is_interrupt=False)
+        hart.csrs["mtvec"].val = 0x80000000
+        hart.pc = 0x1000
+        hart.mode = RiscvMode.M
+        hart.mstatus_val = MSTATUS_MIE  # 初始 MIE=1
+        hart.deliver_trap(TrapType.IllInstr, is_interrupt=False)
         # 现在 hart 在 trap handler 中, MPP=M, MPIE=1, MIE=0
-        return h
+        return hart
 
     def test_mret_restores_pc_and_mode(self, hart_after_m_trap):
         h = hart_after_m_trap
         assert h.mepc_val == 0x1000
-        trap_mret(h)
+        h.trap_mret()
         assert h.pc == 0x1000, "MRET 应恢复到 mepc"
         assert h.mode == RiscvMode.M, "MPP=M 应恢复到 M 模式"
 
     def test_mret_restores_mie_from_mpie(self, hart_after_m_trap):
         h = hart_after_m_trap
-        trap_mret(h)
+        h.trap_mret()
         assert h.mie is True, "MPIE=1 -> MIE 应恢复为 1"
 
     def test_mret_clears_mpp_to_u(self, hart_after_m_trap):
         h = hart_after_m_trap
-        trap_mret(h)
+        h.trap_mret()
         assert h.mpp == RiscvMode.U, "MRET 后 MPP 应重置为 U"
 
     def test_mret_preserves_mpie(self, hart_after_m_trap):
         h = hart_after_m_trap
-        trap_mret(h)
+        h.trap_mret()
         assert h.mpie is True, "MRET 后 MPIE 应为 1"
 
     @pytest.fixture
-    def hart_after_s_trap(self) -> Hart:
+    def hart_after_s_trap(self, hart) -> Hart:
         """通过 medeleg 委派获得 S 模式 trap 后的状态."""
-        h = Hart(id=0)
-        h.csrs["stvec"].val = 0x80004000
-        h.pc = 0x3000
-        h.mode = RiscvMode.S
-        h.mstatus_val = MSTATUS_SIE  # SIE=1 before trap
+        hart.csrs["stvec"].val = 0x80004000
+        hart.pc = 0x3000
+        hart.mode = RiscvMode.S
+        hart.mstatus_val = MSTATUS_SIE  # SIE=1 before trap
         # 委派 S 模式 ecall: medeleg[9]=1 -> trap 留在 S 模式
-        h.csrs["medeleg"].val = 1 << 9
-        deliver_trap(h, TrapType.EcallFromSmode, tval=0, is_interrupt=False)
-        return h
+        hart.csrs["medeleg"].val = 1 << 9
+        hart.deliver_trap(TrapType.EcallFromSmode, tval=0, is_interrupt=False)
+        return hart
 
     def test_sret_restores_pc_and_mode(self, hart_after_s_trap):
         h = hart_after_s_trap
-        trap_sret(h)
+        h.trap_sret()
         assert h.pc == 0x3000, "SRET 应恢复到 sepc"
         assert h.mode == RiscvMode.S, "SPP=S -> 应恢复到 S 模式"
 
     def test_sret_restores_sie_from_spie(self, hart_after_s_trap):
         h = hart_after_s_trap
-        trap_sret(h)
+        h.trap_sret()
         assert h.sie is True, "SPIE=1 -> SIE 应恢复为 1"
 
     def test_sret_clears_spp_to_u(self, hart_after_s_trap):
         h = hart_after_s_trap
-        trap_sret(h)
+        h.trap_sret()
         assert h.spp == RiscvMode.U, "SRET 后 SPP 应重置为 U"
 
 
 class TestSretBranches:
-    def test_sret_in_umode_traps_ill_instr(self):
-        h = make_hart(RiscvMode.U)
-        trap_sret(h)
-        assert h.mcause_val == 2
-        assert h.mtval_val == 0x10200073
-        assert h.pc == MTVEC
+    @pytest.fixture
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上设置陷态向量与 PC."""
+        hart.csrs["mtvec"].val = MTVEC
+        hart.csrs["stvec"].val = STVEC
+        hart.pc = 0x8000_4000
+        return hart
 
-    def test_sret_with_spie_clear_disables_sie(self):
-        h = make_hart(RiscvMode.S)
-        h.mstatus_val = MSTATUS_SIE | MSTATUS_SPP
-        h.sepc_val = 0x8000_5000
-        trap_sret(h)
-        assert h.mode is RiscvMode.S
-        assert not h.sie
-        assert h.mstatus_val & MSTATUS_SPIE
-        assert h.pc == 0x8000_5000
+    def test_sret_in_umode_traps_ill_instr(self, hart):
+        hart.mode = RiscvMode.U
+        hart.trap_sret()
+        assert hart.mcause_val == 2
+        assert hart.mtval_val == 0x10200073
+        assert hart.pc == MTVEC
 
-    def test_mret_with_mpie_clear_disables_mie(self):
-        h = make_hart()
-        h.mstatus_val = MSTATUS_MIE
-        h.mepc_val = 0x8000_6000
-        trap_mret(h)
-        assert not (h.mstatus_val & MSTATUS_MIE)
-        assert h.mstatus_val & MSTATUS_MPIE
-        assert h.pc == 0x8000_6000
+    def test_sret_with_spie_clear_disables_sie(self, hart):
+        hart.mode = RiscvMode.S
+        hart.mstatus_val = MSTATUS_SIE | MSTATUS_SPP
+        hart.sepc_val = 0x8000_5000
+        hart.trap_sret()
+        assert hart.mode is RiscvMode.S
+        assert not hart.sie
+        assert hart.mstatus_val & MSTATUS_SPIE
+        assert hart.pc == 0x8000_5000
+
+    def test_mret_with_mpie_clear_disables_mie(self, hart):
+        hart.mstatus_val = MSTATUS_MIE
+        hart.mepc_val = 0x8000_6000
+        hart.trap_mret()
+        assert not (hart.mstatus_val & MSTATUS_MIE)
+        assert hart.mstatus_val & MSTATUS_MPIE
+        assert hart.pc == 0x8000_6000
 
 
 class TestUmodePrivilegedInstructionTraps:
@@ -137,7 +134,8 @@ class TestUmodePrivilegedInstructionTraps:
     def h(self) -> Hart:
         bus = Bus(ram_size=0x10000, ram_base=0x80000000)
         hart = Hart(id=0)
-        inject_memory_backend(hart, bus.read, bus.write)
+        hart.mem_read_phy = bus.read
+        hart.mem_write_phy = bus.write
         hart.bus = bus
         hart.pc = 0x80000000
         hart.csrs["mtvec"].val = 0x80001000
@@ -231,79 +229,75 @@ class TestUmodePrivilegedInstructionTraps:
 class TestCsrrwRdRs1:
     """csrrw rd, csr, rs1 在 rd==rs1 时必须先读 rs1 再写 rd."""
 
-    def test_csrrw_rd_eq_rs1_preserves_new_value(self):
+    def test_csrrw_rd_eq_rs1_preserves_new_value(self, hart):
         """csrrw sp, sscratch, sp 应正确交换 sp 和 sscratch."""
 
-        h = Hart(id=0)
         # 用 mscratch (M-mode 可访问) 代替 sscratch 测试
         old_sp = 0x80101000
         old_scratch = 0x8000A000
-        h.gprs[2] = old_sp
-        h.write_csr(0x340, old_scratch)  # mscratch = old_scratch
+        hart.gprs[2] = old_sp
+        hart.write_csr(0x340, old_scratch)  # mscratch = old_scratch
 
         # 执行 csrrw sp, mscratch, sp
         instr_val = (0x340 << 20) | (2 << 15) | (1 << 12) | (2 << 7) | Opc.sys.value
-        h.exec_instr(instr_val)
+        hart.exec_instr(instr_val)
 
-        assert h.gprs[2] == old_scratch, (
-            f"csrrw 后 sp 应为旧 mscratch 值 0x{old_scratch:08x}, 实际 0x{h.gprs[2]:08x}"
+        assert hart.gprs[2] == old_scratch, (
+            f"csrrw 后 sp 应为旧 mscratch 值 0x{old_scratch:08x}, 实际 0x{hart.gprs[2]:08x}"
         )
-        assert h.csrs["mscratch"].val == old_sp, (
+        assert hart.csrs["mscratch"].val == old_sp, (
             f"csrrw 后 mscratch 应为旧 sp 值 0x{old_sp:08x}, "
-            f"实际 0x{h.csrs['mscratch'].val:08x}"
+            f"实际 0x{hart.csrs['mscratch'].val:08x}"
         )
 
-    def test_csrrw_rd_neq_rs1_still_works(self):
+    def test_csrrw_rd_neq_rs1_still_works(self, hart):
         """csrrw t0, mscratch, sp 在 rd!=rs1 时仍应正常工作."""
 
-        h = Hart(id=0)
         old_sp = 0x80101000
         old_scratch = 0x8000A000
-        h.gprs[2] = old_sp
-        h.write_csr(0x340, old_scratch)
+        hart.gprs[2] = old_sp
+        hart.write_csr(0x340, old_scratch)
 
         # csrrw t0, mscratch, sp  (rd=5, rs1=2)
         instr_val = (0x340 << 20) | (2 << 15) | (1 << 12) | (5 << 7) | Opc.sys.value
-        h.exec_instr(instr_val)
+        hart.exec_instr(instr_val)
 
-        assert h.gprs[5] == old_scratch, "rd(t0) 应为旧 CSR 值"
-        assert h.csrs["mscratch"].val == old_sp, "CSR 应写入 rs1(sp) 的原始值"
+        assert hart.gprs[5] == old_scratch, "rd(t0) 应为旧 CSR 值"
+        assert hart.csrs["mscratch"].val == old_sp, "CSR 应写入 rs1(sp) 的原始值"
 
-    def test_csrrs_rd_eq_rs1_preserves_rs1(self):
+    def test_csrrs_rd_eq_rs1_preserves_rs1(self, hart):
         """csrrs t0, mscratch, t0: rd==rs1 时 SET 位应使用原始 rs1 值."""
 
-        h = Hart(id=0)
         old_csr = 0x00000000
         rs1_orig = 0x0000000F  # t0 = 0xF (要 SET 的位)
-        h.gprs[5] = rs1_orig  # t0
-        h.write_csr(0x340, old_csr)
+        hart.gprs[5] = rs1_orig  # t0
+        hart.write_csr(0x340, old_csr)
 
         # csrrs t0, mscratch, t0  (rd=5, rs1=5)
         instr_val = (0x340 << 20) | (5 << 15) | (2 << 12) | (5 << 7) | Opc.sys.value
-        h.exec_instr(instr_val)
+        hart.exec_instr(instr_val)
 
-        assert h.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0, 实际 0x{h.gprs[5]:x}"
-        assert h.csrs["mscratch"].val == rs1_orig, (
-            f"CSR 应为 old|rs1=0x{rs1_orig:x}, 实际 0x{h.csrs['mscratch'].val:x}"
+        assert hart.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0, 实际 0x{hart.gprs[5]:x}"
+        assert hart.csrs["mscratch"].val == rs1_orig, (
+            f"CSR 应为 old|rs1=0x{rs1_orig:x}, 实际 0x{hart.csrs['mscratch'].val:x}"
         )
 
-    def test_csrrc_rd_eq_rs1_preserves_rs1(self):
+    def test_csrrc_rd_eq_rs1_preserves_rs1(self, hart):
         """csrrc t0, mscratch, t0: rd==rs1 时 CLEAR 位应使用原始 rs1 值."""
 
-        h = Hart(id=0)
         old_csr = 0x000000FF
         rs1_orig = 0x0000000F  # t0 = 0xF (要 CLEAR 的位)
-        h.gprs[5] = rs1_orig  # t0
-        h.write_csr(0x340, old_csr)
+        hart.gprs[5] = rs1_orig  # t0
+        hart.write_csr(0x340, old_csr)
 
         # csrrc t0, mscratch, t0  (rd=5, rs1=5)
         instr_val = (0x340 << 20) | (5 << 15) | (3 << 12) | (5 << 7) | Opc.sys.value
-        h.exec_instr(instr_val)
+        hart.exec_instr(instr_val)
 
         expected_csr = old_csr & ~rs1_orig  # 0xFF & ~0x0F = 0xF0
-        assert h.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0xFF, 实际 0x{h.gprs[5]:x}"
-        assert h.csrs["mscratch"].val == expected_csr, (
-            f"CSR 应为 0x{expected_csr:x}, 实际 0x{h.csrs['mscratch'].val:x}"
+        assert hart.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0xFF, 实际 0x{hart.gprs[5]:x}"
+        assert hart.csrs["mscratch"].val == expected_csr, (
+            f"CSR 应为 0x{expected_csr:x}, 实际 0x{hart.csrs['mscratch'].val:x}"
         )
 
 
@@ -313,11 +307,11 @@ class TestCsrPrivilege:
     SYS = Opc.sys.value  # 0x73
 
     @pytest.fixture
-    def hart(self) -> Hart:
-        h = Hart(id=0)
-        h.csrs["mtvec"].val = 0x80000000
-        h.pc = 0x1000
-        return h
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上设置 mtvec 与 PC."""
+        hart.csrs["mtvec"].val = 0x80000000
+        hart.pc = 0x1000
+        return hart
 
     # ---- 辅助: 构建 CSR 指令编码 ----
 
@@ -595,11 +589,11 @@ class TestSstatusMstatusLinkage:
     """
 
     @pytest.fixture
-    def hart(self) -> Hart:
-        h = Hart(id=0)
-        h.pc = 0x1000
-        h.mode = RiscvMode.S
-        return h
+    def hart(self, hart) -> Hart:
+        """通用 hart 之上设置 PC 与 S 模式."""
+        hart.pc = 0x1000
+        hart.mode = RiscvMode.S
+        return hart
 
     # ---- SPP 位联动 ----
 
@@ -660,7 +654,7 @@ class TestSstatusMstatusLinkage:
         hart.pc = 0x2000
         hart.mstatus_val = 0  # 清零 mstatus
 
-        deliver_trap(hart, TrapType.Breakpoint, hart.pc, is_interrupt=False)
+        hart.deliver_trap(TrapType.Breakpoint, hart.pc, is_interrupt=False)
 
         # 陷阱后 mstatus.SPP 应为 1 (来自 S 模式)
         assert hart.mstatus_val & MSTATUS_SPP, "S 模式 ebreak 陷阱后 mstatus.SPP 必须为 1"

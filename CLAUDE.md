@@ -73,12 +73,19 @@ pyremu/
     attrs.py                # 跨操作类的共享属性声明 (供静态分析)
 
   core/                     # 处理器核心
-    hart.py                 # HartWithRegs, RiscvMode, mstatus 位常量
-    decoder.py              # Hart(HartWithRegs), exec_instr(), 全部指令 handler 分发
-    trap_handler.py         # 独立陷态函数: deliver_trap, trap_ecall, trap_mret, trap_sret, handle_wfi, check_pending_interrupts
-    mem_check_aux.py        # 内存访问辅助函数 (mem_read/mem_write/validate_csr/translate_addr)
+    priv_defs.py            # RiscvMode 枚举与 mstatus 位常量
+    hart.py                 # HartWithRegs(MemoryAccessOps, TrapOps), CSR 快捷属性
+    decoder/                # 指令解码与执行 (见下)
+      hart.py               # Hart(HartWithRegs), exec_instr(), 32 位指令的 handler 分发
+      check_ext_isa.py      # 按平台声明的扩展判定该指令是否可解码执行
+      alu.py                # 纯 Python 算术表, 以及加速执行引擎与纯 Python 的选择
+      compressed.py         # 16 位压缩指令的 C0 / C1 / C2 三个象限
+      sys_ops.py            # 特权指令与 CSR 指令
+      mem_ops.py            # 加载与原子操作的取值辅助, decode_c_sdsp / decode_sd_sp
+    trap_handler.py         # TrapOps 操作类: deliver_trap, trap_ecall, trap_mret, trap_sret, handle_wfi, check_pending_interrupts
+    mem_check_aux.py        # MemoryAccessOps 操作类: mem_read/mem_write/validate_csr/translate_addr
     registers.py            # Reg, FPR, CSR 模型 + 工厂函数 + CSR 表
-    trap_def.py             # TrapType 枚举, cause code ↔ name 双向映射
+    trap_def.py             # TrapType 枚举, cause code ↔ name 双向映射, 中断优先级与 semihosting 常数
     diag.py                 # sret/mret 返回 U 模式时的寄存器状态跟踪 (环境变量门控)
 
   memory/                   # 内存子系统
@@ -120,10 +127,16 @@ pyremu/
     wrapper.py              # 异常处理装饰器: seize_* / silent_on_err / print_exc_on_err / die_if_err
     str_aux.py              # 格式化辅助: fmt_addr, fmt_hexdump
     parse_bin.py            # 固件解析 (ELF/PE/raw binary, 基于 LIEF)
-    dtb.py                  # Flat Device Tree (FDT/DTB) 生成器 — 构建 DTB blob
     mask.py                 # 位宽掩码 — mask64/mask32, 统一截断点
     regname.py              # GPR/CSR 名称查找, 独立于 core.registers 以断开循环导入
+    isa.py                  # ISA 字符串解析, 扩展名到开关与 misa 取值的编码
     tick.py                 # 时钟辅助 — yield_cpu 让出 CPU
+    dev_tree/               # 设备树: 解析、读取、回写与生成
+      parser/               # 内置 DTS 解析器 (BSD-3-Clause, 由 Zephyr 的 dtlib.py 拆分)
+      chip.py               # 从芯片 DTS 读取平台参数 (ChipDt / ChipPeriph / DtRegion)
+      rewrite.py            # 以芯片树为底改写为交给受调试程序的 DTB
+      build.py              # 按平台配置生成 DTB blob (libfdt)
+      fdt_node.py           # pyfdt 节点树上的属性读写与单元格编解码
 
   _native/                  # Rust 加速执行引擎 (多指令连续执行 + termio)
     cpu/                    # 指令批处理与陷阱处理
@@ -185,55 +198,73 @@ PlatformConfig (platform.py) — dataclass, 描述 CPU 拓扑、内存布局、�
 ├── CpuConfig / MemoryConfig / PeripheralConfig / IsaConfig
 └── 工厂方法: qemu_virt(), sifive_u54(), dump_json/toml/yaml()
 
-HartWithRegs (core/hart.py)
+TrapOps (core/trap_handler.py) — 陷态投递、陷态返回、WFI 与中断检查
+MemoryAccessOps (core/mem_check_aux.py) — 访存、CSR 校验与地址翻译, 继承 TrapOps
+
+HartWithRegs (core/hart.py)  ← 组合 MemoryAccessOps 与 TrapOps
     gprs[32], fprs[32], csrs (name->CSR), itlb/dtlb,
     pc, mode, _bus: Bus, _interrupt_ctrl: InterruptController,
-    _mem_read_phy, _mem_write_phy,
+    mem_read_phy, mem_write_phy,
     reservation (LR/SC), _halted, _waiting
     mstatus/mtvec/mepc/mcause/… 快捷 property
-└── Hart (core/decoder.py)  ← 仅继承 HartWithRegs
+└── Hart (core/decoder/hart.py)  ← 组合 CompressedInstrOps 与 SysInstrOps
         exec_instr() -> 返回 2/4 (PC 需推进) 或 0 (PC 已被修改)
-        调用 mem_check_aux 中的独立函数: mem_read(hart, va, size) /
-        mem_write(hart, va, data) / validate_csr(hart, addr, write)
-        调用 trap_handler 中的独立函数: deliver_trap(hart, ...) /
-        trap_ecall(hart) / handle_wfi(hart) 等
+        访存与陷态处理直接调用 hart 自身的方法: mem_read(va, size) /
+        mem_write(va, data) / validate_csr(addr, is_write) / deliver_trap(...) /
+        trap_ecall() / handle_wfi(instr) 等
         handle_alu/handle_op_imm/handle_op32/handle_ld/handle_st/
-        handle_br/handle_jalr/handle_sys/handle_fence/handle_amo/
-        handle_compressed -> _handle_compressed_c0/_c1/_c2
+        handle_br/handle_jalr/handle_sys/handle_fence/handle_amo 等
+        算术委托 alu.py 的 exec_alu/exec_op_imm/exec_op32/exec_op_imm32,
+        压缩指令由 compressed.py 的 CompressedInstrOps 提供 exec_compressed,
+        特权与 CSR 指令由 sys_ops.py 的 SysInstrOps 提供 exec_sys,
+        加载与原子操作的取值取自 mem_ops.py
 ```
+
+操作类的划分沿用 [pyremu/debug/](pyremu/debug/) 的做法: 方法定义留在原模块,
+由 hart 类组合进来, 调用方以 hart 自身为接收者. `HartWithRegs` 的模块依赖顺序为
+`priv_defs -> trap_def -> trap_handler -> mem_check_aux -> hart`; `Hart` 另依赖
+`compressed` 与 `sys_ops`, 两个模块只导入 `HartWithRegs` 的注解所需类型. 依赖顺序与
+组合顺序一致, 不构成循环导入.
 
 ### Instruction execution flow
 
 `Hart.exec_instr(instr: int) -> int`:
 
-1. 若 `parse_compressed(instr)` -> `handle_compressed(instr & 0xFFFF)` -> 按象限 (C0/C1/C2) 分发.
-2. 否则按 `Opc(parse_opcode(instr))` 分发到对应 handler.
-3. 任何 `ValueError` / `NotImplementedError` (非法编码、未实现 opcode) 统一转为 `deliver_trap(self, TrapType.IllInstr, ...)`.
-4. 返回 0 (PC 已修改, 如跳转/trap) 或 2/4 (调用方负责 `pc += advance`).
+1. `decode_fields(instr)` 一次性取出全部字段, 一次 FFI 调用替代逐个字段提取.
+2. `check_ext_isa(f, self.ratified_hart_attrs.isa_ext_switches)` 判定该指令所属扩展是否在平台声明之内;
+   未声明时投递 `IllInstr` 并返回 0. 压缩指令与 32 位指令共用这一处判定, 加速执行引擎在
+   `hart_sched.rs` 的主循环中以 `check_ext_isa.rs` 作同一判定, 两侧的编码到扩展的对应关系必须逐一对应.
+3. 字段 `is_compressed` 为真 -> `self.exec_compressed(instr & 0xFFFF)` -> 按象限 (C0/C1/C2) 分发.
+4. 否则按字段 `opcode` 查 `_DISPATCH` 分发到对应 handler.
+5. 任何 `ValueError` / `NotImplementedError` (非法编码、未实现 opcode) 统一转为 `self.deliver_trap(TrapType.IllInstr, ...)`.
+6. 返回 0 (PC 已修改, 如跳转/trap) 或 2/4 (调用方负责 `pc += advance`).
 
-**字段提取器** (module-level, decoder.py):
+**字段解码**: 执行侧由 [pyremu/_native/__init__.py](pyremu/_native/__init__.py) 的 `decode_fields`
+给出 `DecodedFields`; 反汇编侧使用 [pyremu/utils/disassem.py](pyremu/utils/disassem.py) 的
 `parse_opcode`, `parse_rd`, `parse_func3`, `parse_rs1`, `parse_rs2`, `parse_func7`,
 `parse_imm12_se`, `parse_imm_s`, `parse_imm_b`, `parse_imm_j`, `parse_imm20_raw`,
-`parse_compressed` (低 2 位 ≠ 3 -> 16-bit), `_sext(val, bits)`.
+`parse_compressed` (低 2 位 ≠ 3 -> 16-bit); `sext(val, bits)` 与各 `mask*` 位于
+[pyremu/utils/mask.py](pyremu/utils/mask.py).
 
-**枚举**: `Opc`, `aluOp`, `sysOp`, `brFn3`, `ldFn3`, `stFn3`, `sysFn12`, `AmoFunct5`, `AmoWidth`.
+**枚举**: `Opc`, `BrFn3`, `LdFn3`, `StFn3`, `SysFn12`, `AmoFunct5`, `AmoWidth`, 均定义于
+[pyremu/utils/disassem.py](pyremu/utils/disassem.py) 并附同名 `*_MAP` 反查表.
 
 ### Memory translation & PMA
 
-内存访问通过 `mem_check_aux.py` 中的独立函数完成 (hart 为显式第一参数):
+内存访问通过 hart 自身的方法完成, 方法定义在 `mem_check_aux.py` 的 `MemoryAccessOps`:
 
 ```
-mem_read(hart, va, size) / mem_write(hart, va, data)
-  -> _translate_addr(hart, va)
+hart.mem_read(va, size) / hart.mem_write(va, data)
+  -> hart.translate_addr(va)
       -> satp.MODE == Bare -> VA 即 PA (直接通过)
       -> hart.dtlb.lookup(vpn)  -> hit: 返回 PA
       -> miss: translate_va() -> sv39_walk(root_ppn, va) -> 3 级页表遍历
               L1 (VPN[2]) -> L2 (VPN[1]) -> L3 (VPN[0])
               支持 4 KiB 叶子页和 2 MiB 超级页
               -> 结果插入 TLB
-      -> 翻译失败 -> deliver_trap(hart, InstrPageFault / LdPageFault / StPageFault, ...)
+      -> 翻译失败 -> deliver_trap(InstrPageFault / LdPageFault / StPageFault, ...)
   -> PMP 检查 -> PMA 检查
-  -> hart._mem_read_phy(pa, size) / hart._mem_write_phy(pa, data)
+  -> hart.mem_read_phy(pa, size) / hart.mem_write_phy(pa, data)
   -> Bus.read/write -> 设备 MMIO (直通) -> L2 缓存 -> RAM
 ```
 
@@ -251,38 +282,39 @@ mem_read(hart, va, size) / mem_write(hart, va, data)
 
 ### Trap handling & delegation
 
-全部陷态处理函数位于 [core/trap_handler.py](pyremu/core/trap_handler.py), 以 hart 为显式第一参数的独立函数 (遵循"避免 mixin 隐式依赖"原则):
+全部陷态处理方法定义在 [core/trap_handler.py](pyremu/core/trap_handler.py) 的 `TrapOps`, 由 `HartWithRegs` 组合, 以 hart 自身为接收者:
 
-`deliver_trap(hart, cause, tval, is_interrupt)` — 委派感知的陷态入口:
+`hart.deliver_trap(cause, tval, is_interrupt)` — 委派感知的陷态入口:
 
 1. **委派检查**: 若 `mode != M` 且 `medeleg[exc_code]` (异常) 或 `mideleg[exc_code]` (中断) 置位 -> 委派到 S 模式
 2. **S 模式投递** (`_trap_deliver_smode`): 保存到 `sepc`/`scause`/`stval`, 更新 `SPIE`/`SIE`/`SPP`, 切换到 S 模式, 跳转 `stvec`
 3. **M 模式投递** (`_trap_deliver_mmode`): 保存到 `mepc`/`mcause`/`mtval`, 更新 `MPIE`/`MIE`/`MPP`, 切换到 M 模式, 跳转 `mtvec`
 4. M 模式下发生的 trap **永不委派**
 
-`check_pending_interrupts(hart)`:
+`hart.check_pending_interrupts()`:
 - 完整优先级: MEI > MSI > MTI > SEI > SSI > STI
 - 已委派中断需 S 模式全局使能 (`SIE`); 非委派 M 级中断可抢占 S 模式
 
-`trap_ecall(hart)`: 根据 `hart.mode` 分发 `EcallFromUmode` / `Smode` / `Mmode`.
+`hart.trap_ecall()`: 根据当前特权级分发 `EcallFromUmode` / `Smode` / `Mmode`.
 
-`trap_mret(hart)`: 恢复 `mode ← MPP`, `MIE ← MPIE`, `pc ← mepc`.
+`hart.trap_mret()`: 恢复 `mode ← MPP`, `MIE ← MPIE`, `pc ← mepc`.
 
-`trap_sret(hart)`: 恢复 `mode ← SPP`, `SIE ← SPIE`, `pc ← sepc`.
+`hart.trap_sret()`: 恢复 `mode ← SPP`, `SIE ← SPIE`, `pc ← sepc`.
 
-`handle_wfi(hart)`: 若 `mstatus.TW=1` 且非 M 模式 -> IllInstr; 若已有待处理中断 -> 立即返回 (NOP); 否则 hart 进入 `_waiting` 状态.
+`hart.handle_wfi(instr)`: 若 `mstatus.TW=1` 且非 M 模式 -> IllInstr; 若已有待处理中断 -> 立即返回 (NOP); 否则 hart 进入 `_waiting` 状态.
 
 > 连续执行 (run/continue) 无指令配额与连续 trap 兜底 (与 QEMU 一致): 死循环 /
 > 非法指令 trap loop 不会自动暂停 hart, 由停止条件 (断点命中 / semihosting 停机 /
 > 全部 hart halted / 时钟源超时) 或外部设备暂停事件 (Ctrl+Q) 终止执行.
 
-**trap_def.py** 提供: `TrapType` 枚举 (14 异常 + 10 中断), `trap_cause_code(trap) -> int`, `trap_is_interrupt(trap) -> bool`, `trap_cause_name(mcause_val) -> str` (mcause 值 -> 可读名称).
+**trap_def.py** 提供: `TrapType` 枚举 (14 异常 + 10 中断), `trap_cause_code(trap) -> int`, `trap_is_interrupt(trap) -> bool`, `trap_cause_name(mcause_val) -> str` (mcause 值 -> 可读名称), 以及中断优先级 `INT_PRIORITY`、硬件中断源占用的 mip 位 `HW_MIP_MASK` 与 semihosting 序列常数.
 
 ## Debugger (rvdb)
 
 交互式 RISC-V 调试器, 入口为 [debugger.py](pyremu/debugger.py), 实现在 [pyremu/debug/](pyremu/debug/) 中由多个操作类组合而成.
 
 **依赖**: `prompt_toolkit` (REPL: 方向键历史, Tab 补全, FileHistory 持久化), `rich` (Console, Table, Panel — 彩色格式化输出).
+命令历史写入 `PYREMU_HISTORY_FILE` 给出的路径, 该路径在 [mk/emu-feats.mk](mk/emu-feats.mk) 中配置; 未配置时为 `~/.pyremu_history`.
 
 **设计原则**: Emulator 是纯执行引擎 (无 I/O), Debugger 负责所有用户界面和状态呈现.
 
@@ -381,9 +413,15 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 ### 看门狗
 
-- 寄存器: WDOG_CTRL (0x00), WDOG_TIMEOUT (0x04), WDOG_COUNT (0x08), WDOG_KICK (0x0C)
-- WDOG_COUNT 只读; 写 WDOG_KICK 把计数重置为 WDOG_TIMEOUT
-- WDOG_CTRL 只有 bit0 被读取, 即使能; 其余位当前不参与判定
+- 寄存器: WDOG_CTRL (0x00), WDOG_TIMEOUT (0x04), WDOG_COUNT (0x08), WDOG_KICK (0x0C);
+  每个 hart 一段, stride 0x10, 设备大小为 hart 数乘以 0x10
+- 计数单位是 `TIMER_FREQ` 个 tick, 依据宿主单调时钟, 由设备自带的守护线程等待至最早的
+  到期时刻, 寄存器写入与停止请求唤醒它重算
+- WDOG_CTRL bit0 使能, bit1 到期后自动重装; 复位值为 0, 即复位后不使能
+- WDOG_COUNT 只读; 写 WDOG_KICK 重装该 hart 的计数并撤销其到期标志
+- 任一 hart 到期时拉高中断线, 中断源编号 `WATCHDOG_IRQ = 4`, 由 PLIC 或 APLIC 投递;
+  设备不写 CLINT 的 msip
+- 基址取 0 即不注册该设备, 设备树中也不生成节点
 
 ### 随机数发生器
 
@@ -418,15 +456,17 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 ## Flat Device Tree (FDT/DTB)
 
-[pyremu/utils/dtb.py](pyremu/utils/dtb.py) — 基于 libfdt 的 DTB 生成器.
+[pyremu/utils/dev_tree/](pyremu/utils/dev_tree/) — 设备树的解析、读取、回写与生成.
 
-- 使用 `libfdt.FdtSw` 顺序 API (`begin_node/end_node/property_string/property_u32/property`) 构建设备树
-- Emulator 在初始化外设后可选通过 `build_dtb()` 生成 DTB 并加载到 RAM
+- `build.py` 使用 `libfdt.FdtSw` 顺序 API (`begin_node/end_node/property_string/property_u32/property`) 按平台配置构建设备树
+- `chip.py` 从芯片 DTS 文本读出平台参数; `rewrite.py` 以该树为底写入模拟器装配出的 RAM 窗口、保留区间与 `/chosen`, 交给受调试程序的设备树由此给出
+- `parser/` 是由 Zephyr Project 的 `dtlib.py` 拆分而来的 DTS 解析器, 版权声明与许可条款见同目录下的 LICENSE, 许可证为 BSD-3-Clause
+- Emulator 在初始化外设后可选通过 `build_default_dtb()` 生成 DTB 并加载到 RAM
 - DTB 地址写入 `a1` (x11) 寄存器供固件使用
 
 ## Testing
 
-共 2977 个用例, 分布于 13 个顶层测试文件与 9 个测试子目录, 计数取自
+共 3164 个用例, 分布于 14 个顶层测试文件与 9 个测试子目录, 计数取自
 `pytest --collect-only`。
 
 测试子目录仅在该子系统的测试源达到 1000 行及以上时建立; 未达到时合并为单个顶层
@@ -436,8 +476,8 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 | 文件 | 用例数 | 覆盖内容 |
 |------|-------|---------|
-| test_legacy_debugger.py | 327 | 旧版调试器 REPL 命令分发, 反汇编, 断点, PC 校验, 栈回溯, 符号表, info/status |
-| test_emulator.py | 216 | 多 hart 执行循环, 固件加载, 内存 dump, PC 推进, store 指令写入 RAM, AUIPC sign-extend 回归, M->S 模式切换, PMP 配置, WFI 低功耗等待, UART 输出, 汇编反汇编集成, GPR 值规范化回归, FFI struct 布局 |
+| test_legacy_debugger.py | 332 | 旧版调试器 REPL 命令分发, 反汇编, 断点, PC 校验, 栈回溯, 符号表, info/status |
+| test_emulator.py | 222 | 多 hart 执行循环, 固件加载, 内存 dump, PC 推进, store 指令写入 RAM, AUIPC sign-extend 回归, M->S 模式切换, PMP 配置, WFI 低功耗等待, UART 输出, 汇编反汇编集成, GPR 值规范化回归, FFI struct 布局 |
 | test_native.py | 167 | 纯 Python 路径的 ALU/OpImm/Op32/OpImm32 分支, 非法编码陷态, 分支与访存编码, CSR 立即数形式, 浮点关闭时的陷态, 与 Rust 加速执行引擎的差分对照 |
 | test_disasm.py | 81 | 所有指令格式反汇编, 含 R/I/S/B/U/J, CSR, 特权, AMO, 浮点与压缩 |
 | test_multihart_diff.py | 39 | 多 hart 差分测试; 与其余用例共享状态, 在完整套件运行中单独排除 |
@@ -445,6 +485,7 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 | test_lottery_boot.py | 11 | 多 hart UART 行缓冲与 OpenSBI 彩票启动 |
 | test_cache_base.py | 10 | CacheBase/CacheLineBase 抽象接口 |
 | test_preempt.py | 8 | 短时间片抢占下进程交替执行与结果正确性 |
+| test_dev_tree.py | 19 | 芯片设备树回写为 DTB: 节点读写与单元格编解码, `/memory` 取装配的 RAM 窗口, 根节点单元格数加宽, `/reserved-memory` 与 `/chosen` 的内容, 缺少文件头与根节点名称的源文本 |
 | test_dtb.py | 6 | `/memory` 与 `/reserved-memory` 节点的 reg 编码, reserved-memory 各情形的生成 |
 | test_multihart.py | 5 | 多 hart 启动与定时器中断 |
 | test_initrd.py | 4 | initramfs 接入 |
@@ -456,11 +497,11 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 |------|-------|---------|
 | test_calc/ | 312 | test_compressed_diff 107, test_compressed 94, test_zbb 45, test_amo 28, test_fpu 26, test_amo_encoding 12. 压缩指令及其与非压缩等效指令的差分, Zbb 位操作, LR/SC 与 AMO, F/D 浮点 |
 | test_cache/ | 126 | test_mdid 43, test_l2cache 36, test_tlb 20, test_l2cache_stress 18, test_tlb_shootdown 5, test_l2_coherence 4. MDID CSR 与域隔离, L2 MESI 状态与回写, TLB 查找/替换/刷新, 跨核 TLB shootdown 同步 |
-| test_debugger/ | 676 | test_mem 124, test_sym 79, test_base 67, test_cli 63, test_sym_cmds 55, test_breakpoint 43, test_sym_elf_idx 43, test_sym_loader 29, test_reg 28, test_tlb_cache 28, test_mmu_view 24, test_sym_model 24, test_utils 24, test_exec 18, test_status 18, test_types 9. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 调试器数据类型, 多来源符号 |
+| test_debugger/ | 741 | test_mem 124, test_sym_cmds 105, test_sym 79, test_cli 76, test_base 67, test_breakpoint 43, test_sym_elf_idx 43, test_sym_loader 29, test_reg 28, test_tlb_cache 28, test_mmu_view 24, test_sym_model 24, test_utils 24, test_exec 20, test_status 18, test_types 9. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 调试器数据类型, 多来源符号 |
 | test_env_inject/ | 8 | Preloader 注入与 shellcode 片段 |
 | test_interrupt/ | 207 | test_imsic 49, test_plic 38, test_aia_integration 23, test_ipi_chain 22, test_clint 16, test_controller 15, test_aplic 12, test_aia_config 10, test_aia_csr_gate 7, test_irq_sink 7, test_native_plic_sync 5, test_aia 3. IMSIC, PLIC, APLIC, CLINT, IPI 投递链, AIA 配置与 CSR 门控, 加速执行引擎的 PLIC 状态同步 |
 | test_mem_access/ | 152 | test_pmp 61, test_mmu 56, test_mem_check_aux 26, test_pmp_smp 9. PTE 与 Sv39 三级页表遍历, 超级页, Bare 模式, PMP 编解码与权限, 多 hart PMP 隔离, counteren 门控与跨页访问 |
-| test_peripheral/ | 248 | test_virtio_blk 42, test_virtio_net 41, test_uart 38, test_i2c 25, test_watchdog 22, test_gpio 21, test_bus 19, test_spi 17, test_crng 16, test_virtio_net_dtb 7. virtio 块设备与网卡, 描述符链成环保护, UART, 总线读写与 PMA 检查, CRNG, 网卡设备树节点 |
+| test_peripheral/ | 248 | test_virtio_blk 42, test_virtio_net 41, test_uart 38, test_i2c 25, test_watchdog 28, test_gpio 21, test_bus 19, test_spi 17, test_crng 16, test_virtio_net_dtb 7. virtio 块设备与网卡, 描述符链成环保护, UART, 总线读写与 PMA 检查, CRNG, 网卡设备树节点 |
 | test_trap/ | 281 | test_memory_fault 61, test_privilege 55, test_wfi 48, test_delivery 34, test_interrupt 33, test_stack_overflow 20, test_ecall 19, test_cause 9, test_sfence 2. trap cause code 编解码, `deliver_trap` M/S 投递与委派, mtvec/stvec direct/vectored, ECALL/EBREAK/MRET/SRET, CSR 特权级检查, 访存对齐/PMA 故障, 缺页异常, 定时器中断与 `stimecmp`, MSIP 投递, WFI, 栈溢出 |
 | test_utils/ | 76 | test_configs_aux 17, test_wrapper 17, test_mask 10, test_str_aux 10, test_file_ops 9, test_regname 7, test_tick 6. 配置辅助, 异常装饰器, 位宽掩码, 格式化, 文件路径, 寄存器名称, 时钟 |
 
@@ -565,8 +606,8 @@ s_trap_handler:
 ```python
 def make_pte(flags, ppn):
     val = flags
-    val |= (ppn & 0x3FF) << 10           # PPN[9:0]  -> bits[19:10]
-    val |= ((ppn >> 10) & 0x1FF) << 20   # PPN[18:10] -> bits[28:20]
+    val |= (ppn & 0x3FF) << 10  # PPN[9:0]  -> bits[19:10]
+    val |= ((ppn >> 10) & 0x1FF) << 20  # PPN[18:10] -> bits[28:20]
     val |= ((ppn >> 19) & 0x1FFFFFFF) << 29  # PPN[43:19] -> bits[53:29]
     return val
 ```
@@ -696,40 +737,6 @@ csrw medeleg, t0
 **归档格式**: `docs/CHANGELOG.md` 仅作索引, 条目按月存放于 [docs/changelogs/](docs/changelogs/)
 (`YYYY-MM.md`, 最新在前)。新增修复记录写入当月文件顶部, 当月文件不存在时新建并在索引表登记。
 
-## Planned: RVV 1.0 Vector Extension (opcode 0x57)
-
-RISC-V "V" 向量扩展为 RV64 基础 ISA 增加 ~200 条向量指令, 操作数宽度从 8-bit 到 64-bit, 支持 LMUL (1/2/4/8) 分组、mask/tail 策略。关键 opcode: `0x57` (OP-V)。
-
-**当前状态**: 未实现。任何 V 扩展指令命中 `Opc` 枚举未覆盖的 opcode 0x57, 经 `exec_instr()` -> `ValueError` -> `IllInstr` 陷态。
-
-**已知影响**: 本仓库中的 `custom_opensbi_fw_payload.elf` 已以 `-march=rv64imac` 重编译, 产物不含 V 扩展指令, 不再触发此问题. 直接从上游编译的 PLATFORM=generic 固件若以含 `v` 的 `-march` 构建, 仍会命中此路径, 须改为 `-march=rv64imac`.
-
-**实现计划 (低优先级)**:
-- Phase 1: `vsetivli` / `vsetvl` / `vsetvli` — 配置向量长度, 基本 CSR (vl/vtype/vstart/vxsat/vxrm/vcsr)
-- Phase 2: 向量 load/store (`vle8.v`/`vse8.v` 等 unit-stride, 宽度 × LMUL)
-- Phase 3: 向量整数算术 (vadd/vsub/vmul/vand/vor/vxor 等, .vv/.vx/.vi)
-- Phase 4: 向量 permute (vrgather/vslide/vmerge/vid.v 等)
-- Phase 5: 向量浮点 (vfadd/vfmul 等, 需 F/D 扩展先就绪)
-
-**关键 opcode**:
-- `0x57`: OP-V (向量算术/配置)
-- `0x27`: OP-FV (向量浮点, 需 F/D)
-- `0x07`: vector load
-- `0x27`: vector store
-
-**参考**: RISC-V V 规范 1.0 (https://github.com/riscv/riscv-v-spec), RVV intrinsics in LLVM 22+.
-
-## OpenSBI firmware compatibility
-
-[build/elf/custom_opensbi_fw_payload.elf](build/elf/custom_opensbi_fw_payload.elf) (`make build-fw` 产出) 是一个自定义 OpenSBI build (PLATFORM=generic):
-- 入口点 0x0, 静态 PIE, 段从 0x0 展开
-- 内置 `sbi_domain` 框架 (domain 注册/启动/内存区域/PMP 隔离)
-- `.sittim` (0x180000, 512 KiB): enclave 管理器占位段 (全零, 未链接实际代码)
-- `.payload` (0x200000, 8 KiB): 微型测试 payload (SBI ecall 打印)
-- 需要 `ram_base=0` 加载, FDT 通过 a1 传入 (需含 `/chosen/stdout-path`)
-- **已修复**: V 扩展指令已通过 `-march=rv64imac` 重编译移除; `_sext` 规范化 bug 修复后固件可成功通过 `fw_platform_init` 到达 `_start_hang`
-- 启动流程: `_start` -> `fw_boot_hart`(-1) -> `_try_lottery`(AMOSWAP) -> PIE 重定位 -> BSS 零填充 (约 800 KB, ~300K 指令) -> `_scratch_init` -> `fw_platform_init` (FDT 解析 `/cpus`, `/chosen`, 遍历子节点) -> `_fdt_reloc_done`(设 `_boot_status=1`) -> `_start_warm` -> `sbi_init()` -> `_start_hang`(WFI 空闲)
-
 ## Code style
 
 - **函数签名**: 左括号 `(` 和返回类型 `) -> Type:` 各自独占一行, 参数逐行缩进.
@@ -745,6 +752,8 @@ RISC-V "V" 向量扩展为 RV64 基础 ISA 增加 ~200 条向量指令, 操作�
   引用时使用包名加成员全名: `package.member`, 或 `from module import member` 后直接用其本名.
   本模块已定义同名符号时, 首选取模块全名引用, 如 `from package import module` 后写 `module.member`.
   确需起别名时, 别名不得带前导下划线形成私有变量, 且应当以适当、公认的缩略方式给出.
+- **新增函数的位置**: 先判定它与调用方是否无关; 无关的函数放入公共模块, 由各调用方导入,
+  不因方便而留在本次改动的文件里. 与某个操作类共享状态时才作为该类的成员函数.
 - **测试命名**: `test_<what>_<outcome>` 或 `test_<outcome>`.
 - **文件行数上限**: 功能代码 (非测试) 单文件不超过 1500 行; 超过则拆分为 mixin 或模块.
 - **函数行数上限**: 承载业务逻辑的函数 (非测试/命令分发/配置) 不超过 80 行; 超出则提取辅助函数.
@@ -776,20 +785,6 @@ RISC-V "V" 向量扩展为 RV64 基础 ISA 增加 ~200 条向量指令, 操作�
     bnez s0, putdec_loop
 ```
 
-### 避免 mixin 的隐式依赖
-
-当 mixin 需要宿主类提供大量属性 (导致 `Requires the host class to provide:` 注释和静态分析告警),
-优先转为独立函数, 将对象作为显式第一参数:
-
-```python
-# ❌ mixin — self.pc, self._pmp, self.dtlb 等来自父类, 静态分析不可见
-class MemoryAccessor:
-    def _mem_read(self, addr, size): ...
-
-# ✅ 独立函数 — hart 参数类型明确, 所有属性可追溯
-def mem_read(hart: HartWithRegs, addr: int, size: int) -> bytes: ...
-```
-
 ### 异常处理: 在源头封装, 而非在各调用方分散
 
 当多个调用方围绕同一 API 重复 try/except 时, 应在 API 层提供安全包装:
@@ -800,11 +795,11 @@ def mem_read(hart: HartWithRegs, addr: int, size: int) -> bytes: ...
 def foo(): ...
 # 不太合理的做法
 def foo():
-	try:
-		...
-	except Exception as e:
-		print(e)
-		return
+    try:
+        ...
+    except Exception as e:
+        print(e)
+        return
 ```
 
 ## Error handling

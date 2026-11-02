@@ -114,21 +114,17 @@ class StatusOps(SharedAttrs):
         tbl.add_row("MODE", str(mode), mode_names.get(mode, f"保留({mode})"))
         self._console.print(tbl)
 
-    # ----------------------------------------------------------
-    #  mip / mie / sip / sie
-    # ----------------------------------------------------------
-
     def cmd_mip(self) -> None:
-        self._show_ip("mip", self.hart.csrs["mip"].val)
+        self._show_ip("mip", self.hart.read_csr_by_name("mip"))
 
     def cmd_mie(self) -> None:
-        self._show_ip("mie", self.hart.csrs["mie"].val)
+        self._show_ip("mie", self.hart.read_csr_by_name("mie"))
 
     def cmd_sip(self) -> None:
-        self._show_ip("sip", self.hart.csrs["sip"].val)
+        self._show_ip("sip", self.hart.read_csr_by_name("sip"))
 
     def cmd_sie(self) -> None:
-        self._show_ip("sie", self.hart.csrs["sie"].val)
+        self._show_ip("sie", self.hart.read_csr_by_name("sie"))
 
     def _show_ip(self, name: str, v: int) -> None:
         tbl = Table(title=f"{name} 内部字段", border_style="magenta")

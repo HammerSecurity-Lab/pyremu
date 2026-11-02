@@ -19,8 +19,9 @@ import pytest
 
 from pyremu.emulator import Emulator
 from pyremu.peripheral.virtio_net import VIRTIO_NET_M_IRQ, VIRTIO_NET_S_IRQ
-from pyremu.platform import PeripheralConfig, PlatformConfig
-from pyremu.utils import dtb
+from pyremu.platform import PlatformConfig
+from pyremu.utils.dev_tree import build
+from tests.conftest import make_test_config
 
 # 两个实例的 MMIO 基址 — 与 pyremu/debug/cli.py 的取值一致
 NET_S_BASE = 0x1000_7000
@@ -31,21 +32,16 @@ _IRQ_TYPE_LEVEL_HIGH = 0x4
 
 def _cfg(is_net_s: bool = True, is_net_m: bool = True) -> PlatformConfig:
     """构造只启用指定网卡实例的平台配置."""
-    cfg = PlatformConfig(
-        num_harts=1,
-        ram_base=0x8000_0000,
-        prog_cnt=0x8000_0000,
-        periph=PeripheralConfig(),
-    )
+    periph_fields: dict[str, int] = {}
     if is_net_s:
-        cfg.periph.virtio_net_s_base = NET_S_BASE
+        periph_fields["virtio_net_s_base"] = NET_S_BASE
     if is_net_m:
-        cfg.periph.virtio_net_m_base = NET_M_BASE
-    return cfg
+        periph_fields["virtio_net_m_base"] = NET_M_BASE
+    return make_test_config(**periph_fields)
 
 
 def _fdt(cfg: PlatformConfig) -> libfdt.Fdt:
-    return libfdt.Fdt(Emulator(cfg, bootargs="console=ttySIF0").build_dtb())
+    return libfdt.Fdt(Emulator(cfg, bootargs="console=ttySIF0").build_default_dtb())
 
 
 def _find(fdt: libfdt.Fdt, path: str) -> int:
@@ -78,7 +74,7 @@ class TestNetNodePresence:
     @pytest.fixture(autouse=True)
     def _legacy_cells(self, monkeypatch) -> None:
         """本类按 legacy 的中断单元数校验, 与编译期 AIA 开关无关."""
-        monkeypatch.setattr(dtb, "PYREMU_AIA", False)
+        monkeypatch.setattr(build, "PYREMU_AIA", False)
 
     def test_debuggee_side_node_present(self) -> None:
         """宿主侧实例的节点存在, 形制与 virtio-blk 节点一致."""
@@ -124,7 +120,7 @@ class TestNetNodeInterruptEncoding:
 
     def test_legacy_encoding_is_one_cell(self, monkeypatch) -> None:
         """legacy 下 APLIC 不在场, interrupts 取 PLIC 的一格编码."""
-        monkeypatch.setattr(dtb, "PYREMU_AIA", False)
+        monkeypatch.setattr(build, "PYREMU_AIA", False)
         fdt = _fdt(_cfg())
         node = _find(fdt, f"/soc/virtio@{NET_S_BASE:x}")
         raw = bytes(fdt.getprop(node, "interrupts"))
@@ -132,7 +128,7 @@ class TestNetNodeInterruptEncoding:
 
     def test_aia_encoding_is_two_cells(self, monkeypatch) -> None:
         """AIA 下 interrupts 取 APLIC 的 ``<中断源编号 flags>`` 两格编码."""
-        monkeypatch.setattr(dtb, "PYREMU_AIA", True)
+        monkeypatch.setattr(build, "PYREMU_AIA", True)
         fdt = _fdt(_cfg())
         node = _find(fdt, f"/soc/virtio@{NET_S_BASE:x}")
         raw = bytes(fdt.getprop(node, "interrupts"))

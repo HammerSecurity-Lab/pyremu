@@ -11,16 +11,14 @@
 
 import pytest
 
-from pyremu.core.hart import HartWithRegs, MSTATUS_MXR, MSTATUS_SUM, RiscvMode
+from pyremu.core.hart import HartWithRegs, RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
     AccessFaultError,
-    check_instruction_fetch,
-    inject_memory_backend,
-    mem_read,
-    mem_write,
     PageFaultError,
-    translate_addr,
-    validate_csr,
+)
+from pyremu.core.priv_defs import (
+    MSTATUS_MXR,
+    MSTATUS_SUM,
 )
 from pyremu.core.registers import CsrAccessError
 from pyremu.memory.bus import Bus
@@ -58,8 +56,8 @@ def _encode_ppn(ppn: int) -> int:
 
 
 def _write_pte(hart: HartWithRegs, pa: int, value: int) -> None:
-    assert hart._mem_write_phy is not None
-    hart._mem_write_phy(pa, value.to_bytes(8, "little"))
+    assert hart.mem_write_phy is not None
+    hart.mem_write_phy(pa, value.to_bytes(8, "little"))
 
 
 def _install_tables(
@@ -90,7 +88,8 @@ def _identity_leaves(page_count: int, flags: int = RWX) -> dict[int, tuple[int, 
 
 def _make_hart(bus: Bus, mode: RiscvMode = RiscvMode.S, pmpcfg: int = PMP_ALLOW_ALL):
     hart = HartWithRegs(id=0)
-    inject_memory_backend(hart, bus.read, bus.write)
+    hart.mem_read_phy = bus.read
+    hart.mem_write_phy = bus.write
     hart.bus = bus
     hart.mode = mode
     hart.pc = MTVEC
@@ -120,23 +119,23 @@ class TestCounterEnable:
         """0xC80-0xC9F 的高半计数器与低半共用 counteren 的同一位."""
         hart.mode = RiscvMode.S
         hart.csrs["mcounteren"].val = 1
-        validate_csr(hart, 0xC80)
+        hart.validate_csr(0xC80)
 
     def test_mmode_counter_read_ignores_counteren(self, hart):
         """M 模式读取计数器不受 mcounteren 约束."""
         hart.mode = RiscvMode.M
         hart.csrs["mcounteren"].val = 0
-        validate_csr(hart, 0xC00)
+        hart.validate_csr(0xC00)
 
     def test_umode_requires_both_counteren_bits(self, hart):
         """U 模式要求 mcounteren 与 scounteren 的同一位同时置位."""
         hart.mode = RiscvMode.U
         hart.csrs["mcounteren"].val = 1
         with pytest.raises(CsrAccessError):
-            validate_csr(hart, 0xC00)
+            hart.validate_csr(0xC00)
 
         hart.csrs["scounteren"].val = 1
-        validate_csr(hart, 0xC00)
+        hart.validate_csr(0xC00)
 
 
 # ============================================================
@@ -148,14 +147,14 @@ class TestPtePermissions:
     def test_umode_rejects_page_without_u_bit(self, hart):
         _install_tables(hart, _identity_leaves(1))
         hart.mode = RiscvMode.U
-        ok, _ = translate_addr(hart, DATA_VA)
+        ok, _ = hart.translate_addr(DATA_VA)
         assert not ok
 
     def test_smode_fetch_from_user_page_faults(self, hart):
         """S 模式从 U=1 页取指一律失败, 与 SUM 无关."""
         _install_tables(hart, _identity_leaves(1, RWX | PTE_U))
         hart.mstatus_val = MSTATUS_SUM
-        ok, _ = check_instruction_fetch(hart, DATA_VA)
+        ok, _ = hart.check_instruction_fetch(DATA_VA)
         assert not ok
         assert hart.mcause_val == 12
         assert hart.mtval_val == DATA_VA
@@ -163,22 +162,22 @@ class TestPtePermissions:
     def test_smode_data_access_to_user_page_follows_sum(self, hart):
         _install_tables(hart, _identity_leaves(1, RWX | PTE_U))
         hart.mstatus_val = 0
-        assert not translate_addr(hart, DATA_VA)[0]
+        assert not hart.translate_addr(DATA_VA)[0]
 
         hart.mstatus_val = MSTATUS_SUM
-        assert translate_addr(hart, DATA_VA)[0]
+        assert hart.translate_addr(DATA_VA)[0]
 
     def test_mxr_allows_reading_execute_only_page(self, hart):
         _install_tables(hart, _identity_leaves(1, PTE_X))
         hart.mstatus_val = 0
-        assert not translate_addr(hart, DATA_VA)[0]
+        assert not hart.translate_addr(DATA_VA)[0]
 
         hart.mstatus_val = MSTATUS_MXR
-        assert translate_addr(hart, DATA_VA)[0]
+        assert hart.translate_addr(DATA_VA)[0]
 
     def test_write_requires_r_and_w(self, hart):
         _install_tables(hart, _identity_leaves(1, PTE_R))
-        assert not translate_addr(hart, DATA_VA, is_write=True)[0]
+        assert not hart.translate_addr(DATA_VA, is_write=True)[0]
 
 
 # ============================================================
@@ -190,7 +189,7 @@ class TestEffectiveMode:
     def test_debug_mode_bypasses_translation(self, hart):
         _install_tables(hart, _identity_leaves(1))
         hart.mode = RiscvMode.D
-        ok, pa = translate_addr(hart, DATA_VA)
+        ok, pa = hart.translate_addr(DATA_VA)
         assert ok and pa == DATA_VA
 
     def test_mprv_with_supervisor_mpp_translates(self, hart):
@@ -198,14 +197,14 @@ class TestEffectiveMode:
         _install_tables(hart, {DATA_VPN0: (mapped_pa, RWX)})
         hart.mode = RiscvMode.M
         hart.mstatus_val = (1 << 17) | (RiscvMode.S.value << 11)
-        ok, pa = translate_addr(hart, DATA_VA)
+        ok, pa = hart.translate_addr(DATA_VA)
         assert ok and pa == mapped_pa
 
     def test_mprv_with_machine_mpp_bypasses_translation(self, hart):
         _install_tables(hart, _identity_leaves(1))
         hart.mode = RiscvMode.M
         hart.mstatus_val = (1 << 17) | (RiscvMode.M.value << 11)
-        ok, pa = translate_addr(hart, DATA_VA)
+        ok, pa = hart.translate_addr(DATA_VA)
         assert ok and pa == DATA_VA
 
 
@@ -219,7 +218,7 @@ class TestPageWalkDenied:
         hart = _make_hart(bus, pmpcfg=0)
         _install_tables(hart, _identity_leaves(1))
         with pytest.raises(AccessFaultError):
-            mem_read(hart, DATA_VA, 8)
+            hart.mem_read(DATA_VA, 8)
         assert hart.mcause_val == 5
         assert hart.mtval_val == DATA_VA
 
@@ -227,14 +226,14 @@ class TestPageWalkDenied:
         hart = _make_hart(bus, pmpcfg=0)
         _install_tables(hart, _identity_leaves(1))
         with pytest.raises(AccessFaultError):
-            mem_write(hart, DATA_VA, bytes(8))
+            hart.mem_write(DATA_VA, bytes(8))
         assert hart.mcause_val == 7
         assert hart.mtval_val == DATA_VA
 
     def test_fetch_reports_instruction_access_fault(self, bus):
         hart = _make_hart(bus, pmpcfg=0)
         _install_tables(hart, _identity_leaves(1))
-        ok, pa = check_instruction_fetch(hart, DATA_VA)
+        ok, pa = hart.check_instruction_fetch(DATA_VA)
         assert not ok and pa == 0
         assert hart.mcause_val == 1
         assert hart.mtval_val == DATA_VA
@@ -250,7 +249,7 @@ class TestTranslateEdges:
         """TLB 命中后按本次访问重新校验权限, 只读条目拒绝写入."""
         _install_tables(hart, _identity_leaves(1))
         hart.dtlb.insert(DATA_VA >> 12, DATA_VA >> 12, perm=PTE_R)
-        ok, pa = translate_addr(hart, DATA_VA, is_write=True)
+        ok, pa = hart.translate_addr(DATA_VA, is_write=True)
         assert not ok and pa == 0
 
     def test_debugger_translation_without_backend_fails(self):
@@ -258,25 +257,25 @@ class TestTranslateEdges:
         hart = HartWithRegs(id=0)
         hart.mode = RiscvMode.S
         hart.satp_val = (SATP_MODE_SV39 << 60) | ((RAM_BASE + 0x1000) >> 12)
-        ok, pa = translate_addr(hart, DATA_VA, is_hart_access=False)
+        ok, pa = hart.translate_addr(DATA_VA, is_hart_access=False)
         assert not ok and pa == 0
 
     def test_read_without_backend_raises_not_implemented(self):
         hart = HartWithRegs(id=0)
         with pytest.raises(NotImplementedError):
-            mem_read(hart, RAM_BASE, 8)
+            hart.mem_read(RAM_BASE, 8)
 
     def test_write_without_backend_raises_not_implemented(self):
         hart = HartWithRegs(id=0)
         with pytest.raises(NotImplementedError):
-            mem_write(hart, RAM_BASE, bytes(8))
+            hart.mem_write(RAM_BASE, bytes(8))
 
     def test_fetch_without_backend_reports_page_fault(self):
         hart = HartWithRegs(id=0)
         hart.mode = RiscvMode.S
         hart.csrs["mtvec"].val = MTVEC
         hart.satp_val = (SATP_MODE_SV39 << 60) | ((RAM_BASE + 0x1000) >> 12)
-        ok, pa = check_instruction_fetch(hart, DATA_VA)
+        ok, pa = hart.check_instruction_fetch(DATA_VA)
         assert not ok and pa == 0
         assert hart.mcause_val == 12
         assert hart.mtval_val == DATA_VA
@@ -284,7 +283,7 @@ class TestTranslateEdges:
     def test_fetch_with_invalid_pte_reports_page_fault(self, bus):
         hart = _make_hart(bus)
         hart.satp_val = (SATP_MODE_SV39 << 60) | ((RAM_BASE + 0x1000) >> 12)
-        ok, pa = check_instruction_fetch(hart, DATA_VA)
+        ok, pa = hart.check_instruction_fetch(DATA_VA)
         assert not ok and pa == 0
         assert hart.mcause_val == 12
         assert hart.mtval_val == DATA_VA
@@ -300,25 +299,25 @@ class TestCrossPage:
         _install_tables(hart, _identity_leaves(2))
         payload = bytes((i * 7) & 0xFF for i in range(0x2000))
         assert bus.try_write(DATA_VA, payload)
-        assert mem_read(hart, DATA_VA, 0x2000) == payload
+        assert hart.mem_read(DATA_VA, 0x2000) == payload
 
     def test_write_over_two_pages_splits_halves(self, bus, hart):
         _install_tables(hart, _identity_leaves(2))
         payload = bytes((i * 11) & 0xFF for i in range(0x2000))
-        mem_write(hart, DATA_VA, payload)
+        hart.mem_write(DATA_VA, payload)
         assert bus.try_read(DATA_VA, 0x2000) == payload
 
     def test_load_across_unmapped_page_reports_page_fault(self, bus, hart):
         _install_tables(hart, _identity_leaves(1))
         with pytest.raises(PageFaultError):
-            mem_read(hart, DATA_VA, 0x2000)
+            hart.mem_read(DATA_VA, 0x2000)
         assert hart.mcause_val == 13
         assert hart.mtval_val == DATA_VA + 0x1000
 
     def test_store_across_unmapped_page_reports_page_fault(self, bus, hart):
         _install_tables(hart, _identity_leaves(1))
         with pytest.raises(PageFaultError):
-            mem_write(hart, DATA_VA, bytes(0x2000))
+            hart.mem_write(DATA_VA, bytes(0x2000))
         assert hart.mcause_val == 15
         assert hart.mtval_val == DATA_VA + 0x1000
 
@@ -327,7 +326,7 @@ class TestCrossPage:
         hart = _make_hart(bus, pmpcfg=PMP_READ_ONLY)
         _install_tables(hart, _identity_leaves(2))
         with pytest.raises(AccessFaultError):
-            mem_write(hart, DATA_VA, bytes(0x2000))
+            hart.mem_write(DATA_VA, bytes(0x2000))
         assert hart.mcause_val == 7
         assert hart.mtval_val == DATA_VA
 
@@ -336,6 +335,54 @@ class TestCrossPage:
         leaves[DATA_VPN0 + 1] = (0x9000_0000, RWX)
         _install_tables(hart, leaves)
         with pytest.raises(AccessFaultError):
-            mem_read(hart, DATA_VA, 0x2000)
+            hart.mem_read(DATA_VA, 0x2000)
         assert hart.mcause_val == 5
         assert hart.mtval_val == DATA_VA
+
+
+# ============================================================
+#  Sstc 扩展的 CSR 存在性
+# ============================================================
+
+
+STIMECMP = 0x14D
+STIMECMPH = 0x15D
+STVEC = 0x105
+
+
+def _make_hart_without_sstc(bus: Bus) -> HartWithRegs:
+    """S 模式 hart, 平台声明的扩展集合不含 sstc."""
+    hart = _make_hart(bus)
+    hart.ratified_hart_attrs = RatifiedHartAttrs(
+        isa_exts={"i": True, "m": True, "a": True, "c": True}
+    )
+    return hart
+
+
+class TestSstcCsrExistence:
+    def test_stimecmp_read_traps_without_sstc(self, bus):
+        hart = _make_hart_without_sstc(bus)
+        with pytest.raises(CsrAccessError):
+            hart.validate_csr(STIMECMP, is_write=False)
+
+    def test_stimecmp_write_traps_without_sstc(self, bus):
+        hart = _make_hart_without_sstc(bus)
+        with pytest.raises(CsrAccessError):
+            hart.validate_csr(STIMECMP, is_write=True)
+
+    def test_stimecmph_read_traps_without_sstc(self, bus):
+        hart = _make_hart_without_sstc(bus)
+        with pytest.raises(CsrAccessError):
+            hart.validate_csr(STIMECMPH, is_write=False)
+
+    def test_stimecmp_accessible_with_sstc(self, bus):
+        """平台声明 sstc 时 stimecmp 与 stimecmph 均可访问."""
+        hart = _make_hart(bus)
+        hart.validate_csr(STIMECMP, is_write=False)
+        hart.validate_csr(STIMECMP, is_write=True)
+        hart.validate_csr(STIMECMPH, is_write=False)
+
+    def test_other_scsr_unaffected_without_sstc(self, bus):
+        """未被 sstc 门控的 S 模式 CSR 仍可读写."""
+        hart = _make_hart_without_sstc(bus)
+        hart.validate_csr(STVEC, is_write=True)

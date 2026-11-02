@@ -108,6 +108,74 @@ impl ImsicFile {
 }
 
 // ============================================================
+//  扩展开关
+// ============================================================
+
+/// 本 hart 声明的扩展开关, 每项一个布尔字段.
+///
+/// 由 Python 侧按平台 ISA 字符串编组, 引擎只读. 字段名与顺序必须与
+/// ``pyremu._native._ctypes.IsaExtsC`` 及 ``pyremu.utils.isa.ISA_EXT_FIELDS``
+/// 一致.
+#[repr(C)]
+pub struct IsaExts {
+	pub is_i: bool,
+	pub is_m: bool,
+	pub is_a: bool,
+	pub is_f: bool,
+	pub is_d: bool,
+	pub is_c: bool,
+	pub is_b: bool,
+	pub is_h: bool,
+	pub is_v: bool,
+	pub is_zicsr: bool,
+	pub is_zifencei: bool,
+	pub is_zbb: bool,
+	pub is_zba: bool,
+	pub is_zbs: bool,
+	pub is_zfh: bool,
+	pub is_zihpm: bool,
+	pub is_zicntr: bool,
+	pub is_sstc: bool,
+	pub is_smaia: bool,
+	pub is_ssaia: bool,
+	pub is_smepmp: bool,
+}
+
+#[cfg(test)]
+impl IsaExts {
+	/// 全部扩展开关打开的取值.
+	///
+	/// 实际运行时该字段由 Python 侧按平台 ISA 编组; 直接调用引擎的用例在
+	/// ``HartState`` 清零后缺少这一步, 需要显式取本值, 否则可选扩展的指令会
+	/// 被判为不存在.
+	pub fn all_enabled() -> Self {
+		IsaExts {
+			is_i: true,
+			is_m: true,
+			is_a: true,
+			is_f: true,
+			is_d: true,
+			is_c: true,
+			is_b: true,
+			is_h: true,
+			is_v: true,
+			is_zicsr: true,
+			is_zifencei: true,
+			is_zbb: true,
+			is_zba: true,
+			is_zbs: true,
+			is_zfh: true,
+			is_zihpm: true,
+			is_zicntr: true,
+			is_sstc: true,
+			is_smaia: true,
+			is_ssaia: true,
+			is_smepmp: true,
+		}
+	}
+}
+
+// ============================================================
 //  每个 hart 的状态
 // ============================================================
 
@@ -200,6 +268,12 @@ pub struct HartState {
 	pub itlb_misses: u64,
 	pub dtlb_hits: u64,
 	pub dtlb_misses: u64,
+
+	// ---- 本 hart 的扩展开关 ----
+	//
+	// 由 Python 在状态数组分配时写入一次, 引擎只读. 该字段描述平台的静态属性,
+	// 逐轮编组不重复写入, 引擎也不回写.
+	pub isa_exts: IsaExts,
 }
 
 // ============================================================
@@ -241,6 +315,7 @@ pub mod riscv_mode {
 mod tests {
 	use super::*;
 	use crate::ffi::InstrToBeExec;
+	use core::mem::offset_of;
 	use std::mem::{align_of, size_of};
 
 	#[test]
@@ -258,7 +333,6 @@ mod tests {
 	/// 逐一对应, 否则 marshal 时 Python 会写到错误的偏移而引发执行期间的异常.
 	#[test]
 	fn imsic_file_offsets_match_python_layout() {
-		use core::mem::offset_of;
 		// eip 与 eie 各 64 个 u32, 各占 256 字节.
 		assert_eq!(offset_of!(ImsicFile, eidelivery), 512);
 		assert_eq!(offset_of!(ImsicFile, eithreshold), 513);
@@ -266,6 +340,18 @@ mod tests {
 		assert_eq!(offset_of!(ImsicFile, present), 520);
 		assert_eq!(offset_of!(ImsicFile, eip_ext_any), 521);
 		assert_eq!(size_of::<ImsicFile>(), 524);
+	}
+
+	/// 扩展的字段偏移必须与 Python 侧 ``IsaExtsC`` 逐一对应; 两侧的
+	/// 字段总数、每项宽度与字段顺序若不相符, 引擎则会读到其他扩展上.
+	#[test]
+	fn isa_exts_offsets() {
+		assert_eq!(size_of::<IsaExts>(), 21);
+		assert_eq!(align_of::<IsaExts>(), 1);
+		assert_eq!(offset_of!(IsaExts, is_i), 0);
+		assert_eq!(offset_of!(IsaExts, is_zicsr), 9);
+		assert_eq!(offset_of!(IsaExts, is_sstc), 17);
+		assert_eq!(offset_of!(IsaExts, is_smepmp), 20);
 	}
 
 	#[test]
@@ -332,6 +418,29 @@ mod tests {
 			itlb_misses: 0,
 			dtlb_hits: 0,
 			dtlb_misses: 0,
+			isa_exts: IsaExts {
+				is_i: false,
+				is_m: false,
+				is_a: false,
+				is_f: false,
+				is_d: false,
+				is_c: false,
+				is_b: false,
+				is_h: false,
+				is_v: false,
+				is_zicsr: false,
+				is_zifencei: false,
+				is_zbb: false,
+				is_zba: false,
+				is_zbs: false,
+				is_zfh: false,
+				is_zihpm: false,
+				is_zicntr: false,
+				is_sstc: false,
+				is_smaia: false,
+				is_ssaia: false,
+				is_smepmp: false,
+			},
 		};
 		// AIA 使能时标记 IMSIC 状态可用, 使 sync_imsic() 与 imsic_topei_peek()
 		// 能读到 eip 与 eie 状态.

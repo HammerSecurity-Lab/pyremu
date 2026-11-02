@@ -12,8 +12,8 @@ import pytest
 
 from pyremu.configs_aux import examed_elf_dir, path_join
 from pyremu.emulator import Emulator
-from pyremu.platform import PlatformConfig
 from pyremu.utils.parse_bin import FirmwareImage, parse_firmware
+from tests.conftest import make_test_emu
 
 # ------------------------------------------------------------
 #  ANSI escape code stripping
@@ -75,11 +75,6 @@ def _run_lottery(emu: Emulator, cycles: int = _LOTTERY_CYCLES) -> list[str]:
     return cap.lines
 
 
-def _make_emu(num_harts: int = 4) -> Emulator:
-    """创建轻量多 hart 模拟器."""
-    return Emulator(PlatformConfig(num_harts=num_harts, ram_size=8 * 1024 * 1024))
-
-
 # ------------------------------------------------------------
 #  Fixtures
 # ------------------------------------------------------------
@@ -88,7 +83,7 @@ def _make_emu(num_harts: int = 4) -> Emulator:
 @pytest.fixture(scope="class")
 def emu_4h() -> Emulator:
     """4 hart 模拟器 — 类级别复用."""
-    return _make_emu(4)
+    return make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
 
 
 @pytest.fixture(scope="class")
@@ -131,7 +126,7 @@ class TestUartLineBuffering:
 
     def test_all_harts_produce_output(self, tmp_path):
         """所有 4 个 hart 都应有输出 — 通过日志文件验证 (控制台必然交错)."""
-        emu = _make_emu(4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         assert emu.uart is not None
         emu.uart.set_hart_log_dir(str(tmp_path))
         img = _cached_firmware(_LOTTERY_ELF)
@@ -153,7 +148,7 @@ class TestUartLineBuffering:
 
     def test_per_hart_log_files(self, tmp_path):
         """日志文件按 hart 隔离 — 每个 hart 的日志文件含其完整输出."""
-        emu = _make_emu(4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         assert emu.uart is not None
         cap = _Capture()
         emu.uart._tx_callback = cap
@@ -194,7 +189,7 @@ class TestLotteryBoot:
 
     def _hart_logs(self, tmp_path) -> dict[int, str]:
         """运行彩票启动, 返回每 hart 日志文件内容的 dict."""
-        emu = _make_emu(4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         assert emu.uart is not None
         emu.uart.set_hart_log_dir(str(tmp_path))
         img = _cached_firmware(_LOTTERY_ELF)
@@ -237,7 +232,7 @@ class TestLotteryBoot:
 
     def test_cold_hart_runs_before_others(self, tmp_path):
         """冷启动 hart 的 running 应出现在自身日志中, 且日志按 hart 隔离."""
-        emu = _make_emu(4)
+        emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
         assert emu.uart is not None
         emu.uart.set_hart_log_dir(str(tmp_path))
         img = _cached_firmware(_LOTTERY_ELF)
@@ -266,7 +261,7 @@ class TestLotteryBoot:
         输出, 在合并文本中应恰好出现一次.
         """
         for _ in range(3):
-            emu = _make_emu(4)
+            emu = make_test_emu(num_harts=4, ram_size=8 * 1024 * 1024)
             lines = _run_lottery(emu, cycles=_LOTTERY_CYCLES)
             all_text = "".join(lines)
             assert all_text.count("cold boot") == 1, (
@@ -275,7 +270,7 @@ class TestLotteryBoot:
 
     def test_single_hart(self):
         """单 hart 场景: 必然是冷启动, 不出现 warm boot."""
-        emu = _make_emu(1)
+        emu = make_test_emu(num_harts=1, ram_size=8 * 1024 * 1024)
         lines = _run_lottery(emu, cycles=_LOTTERY_CYCLES)
         all_text = "".join(lines)
         assert "cold boot" in all_text, "单 hart 应有 cold boot"

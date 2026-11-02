@@ -29,15 +29,14 @@ from pyremu.interrupt.controller import (
     IntStateVersion,
 )
 from pyremu.memory.bus import Device
-from pyremu.utils.mask import mask64
+from pyremu.utils.mask import mask64, read_u64_bytes, write_u64_bytes
 
-# CLINT 标准基址 (SiFive)
+# CLINT 标准基址
 CLINT_BASE = 0x0200_0000
 CLINT_SIZE = 0xC000  # 48 KiB
 
 # 中断优先级到 mip 位掩码的映射, 按优先级从高到低排列.
-# 预计算为 (mask, IntSource) 元组, 避免每条指令在 check_interrupt 中
-# 遍历 IntSource Enum 并做 dict 查找, profile 显示 Enum.__hash__ 每秒调用 6M 次.
+# 避免每条指令在 check_interrupt 中遍历 IntSource Enum 并做 dict 查找
 _INT_PRIORITY: list[tuple[int, IntSource]] = [
     (1 << 11, IntSource.MEI),  # MEIP
     (1 << 3, IntSource.MSI),  # MSIP
@@ -174,14 +173,14 @@ class CLINT(InterruptController, Device):
     def read(self, offset: int, size: int) -> bytes:
         """读取 CLINT 内存映射寄存器.
 
-        offset 是相对于 CLINT base_addr 的偏移.
+        offset 是相对于 CLINT base_addr 的偏移. 64 位寄存器内按字节偏移读取,
+        读取宽度小于寄存器宽度时返回自该偏移起的低字节.
         """
         # MSIP 区域: offset 0x0000..0x3FFC
         if offset < MTIMECMP_OFFSET:
             hart_id = offset // 4
             if 0 <= hart_id < self._num_harts:
-                val = self._msip[hart_id] & 1
-                return val.to_bytes(size, "little", signed=False)
+                return read_u64_bytes(self._msip[hart_id] & 1, offset % 4, size)
             return b"\x00" * size
 
         # MTIMECMP 区域: offset 0x4000..0xBFF7
@@ -189,19 +188,20 @@ class CLINT(InterruptController, Device):
             local_off = offset - MTIMECMP_OFFSET
             hart_id = local_off // 8
             if 0 <= hart_id < self._num_harts:
-                return self._mtimecmp[hart_id].to_bytes(size, "little", signed=False)
+                return read_u64_bytes(self._mtimecmp[hart_id], local_off % 8, size)
             return b"\x00" * size
 
         # MTIME 寄存器: offset 0xBFF8
         if MTIME_OFFSET <= offset < MTIME_OFFSET + 8:
-            return self._mtime.to_bytes(size, "little", signed=False)
+            return read_u64_bytes(self._mtime, offset - MTIME_OFFSET, size)
 
         return b"\x00" * size
 
     def write(self, offset: int, data: bytes) -> None:
         """写入 CLINT 内存映射寄存器.
 
-        offset 是相对于 CLINT base_addr 的偏移.
+        offset 是相对于 CLINT base_addr 的偏移. 64 位寄存器内按字节偏移写入,
+        未覆盖的字节保持原值.
         """
         val = int.from_bytes(data, "little", signed=False)
 
@@ -218,13 +218,17 @@ class CLINT(InterruptController, Device):
             local_off = offset - MTIMECMP_OFFSET
             hart_id = local_off // 8
             if 0 <= hart_id < self._num_harts:
-                self._mtimecmp[hart_id] = mask64(val)
-                self._notify_state_change()
+                merged = write_u64_bytes(self._mtimecmp[hart_id], local_off % 8, data)
+                if merged is not None:
+                    self._mtimecmp[hart_id] = merged
+                    self._notify_state_change()
             return
 
         # MTIME 寄存器
         if MTIME_OFFSET <= offset < MTIME_OFFSET + 8:
-            self._mtime = mask64(val)
+            merged = write_u64_bytes(self._mtime, offset - MTIME_OFFSET, data)
+            if merged is not None:
+                self._mtime = merged
 
     # ----------------------------------------------------------
     #  属性

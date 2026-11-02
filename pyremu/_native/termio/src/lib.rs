@@ -222,11 +222,19 @@ fn drain_tx(h: &TermIoHandle, chunk: &mut [u8]) {
 /// 直接设置 CPU 引擎的停止标志, 而不经过 Python.
 /// 主线程阻塞于 run_parallel 时信号处理函数不执行, 该路径使引擎的看门狗与
 /// 逐指令检查仍能即时看到停止请求. 独立成函数以便单元测试.
+///
+/// 除设置停止标志外, 还向接收通知管道写 1 字节. 全部 hart 处于 WFI 时引擎不执行
+/// 指令, 逐指令的检查不会发生, Python 主线程阻塞在唤醒事件上; 该字节唤醒 Python
+/// 侧的接收守护线程, 由守护线程置位该事件. 接收通知管道的写端为非阻塞, 管道满时
+/// 写操作返回 EAGAIN, 此时守护线程本就会被已有的通知唤醒.
 #[inline]
-fn notify_emu_stop() {
+fn notify_emu_stop(h: &TermIoHandle) {
 	let stop = EMU_STOP_PTR.load(Ordering::Acquire);
 	if !stop.is_null() {
 		unsafe { (*stop).store(1, Ordering::Release) };
+	}
+	if h.rx_notify_fd >= 0 {
+		let _ = unsafe { libc::write(h.rx_notify_fd, &1u8 as *const u8 as *const libc::c_void, 1) };
 	}
 }
 
@@ -412,7 +420,7 @@ fn termio_thread(h: TermIoHandle, saved: SavedTerm) {
 		}
 		let (deliverable, stop_req) = scan_rx(&mut recv);
 		if stop_req {
-			notify_emu_stop();
+			notify_emu_stop(&h);
 		}
 		let _ = deliver_rx(&h, &mut recv, deliverable);
 		drain_tx(&h, &mut chunk);
@@ -474,7 +482,7 @@ fn termio_thread_simple(h: TermIoHandle, old_stdin_fl: libc::c_int) {
 		}
 		let (deliverable, stop_req) = scan_rx(&mut recv);
 		if stop_req {
-			notify_emu_stop();
+			notify_emu_stop(&h);
 		}
 		let _ = deliver_rx(&h, &mut recv, deliverable);
 		// 本线程只负责把标准输入转发到接收环形缓冲区. ``no_stdout`` 为 0 时
@@ -775,6 +783,27 @@ mod tests {
 		assert_eq!(&chunk[..n2], b"45");
 	}
 
+	/// 构造只含接收通知管道写端的句柄, 其余指针与 fd 取空值.
+	fn stop_notify_handle(rx_notify_fd: RawFd) -> TermIoHandle {
+		TermIoHandle {
+			stdin_fd: -1,
+			stdout_fd: -1,
+			rx_buf: std::ptr::null_mut(),
+			rx_cap: 0,
+			rx_wr: std::ptr::null_mut(),
+			rx_rd: std::ptr::null_mut(),
+			tx_buf: std::ptr::null_mut(),
+			tx_cap: 0,
+			tx_wr: std::ptr::null_mut(),
+			tx_drain: std::ptr::null_mut(),
+			stop_flag: std::ptr::null_mut(),
+			pause_flag: std::ptr::null_mut(),
+			rx_notify: std::ptr::null_mut(),
+			rx_notify_fd,
+			rx_drain_fd: -1,
+		}
+	}
+
 	/// 单次 Ctrl+Q 必须直接置位 CPU 引擎的停止标志, 不能只依赖 SIGINT.
 	/// ``notify_emu_stop`` 直接写共享标志, 与 rx_notify 的处理方式相同;
 	/// 主线程阻塞于 run_parallel 时 Python 侧的信号处理函数不执行.
@@ -784,9 +813,39 @@ mod tests {
 		let flag_ptr: *mut AtomicU8 = &flag as *const AtomicU8 as *mut AtomicU8;
 		EMU_STOP_PTR.store(flag_ptr, Ordering::Release);
 
-		notify_emu_stop();
+		notify_emu_stop(&stop_notify_handle(-1));
 		assert_eq!(flag.load(Ordering::Acquire), 1, "Ctrl+Q 应直连置位停止标志");
 
+		EMU_STOP_PTR.store(std::ptr::null_mut(), Ordering::Release);
+	}
+
+	/// Ctrl+Q 除置位停止标志外, 还必须向接收通知管道写 1 字节.
+	///
+	/// 全部 hart 处于 WFI 时引擎不执行指令, 逐指令的停止检查不会发生; Python 主线程
+	/// 此时阻塞在唤醒事件上, 只有该字节能经接收守护线程把它唤醒. 缺少这一字节时,
+	/// 引擎不执行指令期间的暂停请求要等到下一次定时器到期或键盘输入才生效.
+	#[test]
+	fn test_notify_emu_stop_wakes_python_daemon() {
+		let flag = AtomicU8::new(0);
+		let flag_ptr: *mut AtomicU8 = &flag as *const AtomicU8 as *mut AtomicU8;
+		EMU_STOP_PTR.store(flag_ptr, Ordering::Release);
+
+		let mut fds = [0i32; 2];
+		assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+		let (notify_r, notify_w) = (fds[0], fds[1]);
+
+		notify_emu_stop(&stop_notify_handle(notify_w));
+
+		let mut buf = [0u8; 4];
+		let n = unsafe { libc::read(notify_r, buf.as_mut_ptr() as *mut libc::c_void, 4) };
+		assert_eq!(n, 1, "Ctrl+Q 应向接收通知管道写 1 字节");
+		assert_eq!(buf[0], 1);
+		assert_eq!(flag.load(Ordering::Acquire), 1);
+
+		unsafe {
+			libc::close(notify_r);
+			libc::close(notify_w);
+		}
 		EMU_STOP_PTR.store(std::ptr::null_mut(), Ordering::Release);
 	}
 
@@ -794,7 +853,7 @@ mod tests {
 	#[test]
 	fn test_notify_emu_stop_null_ptr_noop() {
 		EMU_STOP_PTR.store(std::ptr::null_mut(), Ordering::Release);
-		notify_emu_stop(); // 不应发生 panic
+		notify_emu_stop(&stop_notify_handle(-1)); // 不应发生 panic
 	}
 
 	/// 覆盖 ``esc_seq_len`` 在 6 字节窗口内对 ESC 序列完整性的判定.

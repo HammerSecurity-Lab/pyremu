@@ -7,11 +7,13 @@
 
 import pytest
 
+from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus, Device
 from pyremu.peripheral.gpio import GPIO
 from pyremu.peripheral.i2c import I2C
 from pyremu.peripheral.spi import SPI
 from pyremu.peripheral.uart import UART
+from pyremu.platform import PeripheralConfig, PlatformConfig
 
 
 class _DummyDevice(Device):
@@ -162,6 +164,28 @@ class TestBusPMA:
         bus.add_device(0xC000_0000, dev)
         assert bus.is_valid_addr(0xC000_0000)
 
+    # -------- 存储区间 --------
+
+    def test_storage_intervals_include_ram(self, bus):
+        """主存在构造时即登记为存储区间."""
+        assert bus.storage_intervals == (("主存", self.RAM_BASE, 16 * 1024 * 1024),)
+
+    def test_storage_intervals_include_boot_rom(self, bus):
+        """引导只读存储器注册后成为存储区间, 与主存并列."""
+        bus.add_boot_rom(0x4000_0000, 0x10000)
+        assert bus.storage_intervals == (
+            ("主存", self.RAM_BASE, 16 * 1024 * 1024),
+            ("引导只读存储器", 0x4000_0000, 0x10000),
+        )
+
+    def test_is_storage_range_accepts_boot_rom(self, bus):
+        """引导只读存储器内的区间可存放映像, 越过其两端则否."""
+        bus.add_boot_rom(0x4000_0000, 0x10000)
+        assert bus.is_storage_range(0x4000_0000, 0x100)
+        assert bus.is_storage_range(0x4000_FF00, 0x100)
+        assert not bus.is_storage_range(0x4000_FFFF, 2)
+        assert not bus.is_storage_range(0x3FFF_FF00, 0x100)
+
     # -------- ram_base 可配置 --------
 
     def test_ram_base_zero(self):
@@ -231,3 +255,34 @@ class TestDeviceNarrowRead:
         val1 = g.read(0, 1)
         assert len(val1) == 1
         assert val1 == b"\x00"
+
+
+# ============================================================
+#  SPI / I2C / GPIO 外设注册
+# ============================================================
+
+
+class TestPeripheralInit:
+    """SPI / I2C / GPIO 外设在显式给出基址时注册到总线."""
+
+    @staticmethod
+    def _emu(**periph_kw: int) -> Emulator:
+        return Emulator(PlatformConfig(periph=PeripheralConfig(**periph_kw)))
+
+    def test_spi_registered_on_bus(self):
+        """SPI 设备在 0x10001000."""
+        emu = self._emu(spi_base=0x1000_1000)
+        assert emu.spi is not None
+        assert emu.bus.is_device_addr(0x10001000)
+
+    def test_i2c_registered_on_bus(self):
+        """I2C 设备在 0x10002000."""
+        emu = self._emu(i2c_base=0x1000_2000)
+        assert emu.i2c is not None
+        assert emu.bus.is_device_addr(0x10002000)
+
+    def test_gpio_registered_on_bus(self):
+        """GPIO 设备在 0x10003000."""
+        emu = self._emu(gpio_base=0x1000_3000)
+        assert emu.gpio is not None
+        assert emu.bus.is_device_addr(0x10003000)

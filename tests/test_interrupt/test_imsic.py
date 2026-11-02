@@ -9,22 +9,27 @@ import threading
 import pytest
 
 from pyremu import configs_gen
-from pyremu._native import native_available
-from pyremu.core.hart import HartState, RiscvMode
+from pyremu._native import HartState, native_available
+from pyremu.core.hart import RiscvMode
 from pyremu.core.registers import AIA_CSR_ADDRS, csr_bank, sync_aia_csr_gate
 from pyremu.core.trap_def import trap_cause_code, TrapType
-from pyremu.core.trap_handler import check_pending_interrupts
 from pyremu.emulator import Emulator
 from pyremu.interrupt.imsic import IMSIC
 from pyremu.peripheral.termio import TerminalIO
 from pyremu.platform import InterruptMode, PlatformConfig
+from tests.conftest import (
+    AIA_APLIC_M_BASE,
+    AIA_APLIC_S_BASE,
+    AIA_IMSIC_M_BASE,
+    AIA_IMSIC_S_BASE,
+)
 
 
 @pytest.fixture(autouse=True)
 def _disable_aia_compile_override(monkeypatch):
     """Disable PYREMU_AIA compile-time override.
 
-    Tests use explicit configs: qemu_virt() for legacy, qemu_virt_aia() for AIA.
+    Tests use explicit configs: basic_machine() for legacy, basic_aia_machine() for AIA.
     """
     monkeypatch.setattr(configs_gen, "PYREMU_AIA", False)
 
@@ -53,13 +58,6 @@ def aia_csr_gate():
 
 def _make_imsic(num_harts: int = 2) -> IMSIC:
     return IMSIC(num_harts=num_harts, m_base_addr=0x2400_0000)
-
-
-def _make_aia_emu(num_harts: int = 1):
-    """创建 AIA 模式 Emulator."""
-    cfg = PlatformConfig.qemu_virt_aia()
-    cfg.num_harts = num_harts
-    return Emulator(cfg)
 
 
 # ============================================================
@@ -277,9 +275,9 @@ class TestImsicPriority:
 class TestImsicTopei:
     """mtopei (0x35C) / stopei (0x15C) CSR 读取."""
 
-    def test_mtopei_with_pending(self):
+    def test_mtopei_with_pending(self, make_aia_emu):
         """有 pending 时 mtopei 返回 (IID<<16)|prio."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         imsic = emu.imsic
         assert imsic is not None
@@ -293,15 +291,15 @@ class TestImsicTopei:
         iid = (val >> 16) & 0x7FF
         assert iid == 15, f"mtopei should report IID 15, got {iid}"
 
-    def test_mtopei_no_pending(self):
+    def test_mtopei_no_pending(self, make_aia_emu):
         """无 pending 时 mtopei 返回 0."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         assert h.read_csr(0x35C) == 0
 
-    def test_stopei_with_pending(self):
+    def test_stopei_with_pending(self, make_aia_emu):
         """S-mode 有 pending 时 stopei 返回 IID."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         imsic = emu.imsic
         assert imsic is not None
@@ -322,20 +320,20 @@ class TestImsicTopei:
 class TestMtopi:
     """mtopi (0xFB0) AIA 模式下动态报告最高优先级 M 模式中断."""
 
-    def test_mtopi_readable_in_aia_mode(self, aia_csr_gate):
+    def test_mtopi_readable_in_aia_mode(self, aia_csr_gate, make_aia_emu):
         """AIA 模式下 mtopi 可读且无中断时返回 0."""
 
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.pc = 0x40000000
 
         val = h.read_csr(0xFB0)
         assert val == 0, f"mtopi should return 0 when no interrupt pending, got {val:#x}"
 
-    def test_mtopi_traps_ill_instr_when_gate_closed(self):
+    def test_mtopi_traps_ill_instr_when_gate_closed(self, make_aia_emu):
         """门控关闭时 mtopi 不可达 — 与上一用例成对锁定门控的两个方向."""
 
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.pc = 0x40000000
 
@@ -345,13 +343,13 @@ class TestMtopi:
             f"mtopi should trap IllInstr when AIA gate is closed, got mcause={h.mcause_val}"
         )
 
-    def test_mtopi_reports_msip_as_iid_3(self, aia_csr_gate):
+    def test_mtopi_reports_msip_as_iid_3(self, aia_csr_gate, make_aia_emu):
         """MSIP 待处理时 mtopi 返回 (IRQ_M_SOFT<<16)|1 = (3<<16)|1.
 
         OpenSBI 的 sbi_trap_aia_irq() 将 mtopi>>16 与 IRQ_M_SOFT(=3) 比较
         来决定是否调用 sbi_ipi_process(). 此测试锁死该行为.
         """
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.M  # M-mode (required to read mtopi)
@@ -373,7 +371,7 @@ class TestMtopi:
         )
         assert mtopi & 0xFFFF, f"mtopi priority should be non-zero, got {mtopi:#x}"
 
-    def test_mtopi_reports_imsic_ipi_as_iid_11(self, aia_csr_gate):
+    def test_mtopi_reports_imsic_ipi_as_iid_11(self, aia_csr_gate, make_aia_emu):
         """IMSIC M-file eip 有 IPI (minor identity 1) 时 mtopi 返回 major identity 11 (MEI).
 
         All IMSIC interrupts (IPI minor identity 1 and external IID>=6)
@@ -384,7 +382,7 @@ class TestMtopi:
         mtopei>>16 == 1 to dispatch ``sbi_ipi_process``.
         """
 
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.M
@@ -433,20 +431,20 @@ class TestMtopi:
 class TestStopi:
     """stopi (0xDB0) AIA 模式下动态报告最高优先级 S 模式中断."""
 
-    def test_stopi_readable_in_aia_mode(self, aia_csr_gate):
+    def test_stopi_readable_in_aia_mode(self, aia_csr_gate, make_aia_emu):
         """AIA 模式下 stopi 可读且无中断时返回 0."""
 
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.pc = 0x40000000
 
         val = h.read_csr(0xDB0)
         assert val == 0, f"stopi should return 0 when no interrupt pending, got {val:#x}"
 
-    def test_stopi_traps_ill_instr_when_gate_closed(self):
+    def test_stopi_traps_ill_instr_when_gate_closed(self, make_aia_emu):
         """门控关闭时 stopi 不可达 — 与上一用例成对锁定门控的两个方向."""
 
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.pc = 0x40000000
 
@@ -456,14 +454,14 @@ class TestStopi:
             f"stopi should trap IllInstr when AIA gate is closed, got mcause={h.mcause_val}"
         )
 
-    def test_stopi_reports_ssip_as_iid_1(self, aia_csr_gate):
+    def test_stopi_reports_ssip_as_iid_1(self, aia_csr_gate, make_aia_emu):
         """SSIP 待处理时 stopi 返回 (IRQ_S_SOFT<<16)|1 = (1<<16)|1.
 
         Linux 内核的 riscv_intc_aia_irq() 将 stopi>>16 与 IID 比较
         来决定调用哪个中断 handler. 此测试锁死该行为.
         """
 
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.S  # S-mode (stopi is an S-mode CSR)
@@ -484,7 +482,7 @@ class TestStopi:
         )
         assert stopi & 0xFFFF, f"stopi priority should be non-zero, got {stopi:#x}"
 
-    def test_stopi_reports_imsic_ext_as_iid_9(self, aia_csr_gate):
+    def test_stopi_reports_imsic_ext_as_iid_9(self, aia_csr_gate, make_aia_emu):
         """IMSIC S-file eip 有待处理中断时 stopi 返回 (IRQ_S_EXT << 16) | prio.
 
         所有外部中断在 stopi 中映射到 major identity IRQ_S_EXT (9),
@@ -492,7 +490,7 @@ class TestStopi:
         这是 AIA 规范 §5.3 的要求: stopi 返回 MAJOR identity, stopei 返回 MINOR.
         """
 
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.S
@@ -532,7 +530,7 @@ class TestStopi:
             f"STOPEI>>16 should be minor IID 21, got {minor_iid} (stopei={stopei:#x})"
         )
 
-    def test_stopi_reports_stip_as_iid_5(self, aia_csr_gate):
+    def test_stopi_reports_stip_as_iid_5(self, aia_csr_gate, make_aia_emu):
         """STIP pending -> stopi reports IID=5 (IRQ_S_TIMER).
 
         STIP is computed from LIVE mtime & stimecmp (not cached mip_val),
@@ -541,7 +539,7 @@ class TestStopi:
         after the kernel writes a new stimecmp, causing stopi to never
         return 0 (infinite loop in riscv_intc_aia_irq).
         """
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.S
@@ -560,7 +558,7 @@ class TestStopi:
         )
         assert stopi & 0xFFFF, f"stopi priority should be non-zero, got {stopi:#x}"
 
-    def test_stopi_clears_after_stimecmp_written(self, aia_csr_gate):
+    def test_stopi_clears_after_stimecmp_written(self, aia_csr_gate, make_aia_emu):
         """stopi returns 0 after stimecmp is advanced into the future.
 
         The kernel's timer ISR writes a new stimecmp (future value) and
@@ -569,7 +567,7 @@ class TestStopi:
         mip_val.STIP=1 (set by check_pending_interrupts during the
         initial trap) and never returned 0 -> infinite loop.
         """
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.S
@@ -587,7 +585,7 @@ class TestStopi:
         stopi = h.read_csr(0xDB0)
         assert stopi == 0, f"stopi must return 0 after stimecmp is advanced, got {stopi:#x}"
 
-    def test_stopi_ignores_mtip(self, aia_csr_gate):
+    def test_stopi_ignores_mtip(self, aia_csr_gate, make_aia_emu):
         """MTIP (bit 7) alone must NOT be reported by stopi.
 
         mtimecmp is frozen during native batch execution; if stopi
@@ -595,7 +593,7 @@ class TestStopi:
         Only STIP (bit 5, from state.stimecmp) is authoritative for
         S-mode timer interrupts.
         """
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         h = emu.harts[0]
         h.pc = 0x40000000
         h.mode = RiscvMode.S
@@ -622,16 +620,16 @@ class TestStopi:
 class TestImsicCoexistence:
     """IMSIC 与 CLINT/PLIC 共存."""
 
-    def test_clint_msip_works_with_imsic(self):
+    def test_clint_msip_works_with_imsic(self, make_aia_emu):
         """IMSIC 存在时 CLINT MSIP 仍正常工作."""
-        emu = _make_aia_emu(num_harts=2)
+        emu = make_aia_emu(num_harts=2)
         emu.clint.send_ipi(1)
         mip_bits = emu.clint.check_interrupt(1)[1]
         assert mip_bits & (1 << 3), "CLINT MSIP should still work"
 
-    def test_clint_mtip_works_with_imsic(self):
+    def test_clint_mtip_works_with_imsic(self, make_aia_emu):
         """IMSIC 存在时 CLINT MTIP 仍正常工作."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         emu.clint._mtime = 1000
         emu.clint._mtimecmp[0] = 500  # mtime >= mtimecmp
@@ -644,21 +642,21 @@ class TestImsicCoexistence:
         h.pc = 0x40000000
         h.mode = RiscvMode.M
         h.mstatus_val |= 1 << 3  # MIE=1 (global enable)
-        result = check_pending_interrupts(h)
+        result = h.check_pending_interrupts()
         assert result, "MTIP with IMSIC should deliver interrupt"
 
     def test_plic_unaffected_by_imsic(self):
         """legacy 模式: PLIC 行为不变, 不创建 IMSIC."""
-        cfg = PlatformConfig.qemu_virt()
+        cfg = PlatformConfig.basic_machine()
         emu = Emulator(cfg)
         assert emu.imsic is None, "legacy config should have no IMSIC"
         assert emu.plic is not None, "legacy config should have PLIC"
         assert emu.harts[0]._imsic is None
         assert emu.harts[0]._plic is not None
 
-    def test_imsic_mip_merged_in_check_pending(self):
+    def test_imsic_mip_merged_in_check_pending(self, make_aia_emu):
         """IMSIC get_pending_mip 被 check_pending_interrupts 合并到 mip."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         imsic = emu.imsic
         assert imsic is not None
@@ -668,7 +666,7 @@ class TestImsicCoexistence:
         # 使能 MEIE
         h.csrs["mie"].val = 1 << 11  # MEIE
         h.mstatus_val |= 1 << 3  # MIE=1 (M-mode global enable)
-        result = check_pending_interrupts(h)
+        result = h.check_pending_interrupts()
         assert result, "IMSIC pending should trigger interrupt delivery"
         assert h.mip_val & (1 << 11), "mip.MEIP should be set"
 
@@ -681,9 +679,9 @@ class TestImsicCoexistence:
 class TestImsicHartIntegration:
     """Hart.write_csr / read_csr 通过 IMSIC 分发."""
 
-    def test_miselect_mireg_roundtrip(self):
+    def test_miselect_mireg_roundtrip(self, make_aia_emu):
         """csrw miselect + csrr mireg 往返一致."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.write_csr(0x350, 0x70)
         assert h._imsic_select_m == 0x70
@@ -694,9 +692,9 @@ class TestImsicHartIntegration:
         h.write_csr(0x351, 1)
         assert h.read_csr(0x351) == 1
 
-    def test_siselect_sireg_roundtrip(self):
+    def test_siselect_sireg_roundtrip(self, make_aia_emu):
         """csrw siselect + csrr sireg 往返一致."""
-        emu = _make_aia_emu()
+        emu = make_aia_emu()
         h = emu.harts[0]
         h.write_csr(0x150, 0x70)  # siselect = eidelivery
         assert h._imsic_select_s == 0x70
@@ -705,7 +703,7 @@ class TestImsicHartIntegration:
 
     def test_mireg_ignored_without_imsic(self):
         """无 IMSIC 时 mireg 读返回原始 CSR 值 (fallback)."""
-        cfg = PlatformConfig.qemu_virt()
+        cfg = PlatformConfig.basic_machine()
         emu = Emulator(cfg)
         h = emu.harts[0]
         assert h._imsic is None
@@ -767,16 +765,14 @@ class TestImsicFfiWriteThrough:
         imsic.clear_ip_number(0, "S", 10)
         assert imsic.get_pending_mip(0) == 0
 
-    def test_speedup_lib_binds_imsic_states(self):
+    def test_speedup_lib_binds_imsic_states(self, make_aia_config):
         """装配级: 加速基础设施就绪后 IMSIC 持有同一份 hart 状态数组."""
         if not native_available():
             pytest.skip("native 加速库不可用, 跳过写穿绑定测试")
-        cfg = PlatformConfig.qemu_virt_aia()
-        cfg.num_harts = 2
-        emu = Emulator(cfg)
+        emu = Emulator(make_aia_config(2))
         ev = threading.Event()
         emu._termio = TerminalIO(
-            emu.uart, ev, ext_irq=emu._native_ext_irq, on_irq=emu.raise_device_irq
+            emu.uart, ev, ext_irq=emu._native_ext_irq, on_irq=emu.irq_sink
         )
         emu._init_for_speedup_lib()
 
@@ -801,17 +797,18 @@ class TestImsicFfiWriteThrough:
 class TestImsicConfig:
     """PlatformConfig 与 IMSIC 创建."""
 
-    def test_qemu_virt_aia_preset(self):
-        """qemu_virt_aia 预设正确配置 AIA 模式."""
-        cfg = PlatformConfig.qemu_virt_aia()
+    def test_make_aia_config_has_all_bases(self, make_aia_config):
+        """AIA 平台配置的四个基址由用例给出, 不随编译选项变化."""
+        cfg = make_aia_config()
         assert cfg.interrupt_mode == InterruptMode.AIA
-        assert cfg.periph.imsic_m_base == 0x2400_0000
-        assert cfg.periph.imsic_s_base == 0x2800_0000
-        assert cfg.periph.aplic_s_base == 0x0C00_0000
+        assert cfg.periph.imsic_m_base == AIA_IMSIC_M_BASE
+        assert cfg.periph.imsic_s_base == AIA_IMSIC_S_BASE
+        assert cfg.periph.aplic_s_base == AIA_APLIC_S_BASE
+        assert cfg.periph.aplic_m_base == AIA_APLIC_M_BASE
 
     def test_default_config_no_imsic(self):
-        """qemu_virt 预设为 legacy 模式 — 不创建 IMSIC."""
-        cfg = PlatformConfig.qemu_virt()
+        """basic_machine 预设为 legacy 模式 — 不创建 IMSIC."""
+        cfg = PlatformConfig.basic_machine()
         assert cfg.periph.imsic_m_base == configs_gen.IMSIC_M_BASE
         emu = Emulator(cfg)
         assert emu.imsic is None

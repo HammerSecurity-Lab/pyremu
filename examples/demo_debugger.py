@@ -13,7 +13,7 @@ from pyremu.platform import PlatformConfig
 from pyremu.utils.parse_bin import parse_firmware
 
 # 1. 创建模拟器并加载固件
-emu = Emulator(PlatformConfig.qemu_virt())
+emu = Emulator(PlatformConfig.basic_machine())
 fw = parse_firmware(path_join(elf_dir(), "m_mode_to_s_mode.elf"))
 emu.load_firmware(fw)
 

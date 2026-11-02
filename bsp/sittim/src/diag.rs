@@ -10,6 +10,7 @@
 /// 例如载荷发生不可恢复的用户态异常时, 输出该次异常的原因与现场。
 #[inline(always)]
 #[allow(unused)]
+#[allow(dead_code)]
 pub fn log(args: core::fmt::Arguments) {
 	#[cfg(feature = "diagnostic")]
 	{

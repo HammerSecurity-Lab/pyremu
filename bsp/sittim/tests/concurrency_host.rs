@@ -11,8 +11,8 @@
 //! 不在覆盖范围内的一项: 飞地内 [`thread::block_current`] 在没有其它可运行线程时经
 //! [`ecall_aux::enclave_call_suspend`] 让出宿主, 该让出在主机侧没有对应行为, 替身只记录
 //! 调用。故走到该让出的用例以「不产生该调用」为断言, 其余用例在阻塞之前先经
-//! [`thread::clone_thread`] 登记一个可运行线程, 使阻塞按「登记切换目标并返回」这条路径
-//! 结束, 与飞地内存在其它可运行线程时完全一致。
+//! [`thread::clone_thread`] 登记一个可运行线程, 使阻塞按登记切换目标并返回这条路径结束。
+//!
 
 #![allow(dead_code)]
 
@@ -229,14 +229,20 @@ mod tests {
 		guard
 	}
 
-	/// 在当前线程之外登记一个可运行线程, 使本线程的阻塞按「登记切换目标并返回」结束。
-	fn spawn_peer() {
+	/// 在当前线程之外登记一个可运行线程, 返回其槽下标。
+	fn spawn_peer() -> usize {
 		let gprs = trap_frame::TrapGprs {
 			regs: [0; 32],
 			sp_before_trap: 0,
 		};
-		thread::clone_thread(&gprs, CLONE_VM | CLONE_THREAD, 0, 0, 0, 0);
+		let external = thread::clone_thread(&gprs, CLONE_VM | CLONE_THREAD, 0, 0, 0, 0);
 		thread::tests::clear_switch();
+		(external - 1) as usize
+	}
+
+	/// 完成一次已登记的切换, 并把调用方视为切换后的线程。
+	fn switch_now() {
+		thread::finalize_switch(0);
 	}
 
 	fn timespec(sec: i64, nsec: i64) -> types::Timespec {
@@ -277,6 +283,36 @@ mod tests {
 		assert_eq!(ecall_aux::SUSPEND_COUNT.load(Ordering::SeqCst), 0);
 		assert!(!thread::tests::is_blocked(me));
 		assert!(csr::read_time() >= 1_000 + five_ms_ticks());
+	}
+
+	/// 本线程之外的另一线程持有已到期的等待定时器时, 选取切换目标须先把该条目记为
+	/// 已到期并唤醒其所属线程。
+	///
+	/// 陷态处理期间 sstatus.SIE 为 0, 定时器中断不会进入本 hart, 该条目不会由中断处理
+	/// 函数改动。缺少这一步时本飞地已无任何可运行线程, 而表中仍有尚未到期的截止时刻,
+	/// 阻塞循环既不选取切换目标也不交还宿主。
+	#[test]
+	fn test_pick_switch_target_wakes_another_threads_expired_timer() {
+		let _guard = world();
+		let sleeper = spawn_peer();
+		// 主线程阻塞让出, 由 sleeper 运行; 后者睡眠 5 ms 后让给第三个线程。
+		thread::block_current(WAIT_ADDR);
+		switch_now();
+		assert_eq!(thread::current_thread_id(), sleeper);
+
+		let spinner = spawn_peer();
+		let five_ms = timespec(0, 5_000_000);
+		thread::nanosleep_handler(&five_ms as *const types::Timespec as u64, 0);
+		switch_now();
+		assert_eq!(thread::current_thread_id(), spinner);
+		assert_eq!(timer::next_deadline(), Some(five_ms_ticks()));
+
+		// 时钟越过 sleeper 的截止时刻, 该条目仍为等待中。
+		csr::set_time(2 * five_ms_ticks());
+
+		assert_eq!(thread::tests::pick_switch_target(spinner), Some(sleeper));
+		assert!(timer::is_expired(sleeper));
+		assert!(!thread::tests::is_blocked(sleeper));
 	}
 
 	/// 时限指针取空的 nanosleep 返回 EFAULT。

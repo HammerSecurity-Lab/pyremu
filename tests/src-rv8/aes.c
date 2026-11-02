@@ -553,16 +553,8 @@ const u32 Td4[256] = {
 	0x55555555U, 0x21212121U, 0x0c0c0c0cU, 0x7d7d7d7dU,
 };
 const u32 rcon[] = {
-	0x01000000,
-	0x02000000,
-	0x04000000,
-	0x08000000,
-	0x10000000,
-	0x20000000,
-	0x40000000,
-	0x80000000,
-	0x1B000000,
-	0x36000000, /* for 128-bit blocks, Rijndael never uses more than 10 rcon values */
+	0x01000000, 0x02000000, 0x04000000, 0x08000000, 0x10000000, 0x20000000,
+	0x40000000, 0x80000000, 0x1B000000, 0x36000000, /* for 128-bit blocks, Rijndael never uses more than 10 rcon values */
 };
 
 /**
@@ -573,7 +565,8 @@ const u32 rcon[] = {
 int aes_rijndael_key_setup_enc(
 	u32 rk[],
 	const u8 cipherKey[],
-	size_t keyBits) {
+	size_t keyBits
+) {
 	int i;
 	u32 temp;
 
@@ -645,7 +638,8 @@ void aes_rijndael_encrypt(
 	const u32 rk[],
 	int Nr,
 	const u8 pt[16],
-	u8 ct[16]) {
+	u8 ct[16]
+) {
 	u32 s0, s1, s2, s3, t0, t1, t2, t3;
 #ifndef AES_FULL_UNROLL
 	int r;
@@ -727,7 +721,8 @@ void aes_rijndael_encrypt(
 int aes_rijndael_key_setup_dec(
 	u32 rk[],
 	const u8 cipherKey[],
-	size_t keyBits) {
+	size_t keyBits
+) {
 	int Nr, i, j;
 	u32 temp;
 
@@ -756,8 +751,10 @@ int aes_rijndael_key_setup_dec(
 	for (i = 1; i < Nr; i++) {
 		rk += 4;
 		for (j = 0; j < 4; j++) {
-			rk[j] = TD0_(TE4((rk[j] >> 24))) ^ TD1_(TE4((rk[j] >> 16) & 0xff))
-					^ TD2_(TE4((rk[j] >> 8) & 0xff)) ^ TD3_(TE4((rk[j]) & 0xff));
+			rk[j] = TD0_(TE4((rk[j] >> 24))) ^
+					TD1_(TE4((rk[j] >> 16) & 0xff)) ^
+					TD2_(TE4((rk[j] >> 8) & 0xff)) ^
+					TD3_(TE4((rk[j]) & 0xff));
 		}
 	}
 
@@ -768,7 +765,8 @@ void aes_rijndael_decrypt(
 	const u32 rk[],
 	int Nr,
 	const u8 ct[16],
-	u8 pt[16]) {
+	u8 pt[16]
+) {
 	u32 s0, s1, s2, s3, t0, t1, t2, t3;
 #ifndef AES_FULL_UNROLL
 	int r;
@@ -846,7 +844,8 @@ void aes_rijndael_decrypt(
 
 void *aes_decrypt_init(
 	const u8 *key,
-	size_t len) {
+	size_t len
+) {
 	u32 *rk;
 	int res;
 	rk = malloc(AES_PRIV_SIZE);
@@ -865,7 +864,8 @@ void *aes_decrypt_init(
 void aes_decrypt(
 	void *ctx,
 	const u8 *crypt,
-	u8 *plain) {
+	u8 *plain
+) {
 	u32 *rk = ctx;
 	aes_rijndael_decrypt(ctx, rk[AES_PRIV_NR_POS], crypt, plain);
 }
@@ -879,7 +879,8 @@ void aes_decrypt_deinit(void *ctx) {
 
 void *aes_encrypt_init(
 	const u8 *key,
-	size_t len) {
+	size_t len
+) {
 	u32 *rk;
 	int res;
 	rk = malloc(AES_PRIV_SIZE);
@@ -898,7 +899,8 @@ void *aes_encrypt_init(
 void aes_encrypt(
 	void *ctx,
 	const u8 *plain,
-	u8 *crypt) {
+	u8 *crypt
+) {
 	u32 *rk = ctx;
 	aes_rijndael_encrypt(ctx, rk[AES_PRIV_NR_POS], plain, crypt);
 }
@@ -907,23 +909,8 @@ void aes_encrypt_deinit(void *ctx) {
 	memset(ctx, 0, AES_PRIV_SIZE);
 	free(ctx);
 }
-static const u8 key[16] = {
-	0x00,
-	0x01,
-	0x02,
-	0x03,
-	0x04,
-	0x05,
-	0x06,
-	0x07,
-	0x08,
-	0x09,
-	0x0A,
-	0x0B,
-	0x0C,
-	0x0D,
-	0x0E,
-	0x0F};
+static const u8 key[16]		  = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+								 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
 static const size_t DATA_SIZE = 32 * 1024 * 1024;
 /* aes main */
 int main() {

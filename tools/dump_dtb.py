@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """生成平台设备树 DTB。
 
-用指定平台预设构造 Emulator, 调用 build_dtb() 得到完整 DTB blob, 写入输出路径
+用指定平台预设构造 Emulator, 调用 build_default_dtb() 得到完整 DTB blob, 写入输出路径
 (默认 build/emu.dtb)。配合根 makefile 的 `dtb` 目标: 先生成 DTB, 再用
 `dtc -I dtb -O dts` 还原为人类可读的 DTS。
 
@@ -26,8 +26,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--preset",
-        default="qemu_virt",
-        help="平台预设名 (qemu_virt / sifive_u54 / minimal / qemu_virt_aia)",
+        default="basic_machine",
+        help="平台预设名 (basic_machine / sifive_u54 / minimal)",
     )
     args = parser.parse_args()
 
@@ -40,6 +40,6 @@ if __name__ == "__main__":
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    blob = emu.build_dtb()
+    blob = emu.build_default_dtb()
     out.write_bytes(blob)
     print(f"  -> {out} ({len(blob)} bytes)")

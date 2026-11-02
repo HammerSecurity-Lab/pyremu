@@ -28,13 +28,11 @@ if TYPE_CHECKING:
 from pyremu._native import decode_fields
 from pyremu.configs_aux import cfg_float
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import RiscvMode
-from pyremu.core.mem_check_aux import inject_memory_backend
+from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.trap_def import TrapType
-from pyremu.core.trap_handler import check_pending_interrupts, deliver_trap
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import HartSnapshot, ImageKind, MemWriteTracker
-from pyremu.debug.utils import hex_addr, read_code_bytes
+from pyremu.debug.utils import hex_addr, read_va_bytes
 from pyremu.emulator import Emulator, RunStopReason, TimeoutError
 from pyremu.env_inject import Preloader
 from pyremu.utils.mask import mask64
@@ -73,7 +71,6 @@ class ExecutionOps(SharedAttrs):
     _stack_frames: list[StackFrame]
     _current_frame_idx: int
     _last_command: str | None
-    _fdt_addr: int | None
     _bins_images: dict[ImageKind, LoadedImage]
 
     # ----------------------------------------------------------
@@ -125,25 +122,22 @@ class ExecutionOps(SharedAttrs):
             return
 
         if h._waiting:
-            check_pending_interrupts(h)
+            h.check_pending_interrupts()
             return
 
         snap = self._save_snapshot()
 
-        orig_write = h._mem_write_phy
+        orig_write = h.mem_write_phy
         assert orig_write, "memory backend not attached"
 
         tracker = MemWriteTracker(self._emu.bus, orig_write)
-        h._mem_write_phy = tracker
+        h.mem_write_phy = tracker
 
         try:
             pc_before = h.pc
-            # 按取指语义读取指令字节: 取指只判定页面的可执行位, 数据读语义还要
-            # 求 R=1. 管理器把自身 .text 映射为只可执行, 故不能用数据读语义
-            # 读取指令, 该语义在此类页面上必定被拒.
-            raw = read_code_bytes(self._emu.bus, h, h.pc, 4)
+            raw = read_va_bytes(self._emu.bus, h, h.pc, 4)
             if raw is None:
-                deliver_trap(h, TrapType.InstrPageFault, tval=h.pc, is_interrupt=False)
+                h.deliver_trap(TrapType.InstrPageFault, tval=h.pc, is_interrupt=False)
                 return
             instr = int.from_bytes(raw, "little", signed=False)
 
@@ -153,12 +147,12 @@ class ExecutionOps(SharedAttrs):
             try:
                 advance = h.exec_instr(instr)
             except NotImplementedError:
-                deliver_trap(h, TrapType.IllInstr, tval=instr, is_interrupt=False)
+                h.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
                 advance = 0
             if advance != 0 and h.pc == pc_before:
                 h.pc = mask64((h.pc + advance))
 
-            check_pending_interrupts(h)
+            h.check_pending_interrupts()
             self._instr_count += 1
             # mcycle 与 minstret 按本 hart 的指令数折算, 单步路径同样要计入,
             # 否则单步执行时这两个计数器不变.
@@ -166,7 +160,7 @@ class ExecutionOps(SharedAttrs):
 
             self._emu.sync_counters(1)
         finally:
-            h._mem_write_phy = orig_write
+            h.mem_write_phy = orig_write
 
         self._mem_changes = tracker.changes
         self._snapshot = snap
@@ -412,7 +406,7 @@ class ExecutionOps(SharedAttrs):
     def cmd_restart(self) -> None:
         """重新运行当前加载的程序."""
         emu = self._emu
-        cfg = emu._cfg
+        cfg = emu.config
 
         emu.clint._mtime = 0
         for i in range(cfg.num_harts):
@@ -420,10 +414,12 @@ class ExecutionOps(SharedAttrs):
             emu.clint._msip[i] = 0
 
         emu.harts = []
+        attrs = RatifiedHartAttrs.from_platform(cfg.pmp_entries, cfg.isa)
         for i in range(cfg.num_harts):
-            h = Hart(id=i, pmp_entries=cfg.pmp_entries)
+            h = Hart(id=i, ratified_hart_attrs=attrs)
             h.pc = cfg.prog_cnt
-            inject_memory_backend(h, emu.bus.read, emu.bus.write)
+            h.mem_read_phy = emu.bus.read
+            h.mem_write_phy = emu.bus.write
             h.bus = emu.bus
             h.interrupt_ctrl = emu.clint
             h.plic = emu.plic
@@ -447,16 +443,10 @@ class ExecutionOps(SharedAttrs):
         if self._image:
             emu.load_firmware(self._image, load_offset=self._load_offset)
 
-        # 重建 DTB: 用原始 bootargs + 完整设备树 (含 virtio-blk)
-        # 写入 emulator 记录的 DTB 地址, 固件 ELF 可能已覆写该区域.
+        # 重建 DTB: 按装载时的内容与地址原样重写, 固件 ELF 可能已覆写该区域.
         # 判定用 None 比较: 设备树可以落在地址 0 (ram_base 为 0 的固件).
-        if emu._dtb_addr is not None:
-            emu.load_dtb(emu._dtb_addr)
-        elif self._fdt_addr is not None:
-            emu.load_dtb(self._fdt_addr)
-        elif emu._bootargs:
-            _dtb_addr = emu._cfg.ram_base + emu._cfg.ram_size - 0x10000
-            emu.load_dtb(_dtb_addr)
+        if emu.dtb_addr is not None and emu.dtb_blob is not None:
+            emu.load_dtb_blob(emu.dtb_addr, emu.dtb_blob)
 
         kernel_image = self._bins_images.get(ImageKind.KERNEL)
         if kernel_image is not None:
@@ -471,8 +461,6 @@ class ExecutionOps(SharedAttrs):
             for h in emu.harts:
                 h.csrs["misa"].val = (2 << 62) | (1 << 18) | (1 << 20)  # MXL=RV64 + S + U
                 h.csrs["mscratch"].val = cfg.ram_base + cfg.ram_size - 0x100000
-            if self._fdt_addr is not None:
-                emu.load_dtb_blob(cfg.ram_base + 0x2200000, emu.build_dtb())
             for h in emu.harts:
                 h.pc = preload_entry
 

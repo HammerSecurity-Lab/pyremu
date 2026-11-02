@@ -12,7 +12,8 @@ public:
 	}
 	coord(
 		int xx,
-		int yy) {
+		int yy
+	) {
 		x = xx;
 		y = yy;
 	}
@@ -24,26 +25,30 @@ int n;
 
 bool check_pos(
 	int pos,
-	unsigned int v) {
+	unsigned int v
+) {
 	return (v >> pos) & 1;
 }
 
 void set_pos(
 	int pos,
-	unsigned int *v) {
+	unsigned int *v
+) {
 	*v |= (1u << pos);
 }
 
 void unset_pos(
 	int pos,
-	unsigned int *v) {
+	unsigned int *v
+) {
 	*v &= ~(1u << pos);
 }
 
 unsigned int row = 0, col = 0, xl = 0, xr = 0;
 void dfs(
 	int pos,
-	int num) {
+	int num
+) {
 	if (num >= n) {
 		// 检查构型有没有重复
 		char g[10][10] = {0};
@@ -62,9 +67,12 @@ void dfs(
 	for (int curr = pos; curr < n * n; curr++) {
 		int i = curr / n, j = curr % n;
 		if (__builtin_expect(
-				check_pos(i, row) || check_pos(j, col) || check_pos(i + j, xl)
-					|| check_pos(i - j + n, xr),
-				1)) {
+				check_pos(i, row) ||
+					check_pos(j, col) ||
+					check_pos(i + j, xl) ||
+					check_pos(i - j + n, xr),
+				1
+			)) {
 			continue;
 		}
 		set_pos(i, &row);
@@ -82,7 +90,8 @@ void dfs(
 
 int main(
 	int argc,
-	char *argv[]) {
+	char *argv[]
+) {
 	std::cin >> n;
 	n %= 10;
 	dfs(0, 0);

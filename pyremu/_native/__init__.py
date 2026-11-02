@@ -24,6 +24,17 @@ from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
+from pyremu.utils.mask import (
+    mask32,
+    mask64,
+    rol32,
+    rol64,
+    ror32,
+    ror64,
+    sext8,
+    sext16,
+)
+
 if TYPE_CHECKING:
     from pyremu.memory.pmp import PmpAccessInfo
 
@@ -44,8 +55,13 @@ from pyremu._native._ctypes import (  # noqa: E402, F401 — re-export
     CompressedFields,
     DecodedFields,
     FpOut,
+    HartState,
+    ImsicFileC,
+    InstrToBeExec,
+    IsaExtsC,
     PteFields,
     Sv39Vpn,
+    TlbEntry,
 )
 
 # ============================================================
@@ -590,6 +606,126 @@ def _sext32(value: int) -> int:
     return _sint32(value) & 0xFFFF_FFFF_FFFF_FFFF
 
 
+def _clz64(value: int) -> int:
+    """64 位前导零的个数."""
+    return 64 - mask64(value).bit_length()
+
+
+def _ctz64(value: int) -> int:
+    """64 位末尾零的个数, 全零时返回 64."""
+    u = mask64(value)
+    return (u & -u).bit_length() - 1 if u else 64
+
+
+def _clz32(value: int) -> int:
+    """32 位前导零的个数."""
+    return 32 - mask32(value).bit_length()
+
+
+def _ctz32(value: int) -> int:
+    """32 位末尾零的个数, 全零时返回 32."""
+    u = mask32(value)
+    return (u & -u).bit_length() - 1 if u else 32
+
+
+def _bset(v: int, shamt: int) -> int:
+    """bset 与 bseti: 把 shamt 指定的位写为 1."""
+    return mask64(v | (1 << shamt))
+
+
+def _bclr(v: int, shamt: int) -> int:
+    """bclr 与 bclri: 把 shamt 指定的位写为 0."""
+    return mask64(v & ~(1 << shamt))
+
+
+def _binv(v: int, shamt: int) -> int:
+    """binv 与 binvi: 把 shamt 指定的位取反."""
+    return mask64(v ^ (1 << shamt))
+
+
+def _bext(v: int, shamt: int) -> int:
+    """bext 与 bexti: 读出 shamt 指定的位."""
+    return (mask64(v) >> shamt) & 1
+
+
+_BIT_SET_OPS: dict[int, Callable[[int, int], int]] = {
+    0x14: _bset,
+    0x24: _bclr,
+    0x34: _binv,
+}
+
+
+def _sra64(v: int, shamt: int) -> int:
+    """64 位算术右移."""
+    return mask64(_sint64(v).value >> shamt)
+
+
+_SHIFT_EXTRAS: dict[int, Callable[[int, int], int]] = {
+    0x20: _sra64,
+    0x24: _bext,
+    0x30: ror64,
+}
+
+
+def _cpop(v: int) -> int:
+    """64 位值中 1 的个数."""
+    return mask64(v).bit_count()
+
+
+def _cpopw(v: int) -> int:
+    """低 32 位中 1 的个数."""
+    return mask32(v).bit_count()
+
+
+def _rev8(v: int) -> int:
+    """rev8: 字节序反转."""
+    u = mask64(v)
+    result = 0
+    for i in range(8):
+        result |= ((u >> (i * 8)) & 0xFF) << ((7 - i) * 8)
+    return result
+
+
+# funct6=0x18 且 funct3=001, 由移位量选择单目子指令
+_ZBB_UNARY: dict[int, Callable[[int], int]] = {
+    0: _clz64,
+    1: _ctz64,
+    2: _cpop,
+    4: sext8,
+    5: sext16,
+}
+
+# funct7=0x30 且 funct3=001 的 32 位字形式, 由移位量选择单目子指令
+_ZBB_UNARY32: dict[int, Callable[[int], int]] = {
+    0: _clz32,
+    1: _ctz32,
+    2: _cpopw,
+}
+
+# funct6 到 bseti / bclri / binvi 的映射
+_IMM_BIT_OPS: dict[int, Callable[[int, int], int]] = {
+    0x0A: _bset,
+    0x12: _bclr,
+    0x1A: _binv,
+}
+
+# funct6 到 srli 类子指令的映射
+_SRLI_EXTRAS: dict[int, Callable[[int, int], int]] = {
+    0x10: _sra64,
+    0x12: _bext,
+    0x18: ror64,
+}
+
+
+def _orc_b(value: int) -> int:
+    """orc.b: 每个字节只要有一位为 1, 该字节的 8 位全部置为 1."""
+    result = 0
+    for i in range(8):
+        if (value >> (i * 8)) & 0xFF:
+            result |= 0xFF << (i * 8)
+    return result
+
+
 def _alu_ok(value: int) -> Alu64:
     r = Alu64()
     r.value = value
@@ -626,24 +762,32 @@ def _alu_add_sub_mul(funct7: int, v1: int, v2: int) -> Alu64:
 
 
 def _alu_sll_mulh(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=001: sll / mulh."""
+    """funct3=001: sll / mulh / rol / bset / bclr / binv."""
+    shamt = v2 & 0x3F
     if funct7 == 0:
-        return _alu_ok((v1 << (v2 & 0x3F)) & 0xFFFF_FFFF_FFFF_FFFF)
+        return _alu_ok(mask64(v1 << shamt))
     if funct7 == 1:
         s1 = _sint64(v1).value
         s2 = _sint64(v2).value
-        return _alu_ok(_sint64((s1 * s2) >> 64).value & 0xFFFF_FFFF_FFFF_FFFF)
+        return _alu_ok(mask64(_sint64((s1 * s2) >> 64).value))
+    if funct7 == 0x30:  # rol
+        return _alu_ok(rol64(v1, shamt))
+    bit_op = _BIT_SET_OPS.get(funct7)
+    if bit_op is not None:  # bset / bclr / binv
+        return _alu_ok(bit_op(v1, shamt))
     return _alu_ill()
 
 
 def _alu_slt_mulhsu(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=010: slt / mulhsu."""
+    """funct3=010: slt / mulhsu / sh1add."""
     if funct7 == 0:
         return _alu_ok(1 if _sint64(v1).value < _sint64(v2).value else 0)
     if funct7 == 1:
         s1 = _sint64(v1).value
         u2 = _uint64(v2).value
-        return _alu_ok(_sint64((s1 * u2) >> 64).value & 0xFFFF_FFFF_FFFF_FFFF)
+        return _alu_ok(mask64(_sint64((s1 * u2) >> 64).value))
+    if funct7 == 0x10:  # sh1add
+        return _alu_ok(mask64((v1 << 1) + v2))
     return _alu_ill()
 
 
@@ -659,46 +803,60 @@ def _alu_sltu_mulhu(funct7: int, v1: int, v2: int) -> Alu64:
 
 
 def _alu_xor_div(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=100: xor / div."""
+    """funct3=100: xor / div / min / sh2add / xnor."""
     if funct7 == 0:
         return _alu_ok(v1 ^ v2)
     if funct7 == 1:
-        return _alu_ok(
-            _trunc_div(_sint64(v1).value, _sint64(v2).value) & 0xFFFF_FFFF_FFFF_FFFF
-        )
+        return _alu_ok(mask64(_trunc_div(_sint64(v1).value, _sint64(v2).value)))
+    if funct7 == 0x05:  # min
+        return _alu_ok(mask64(min(_sint64(v1).value, _sint64(v2).value)))
+    if funct7 == 0x10:  # sh2add
+        return _alu_ok(mask64((v1 << 2) + v2))
+    if funct7 == 0x20:  # xnor
+        return _alu_ok(mask64(~(v1 ^ v2)))
     return _alu_ill()
 
 
 def _alu_srl_sra_divu(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=101: srl / divu / sra."""
+    """funct3=101: srl / divu / minu / sra / bext / ror."""
+    shamt = v2 & 0x3F
     if funct7 == 0:
-        return _alu_ok(_uint64(v1).value >> (v2 & 0x3F))
+        return _alu_ok(_uint64(v1).value >> shamt)
     if funct7 == 1:
         return _alu_ok(_trunc_div(_uint64(v1).value, _uint64(v2).value))
-    if funct7 == 0x20:
-        return _alu_ok(_sint64(_sint64(v1).value >> (v2 & 0x3F)).value & 0xFFFF_FFFF_FFFF_FFFF)
+    if funct7 == 0x05:  # minu
+        return _alu_ok(min(mask64(v1), mask64(v2)))
+    op = _SHIFT_EXTRAS.get(funct7)
+    if op is not None:  # sra / bext / ror
+        return _alu_ok(op(v1, shamt))
     return _alu_ill()
 
 
 def _alu_or_rem(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=110: or / rem."""
+    """funct3=110: or / rem / max / sh3add / orn."""
     if funct7 == 0:
         return _alu_ok(v1 | v2)
     if funct7 == 1:
-        return _alu_ok(
-            _trunc_rem(_sint64(v1).value, _sint64(v2).value) & 0xFFFF_FFFF_FFFF_FFFF
-        )
+        return _alu_ok(mask64(_trunc_rem(_sint64(v1).value, _sint64(v2).value)))
+    if funct7 == 0x05:  # max
+        return _alu_ok(mask64(max(_sint64(v1).value, _sint64(v2).value)))
+    if funct7 == 0x10:  # sh3add
+        return _alu_ok(mask64((v1 << 3) + v2))
+    if funct7 == 0x20:  # orn
+        return _alu_ok(mask64(v1 | ~v2))
     return _alu_ill()
 
 
 def _alu_and_remu(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=111: and / remu."""
+    """funct3=111: and / remu / maxu / andn."""
     if funct7 == 0:
         return _alu_ok(v1 & v2)
     if funct7 == 1:
-        return _alu_ok(
-            _trunc_rem(_uint64(v1).value, _uint64(v2).value) & 0xFFFF_FFFF_FFFF_FFFF
-        )
+        return _alu_ok(mask64(_trunc_rem(_uint64(v1).value, _uint64(v2).value)))
+    if funct7 == 0x05:  # maxu
+        return _alu_ok(max(mask64(v1), mask64(v2)))
+    if funct7 == 0x20:  # andn
+        return _alu_ok(mask64(v1 & ~v2))
     return _alu_ill()
 
 
@@ -729,9 +887,18 @@ def _opimm_addi(funct7: int, v1: int, imm: int) -> Alu64:
 
 
 def _opimm_slli(funct7: int, v1: int, imm: int) -> Alu64:
-    if funct7 >> 1 != 0:
-        return _alu_ill()
-    return _alu_ok((v1 << (imm & 0x3F)) & 0xFFFF_FFFF_FFFF_FFFF)
+    """funct3=001: slli / bseti / bclri / binvi 与单目子指令."""
+    funct6 = funct7 >> 1
+    shamt = imm & 0x3F
+    if funct6 == 0:  # slli
+        return _alu_ok(mask64(v1 << shamt))
+    if funct6 == 0x18:  # clz / ctz / cpop / sext.b / sext.h
+        unary = _ZBB_UNARY.get(shamt)
+        return _alu_ok(unary(v1)) if unary else _alu_ill()
+    bit_op = _IMM_BIT_OPS.get(funct6)
+    if bit_op is not None:  # bseti / bclri / binvi
+        return _alu_ok(bit_op(v1, shamt))
+    return _alu_ill()
 
 
 def _opimm_slti(funct7: int, v1: int, imm: int) -> Alu64:
@@ -748,13 +915,18 @@ def _opimm_xori(funct7: int, v1: int, imm: int) -> Alu64:
 
 
 def _opimm_srli_srai(funct7: int, v1: int, imm: int) -> Alu64:
-    """funct6 区分 SRLI 与 SRAI, 移位量为 imm 的低 6 位."""
+    """funct3=101: srli / srai / rori / bexti / orc.b / rev8."""
     shamt = imm & 0x3F
     funct6 = funct7 >> 1
+    if funct6 == 0x0A:  # orc.b, 立即数固定为 0x287
+        return _alu_ok(_orc_b(v1)) if imm == 0x287 else _alu_ill()
+    if funct6 == 0x1A:  # rev8, 立即数固定为 0x6B8
+        return _alu_ok(_rev8(v1)) if imm == 0x6B8 else _alu_ill()
     if funct6 == 0:
         return _alu_ok(_uint64(v1).value >> shamt)
-    if funct6 == 0x10:
-        return _alu_ok(_sint64(_sint64(v1).value >> shamt).value & 0xFFFF_FFFF_FFFF_FFFF)
+    op = _SRLI_EXTRAS.get(funct6)
+    if op is not None:  # srai / bexti / rori
+        return _alu_ok(op(v1, shamt))
     return _alu_ill()
 
 
@@ -789,25 +961,42 @@ def exec_op32(funct3: int, funct7: int, v1: int, v2: int) -> Alu64:
 
 
 def _op32_add_sub_mul(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=000: addw / mulw / subw."""
+    """funct3=000: addw / mulw / subw / add.uw."""
     w1 = v1 & 0xFFFF_FFFF
     w2 = v2 & 0xFFFF_FFFF
     if funct7 == 0:
         return _alu_ok(_sext32((w1 + w2) & 0xFFFF_FFFF))
     if funct7 == 1:
         return _alu_ok(_sext32((w1 * w2) & 0xFFFF_FFFF))
+    if funct7 == 0x04:  # add.uw, rs2 取完整的 64 位
+        return _alu_ok(mask64(w1 + v2))
     if funct7 == 0x20:
         return _alu_ok(_sext32((w1 - w2) & 0xFFFF_FFFF))
     return _alu_ill()
 
 
 def _op32_sllw(funct7: int, v1: int, v2: int) -> Alu64:
-    if funct7 != 0:
+    """funct3=001: sllw / rolw."""
+    w1 = v1 & 0xFFFF_FFFF
+    shamt = v2 & 0x1F
+    if funct7 == 0:
+        return _alu_ok(_sext32((w1 << shamt) & 0xFFFF_FFFF))
+    if funct7 == 0x30:  # rolw
+        return _alu_ok(_sext32(rol32(v1, shamt)))
+    return _alu_ill()
+
+
+def _op32_sh1add_uw(funct7: int, v1: int, v2: int) -> Alu64:
+    """funct3=010: sh1add.uw."""
+    if funct7 != 0x10:
         return _alu_ill()
-    return _alu_ok(_sext32(((v1 & 0xFFFF_FFFF) << (v2 & 0x1F)) & 0xFFFF_FFFF))
+    return _alu_ok(mask64((mask32(v1) << 1) + v2))
 
 
 def _op32_divw(funct7: int, v1: int, v2: int) -> Alu64:
+    """funct3=100: divw / sh2add.uw."""
+    if funct7 == 0x10:  # sh2add.uw
+        return _alu_ok(mask64((mask32(v1) << 2) + v2))
     if funct7 != 1:
         return _alu_ill()
     s1 = _sint32(v1 & 0xFFFF_FFFF)
@@ -816,19 +1005,25 @@ def _op32_divw(funct7: int, v1: int, v2: int) -> Alu64:
 
 
 def _op32_srl_sra_divuw(funct7: int, v1: int, v2: int) -> Alu64:
-    """funct3=101: srlw / divuw / sraw, 操作数一律按有符号数解释."""
+    """funct3=101: srlw / divuw / sraw / rorw, 操作数一律按有符号数解释."""
     w1 = v1 & 0xFFFF_FFFF
     w2 = v2 & 0xFFFF_FFFF
+    shamt = w2 & 0x1F
     if funct7 == 0:
-        return _alu_ok(_sext32((w1 >> (w2 & 0x1F)) & 0xFFFF_FFFF))
+        return _alu_ok(_sext32((w1 >> shamt) & 0xFFFF_FFFF))
     if funct7 == 1:
         return _alu_ok(_sext32(_trunc_div(w1, w2) & 0xFFFF_FFFF))
     if funct7 == 0x20:
-        return _alu_ok(_sext32((_sint32(w1) >> (w2 & 0x1F)) & 0xFFFF_FFFF))
+        return _alu_ok(_sext32((_sint32(w1) >> shamt) & 0xFFFF_FFFF))
+    if funct7 == 0x30:  # rorw
+        return _alu_ok(_sext32(ror32(v1, shamt)))
     return _alu_ill()
 
 
 def _op32_remw(funct7: int, v1: int, v2: int) -> Alu64:
+    """funct3=110: remw / sh3add.uw."""
+    if funct7 == 0x10:  # sh3add.uw
+        return _alu_ok(mask64((mask32(v1) << 3) + v2))
     if funct7 != 1:
         return _alu_ill()
     s1 = _sint32(v1 & 0xFFFF_FFFF)
@@ -847,6 +1042,7 @@ def _op32_remuw(funct7: int, v1: int, v2: int) -> Alu64:
 _OP32_FUNCT3: dict[int, Callable[[int, int, int], Alu64]] = {
     0b000: _op32_add_sub_mul,
     0b001: _op32_sllw,
+    0b010: _op32_sh1add_uw,
     0b100: _op32_divw,
     0b101: _op32_srl_sra_divuw,
     0b110: _op32_remw,
@@ -869,20 +1065,32 @@ def _opimm32_addiw(funct7: int, v1: int, imm: int) -> Alu64:
 
 
 def _opimm32_slliw(funct7: int, v1: int, imm: int) -> Alu64:
-    if funct7 != 0:
-        return _alu_ill()
-    return _alu_ok(_sext32(((v1 & 0xFFFF_FFFF) << (imm & 0x1F)) & 0xFFFF_FFFF))
+    """funct3=001: slliw / slli.uw 与 32 位字单目子指令."""
+    w1 = v1 & 0xFFFF_FFFF
+    shamt = imm & 0x3F
+    if funct7 == 0:  # slliw, 移位量取 5 位
+        return _alu_ok(_sext32((w1 << (shamt & 0x1F)) & 0xFFFF_FFFF))
+    if funct7 in (0x04, 0x05):  # slli.uw, 移位量取 6 位
+        return _alu_ok(mask64(w1 << shamt))
+    if funct7 == 0x30:  # clzw / ctzw / cpopw, 选择依据取 5 位
+        unary = _ZBB_UNARY32.get(shamt & 0x1F)
+        return _alu_ok(unary(v1)) if unary else _alu_ill()
+    return _alu_ill()
 
 
 def _opimm32_srliw_sraiw(funct7: int, v1: int, imm: int) -> Alu64:
-    """funct6 区分 SRLIW 与 SRAIW."""
+    """funct3=101: srliw / sraiw / roriw.
+
+    32 位移位的移位量只有 5 位, 立即数的第 5 位恒为 0, 故 funct7 按原值比较.
+    """
     w1 = v1 & 0xFFFF_FFFF
     shamt = imm & 0x1F
-    funct6 = funct7 >> 1
-    if funct6 == 0:
+    if funct7 == 0:
         return _alu_ok(_sext32((w1 >> shamt) & 0xFFFF_FFFF))
-    if funct6 == 0x10:
+    if funct7 == 0x20:
         return _alu_ok(_sext32((_sint32(w1) >> shamt) & 0xFFFF_FFFF))
+    if funct7 == 0x30:  # roriw
+        return _alu_ok(_sext32(ror32(v1, shamt)))
     return _alu_ill()
 
 
@@ -1208,15 +1416,17 @@ class PmpInfo:
             self.addr = addr  # already a ctypes array (or array.array)
         self.pmpsplit = pmpsplit
         # ``num`` 是 *每 hart* 的 PMP 条目数, 而非扁平缓冲总长。
-        # 多 hart 时 cfg/addr 为 64*hart_num 连续数组 (每 hart 独占 64 项切片),
-        # 若误把总长写入 FfiPmpCtx.num (c_uint8) 会在 hart_num>=4 时溢出:
-        # 64*4=256 ->256 & 0xFF = 0 ->PMP 被静默禁用。故按 hart_num 反算每 hart 值。
+        # 多 hart 时 cfg/addr 为 每个 hart 的条目数 * hart_num 的连续数组,
+        # 若误把总长写入 FfiPmpCtx.num (c_uint8) 会按 256 取模后静默禁用 PMP。
+        # 故按 hart_num 反算每 hart 值, 并要求总长能被 hart_num 整除。
         total = (
             min(len(self.cfg), len(self.addr))
             if len(self.cfg) > 0 and len(self.addr) > 0
             else 0
         )
         hn = hart_num if hart_num > 0 else 1
+        if total % hn != 0:
+            raise ValueError(f"PMP 缓冲区长度 {total} 无法被 hart 的数量 {hn} 整除")
         self.num = total // hn
         if self.num > 0xFF:
             raise ValueError(f"per-hart PMP num={self.num} 超出 FfiPmpCtx.num (u8) 范围")

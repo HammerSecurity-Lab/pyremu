@@ -28,6 +28,11 @@ else
 endif
 phony += __pyenv-check
 
+# 刷新 pyremu/configs_gen.py.
+__configs-gen:
+	@$(MAKE) -C pyremu
+phony += __configs-gen
+
 
 # CARGO_FLAGS 变化时强制重建 native .so
 CONFIG_GEN_RS = $(NATIVE_DIR)/cpu/src/configs_gen.rs
@@ -97,32 +102,33 @@ $(SITTIM_CFG_STAMP): FORCE
 	@printf '%s\n' $(foreach v,$(SITTIM_CFG_VARS),$(v)=$($(v))) > $@.tmp
 	@cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
 
-SITTIM_SRC_DEPS := $(shell find $(SITTIM_DIR)/src -name '*.rs' 2>/dev/null)
+SITTIM_SRC_DEPS := $(shell find $(SITTIM_DIR)/src -type f 2>/dev/null)
 SITTIM_SRC_DEPS += $(SITTIM_DIR)/config.mk $(SITTIM_DIR)/Makefile $(SITTIM_DIR)/link.ld.S
 SITTIM_SRC_DEPS += $(SITTIM_DIR)/Cargo.toml $(SITTIM_DIR)/Cargo.lock
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/.cargo/config.toml
 
 # sittim 的 config.mk 不包含根目录的配置文件, 平台级取值在此经命令行传入: 经本文件构建
 # 时采用 mk/ 下配置分片的取值, 单独在 bsp/sittim 下构建时采用其 config.mk 的默认值.
 $(SITTIM_BIN): $(SITTIM_SRC_DEPS) $(SITTIM_CFG_STAMP)
 	$(MAKE) -C $(SITTIM_DIR) build TIMER_FREQ=$(TIMER_FREQ) UART_BASE=$(UART_BASE)
 
-build-rust: $(SITTIM_BIN)
-phony += build-rust
+build-sittim: $(SITTIM_BIN)
+phony += build-sittim
 
 
-# fw_basic_flag 变化时强制重建
+# fw_basic_flag 变化时强制重新构建
 FW_CFG_STAMP = $(bins_dir)/fw_cfg.stamp
 $(FW_CFG_STAMP): FORCE
 	@mkdir -p $(bins_dir)
 	@printf '%s\n' $(fw_basic_flag) > $@.tmp
 	@cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
 
-$(FW_BUILD_DIR)/fw_payload.elf: $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP)
+$(FW_BUILD_DIR)/fw_payload.elf: $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP) | fw-src-check
 	$(MAKE) -C $(FW_SRC_DIR) distclean
 	$(MAKE) -C $(FW_SRC_DIR) $(FW_MAKE_FLAGS) -j$$(nproc)
 
 # fw_jump 同样内嵌 sittim.bin (firmware/objects.mk _ENCLAVE_DEFAULT),
-$(FW_BUILD_DIR)/fw_jump.elf: $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP)
+$(FW_BUILD_DIR)/fw_jump.elf: $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP) | fw-src-check
 	$(MAKE) -C $(FW_SRC_DIR) distclean
 	$(MAKE) -C $(FW_SRC_DIR) $(FW_JUMP_FLAGS) -j$$(nproc)
 
@@ -141,7 +147,7 @@ $(fw_jump): $(FW_BUILD_DIR)/fw_jump.elf
 	cp $(FW_BUILD_DIR)/fw_jump.elf $(fw_jump)
 	@echo "固件已拷贝: $(fw_jump)"
 
-$(fw_payload_linux): $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP)
+$(fw_payload_linux): $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP) | fw-src-check
 	@echo "构建opensbi与Linux内核..."
 	$(MAKE) -C $(FW_SRC_DIR) distclean $(FW_MAKE_FLAGS) \
 		FW_PAYLOAD_PATH=$(realpath $(LINUX_IMG))
@@ -219,15 +225,14 @@ pkg-up: __pyenv-check
 
 # ---- 主入口: 启动模拟器 ----
 # 完整依赖链: Rust 编译、固件编译、拷贝、kei.sav、模拟器
-emu: kei-sav __pyenv-check
+emu: kei-sav __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
 	python -m pyremu.debugger --hart-logs=output/ $(pyargs)
 phony += emu
 
 # fw_payload 模式 (Linux 内嵌 OpenSBI payload)
 # 注意，嵌入的是vmlinux，会缺乏调试符号
-emu-linux-payload: kei-sav $(fw_payload_linux) __pyenv-check
-	@$(MAKE) -C pyremu
+emu-linux-payload: kei-sav $(fw_payload_linux) __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
 	python -m pyremu.debugger \
 		--hart-logs=output/ --ram-base=0x80000000 --ram 512M $(zsbl_args) \
@@ -235,14 +240,17 @@ emu-linux-payload: kei-sav $(fw_payload_linux) __pyenv-check
 phony += emu-linux-payload
 
 # 启动linux并调试整个调试系统与试验环境
-emu-linux-sh: kei-sav $(fw_jump) build-native __pyenv-check
+emu-linux-sh: kei-sav $(fw_jump) build-native __pyenv-check __configs-gen
 # 调试输出地址
 # 内存基地址
 # 模拟内存大小
+# 引导只读存储器的基址
+# 引导只读存储器的大小
 # 零阶段启动器
 # 内核镜像
 # 内核符号所在目录
 # 设备树生成
+# 芯片设备树
 # ext4参数
 # 启动参数
 # hart数量
@@ -252,11 +260,14 @@ emu-linux-sh: kei-sav $(fw_jump) build-native __pyenv-check
 	PYTHON_GIL=0 python -m pyremu.debugger \
 		--hart-logs=output/ \
 		--ram-base=0x80000000 \
-		--ram $(ram) \
+		--ram=$(ram) \
+		--rom-base=$(ROM_BASE) \
+		--rom-size=$(ROM_SIZE) \
 		$(zsbl_args) \
 		--kernel=$(LINUX_IMG) \
 		--sym-dir=$(abspath $(sym_dir)) \
-		--fdt -1 \
+		--fdt=-1 \
+		$(chip_dts_arg) \
 		$(disk_args) \
 		$(initrd_args) \
 		$(bootargs_arg) \

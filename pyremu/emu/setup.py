@@ -10,22 +10,24 @@ Emulator 的构造流程先声明共享字段, 再依次调用这里各步骤.
 
 import ctypes
 import sys
-from typing import Any, Callable
+from typing import Any
 
 from pyremu._native import (
     FfiUartCtx,
+    HartState,
+    InstrToBeExec,
     native_available,
     termio_set_emu_stop_flag,
 )
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import HartState, InstrToBeExec
-from pyremu.core.mem_check_aux import inject_memory_backend
+from pyremu.core.hart import RatifiedHartAttrs
 from pyremu.interrupt.aplic import APLIC
 from pyremu.interrupt.imsic import IID_EXT_MIN, IMSIC
 from pyremu.interrupt.plic import PLIC
 from pyremu.memory.bus import Bus
 from pyremu.memory.l2cache import L2Cache
 from pyremu.peripheral import (
+    BootAddrReg,
     CRNG,
     GPIO,
     I2C,
@@ -35,40 +37,9 @@ from pyremu.peripheral import (
     VirtIOBlock,
     VirtIONet,
 )
-from pyremu.peripheral.uart import UART_IRQ
-from pyremu.peripheral.virtio_blk import VIRTIO_BLK_IRQ
-from pyremu.peripheral.virtio_net import (
-    DEFAULT_VIRTIO_NET_M_MAC,
-    DEFAULT_VIRTIO_NET_S_MAC,
-    VIRTIO_NET_M_IRQ,
-    VIRTIO_NET_S_IRQ,
-)
+from pyremu.peripheral.virtio_net import DEFAULT_VIRTIO_NET_M_MAC, DEFAULT_VIRTIO_NET_S_MAC
 from pyremu.peripheral.watchdog import HartWatchdog
 from pyremu.platform import InterruptMode, PlatformConfig
-
-
-def _wrap_phy_write_for_uart(
-    hart_id: int,
-    uart,  # UART | None
-    orig_write: Callable[[int, bytes], None],
-) -> Callable[[int, bytes], None]:
-    """
-    hart 写入 UART MMIO 范围时标记写者身份.
-
-    UART 据此把 TXDATA 字节归入该 hart 的日志文件
-    本函数不做行缓冲, 只用于多 hart 输出分流归档.
-    """
-    if uart is None:
-        return orig_write
-    uart_base = uart.base_addr
-    uart_end = uart.base_addr + uart.size
-
-    def _write(pa: int, data: bytes) -> None:
-        if uart_base <= pa < uart_end:
-            uart._current_writer = hart_id
-        return orig_write(pa, data)
-
-    return _write
 
 
 class SetupOps:
@@ -125,12 +96,14 @@ class SetupOps:
                 )
                 self.bus.add_device(aplic_m.base_addr, aplic_m)
                 # 该域没有软件写 MMIO 配置中断源路由: 中断源停留在 inactive 时
-                # set_irq 直接丢弃, 故在此预置网卡中断源的投递目标与使能.
-                # 投递 identity 取外部中断起始值, 不取中断源编号本身: 源号 3 与
-                # M 文件上的软件中断 identity 相同, 该 identity 的 pending 位由
-                # IPI 快路径不经使能位直接投递, 网卡置位会被当作 IPI 认领.
-                aplic_m.bind_source(VIRTIO_NET_M_IRQ, 0, IID_EXT_MIN)
-                self._irq_sink.bind(VIRTIO_NET_M_IRQ, aplic_m)
+                # set_irq 直接丢弃, 故在此预置网卡中断源的投递目标与使能. 投递
+                # identity 取外部中断起始值, 不取中断源编号本身: 中断源编号与
+                # M 文件上的软件中断 identity 取值可能相同, 该 identity 的
+                # pending 位由 IPI 快路径不经使能位直接投递, 网卡置位会被当作 IPI 认领.
+                # 未注册飞地侧网卡时不占用该中断源.
+                if p.virtio_net_m_base:
+                    aplic_m.bind_source(p.virtio_net_m_irq, 0, IID_EXT_MIN)
+                    self._irq_sink.bind(p.virtio_net_m_irq, aplic_m)
             return
         self.plic = PLIC(
             base_addr=config.periph.plic_base,
@@ -141,13 +114,29 @@ class SetupOps:
         # legacy 模式下全部中断源交给 PLIC.
         self._irq_sink.set_fallback(self.plic)
 
+    def _declare_device_slots(self) -> None:
+        """声明外设与看门狗的槽位, 由 ``_setup_peripherals`` 按配置填充.
+
+        基址取 0 的设备保持在 None
+        """
+        self.uart: UART | None = None
+        self.spi: SPI | None = None
+        self.i2c: I2C | None = None
+        self.gpio: GPIO | None = None
+        self.virtio_blk: VirtIOBlock | None = None
+        self.virtio_net_s: VirtIONet | None = None
+        self.virtio_net_m: VirtIONet | None = None
+        self.watchdog: HartWatchdog | None = None
+        self.crng: CRNG | None = None
+        self.boot_addr_reg: BootAddrReg | None = None
+
     def _setup_peripherals(self, config: PlatformConfig) -> None:
         """按配置创建并注册外设与看门狗设备; 基址取 0 的设备跳过.
 
         ``self.uart`` / ``self.spi`` / ``self.i2c`` / ``self.gpio`` /
         ``self.virtio_blk`` / ``self.virtio_net_s`` / ``self.virtio_net_m`` /
-        ``self.watchdog`` 由 Emulator 的构造流程声明, 本函数仅填充配置启用的
-        字段.
+        ``self.watchdog`` 由 ``_declare_device_slots`` 声明, 本函数仅填充配置启用
+        的字段.
         """
         p = config.periph
         # 中断路由目标: AIA 模式为 APLIC, legacy 模式为 PLIC
@@ -156,7 +145,7 @@ class SetupOps:
             self.uart = UART(
                 base=p.uart_base,
                 plic=int_ctrl,
-                irq=UART_IRQ,
+                irq=p.uart_irq,
             )
             self.bus.add_device(p.uart_base, self.uart)
             self._peripherals["uart"] = self.uart
@@ -180,45 +169,54 @@ class SetupOps:
                 mem_read=self.bus.main_mem.read,
                 mem_write=self.bus.main_mem.write,
                 # 直接调 plic.set_irq 会略过通知加速执行引擎与唤醒 WFI 等待的
-                # hart 这两步. 此处不得改传 raise_device_irq: 绑定方法持有
-                # Emulator, 会与 Emulator 对设备的持有构成环形引用
-                irq_sink=(VIRTIO_BLK_IRQ, self._irq_sink),
+                # hart 这两步. 此处传入设备中断投递目标本身: 设备持有 Emulator
+                # 或它的绑定方法, 会与 Emulator 对设备的持有构成环形引用
+                irq_sink=(p.virtio_blk_irq, self._irq_sink),
             )
             self.bus.add_device(p.virtio_blk_base, self.virtio_blk)
             self._peripherals["virtio_blk"] = self.virtio_blk
         if p.virtio_net_s_base:
             self.virtio_net_s = self._create_virtio_net(
                 p.virtio_net_s_base,
-                VIRTIO_NET_S_IRQ,
+                p.virtio_net_s_irq,
                 DEFAULT_VIRTIO_NET_S_MAC,
             )
             self._peripherals["virtio_net_s"] = self.virtio_net_s
         if p.virtio_net_m_base:
             self.virtio_net_m = self._create_virtio_net(
                 p.virtio_net_m_base,
-                VIRTIO_NET_M_IRQ,
+                p.virtio_net_m_irq,
                 DEFAULT_VIRTIO_NET_M_MAC,
             )
             self._peripherals["virtio_net_m"] = self.virtio_net_m
 
-        # 看门狗设备: 多 hart 停滞检测, DTB 可见. 经 clint 与 wake_event 两个对象
-        # 构造, 不传 Emulator, 也不传 hart 列表: 本设备持有其中任何一个都会与
-        # Emulator 对设备的持有构成环形引用. hart 列表在每次 tick 时随参数传入.
-        _wdog_base = p.watchdog_base or 0x1000_4000
-        self.watchdog = HartWatchdog(
-            clint=self.clint,
-            wake_event=self._wake_event,
-            base=_wdog_base,
-            num_harts=config.num_harts,
-        )
-        self.bus.add_device(_wdog_base, self.watchdog)
-        self._peripherals["watchdog"] = self.watchdog
+        if p.watchdog_base:
+            # 看门狗时钟由设备自带的守护线程维护, 中断经设备中断投递目标拉高:
+            # 不持有 Emulator 或它的绑定方法, 以免构成环形引用.
+            self.watchdog = HartWatchdog(
+                irq_sink=(p.watchdog_irq, self._irq_sink),
+                base=p.watchdog_base,
+                num_harts=config.num_harts,
+            )
+            self.bus.add_device(p.watchdog_base, self.watchdog)
+            self._peripherals["watchdog"] = self.watchdog
+            self.watchdog.start()
 
-        # 随机数生成器: 运行期熵源, DTB 可见, 设备树节点名为 pyremu,crng.
         if p.crng_base:
+            # 随机数生成器 运行期熵源
             self.crng = CRNG(base=p.crng_base)
             self.bus.add_device(p.crng_base, self.crng)
             self._peripherals["crng"] = self.crng
+
+        if p.boot_addr_base:
+            # 启动地址寄存器 每 hart 一个 64 位入口地址, 由引导只读存储器内的代码读取
+            self.boot_addr_reg = BootAddrReg(
+                num_harts=config.num_harts,
+                base=p.boot_addr_base,
+                size=p.boot_addr_size,
+            )
+            self.bus.add_device(p.boot_addr_base, self.boot_addr_reg)
+            self._peripherals["boot_addr"] = self.boot_addr_reg
 
     def _create_virtio_net(
         self,
@@ -250,14 +248,15 @@ class SetupOps:
         ``_setup_interrupt_controllers`` 填充的控制器字段均已就绪;
         ``self.harts`` 由构造流程置为空列表, 本函数只向其追加, 不另建列表.
         """
+        attrs = RatifiedHartAttrs.from_platform(config.pmp_entries, config.isa)
         for i in range(config.num_harts):
-            h = Hart(id=i, pmp_entries=config.pmp_entries)
+            h = Hart(id=i, ratified_hart_attrs=attrs)
             h.pc = config.prog_cnt
-            inject_memory_backend(
-                h,
-                self.bus.read,
-                _wrap_phy_write_for_uart(h.id, self.uart, self.bus.write),
-            )
+            h.mem_read_phy = self.bus.read
+            if self.uart is None:
+                h.mem_write_phy = self.bus.write
+            else:
+                h.mem_write_phy = self.uart.wrap_phy_write(h.id, self.bus.write)
             h.bus = self.bus
             h.interrupt_ctrl = self.clint
             h.plic = self.plic
@@ -317,6 +316,9 @@ class SetupOps:
 
         num_harts = len(self.harts)
         self._speedup_hart_states = (HartState * num_harts)()
+        # 扩展开关是平台的静态属性, 在状态数组分配时写入一次; 逐轮编组不再重复写入.
+        for i, hart in enumerate(self.harts):
+            hart.marshal_isa_exts(self._speedup_hart_states[i])
         # IMSIC 的中断写入目标取引擎正在读取的这份 hart 状态数组, 与 PLIC 的
         # _ffi_pending 与 _ffi_level 同理: 设备线程经 set_ip_number 注入的 eip
         # 必须落在引擎正在读的这份数组上, 否则 AIA 模式下外部中断要等到轮边界

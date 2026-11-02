@@ -104,7 +104,8 @@ struct shared_ctl {
 
 static uint8_t *read_file(
 	const char *path,
-	size_t *out_sz) {
+	size_t *out_sz
+) {
 	FILE *fp = fopen(path, "rb");
 	if (!fp) {
 		return NULL;
@@ -136,14 +137,16 @@ static uint8_t *read_file(
 static long tee_ioctl(
 	int fd,
 	unsigned long req,
-	void *arg) {
+	void *arg
+) {
 	return syscall(SYS_ioctl, fd, req, arg);
 }
 
 /* 取本进程可运行的 hart 集合, 返回个数 (最多 max 个), 编号写入 harts[]; 失败返回 -1. */
 static int online_harts(
 	int *harts,
-	int max) {
+	int max
+) {
 	cpu_set_t set;
 
 	if (sched_getaffinity(0, sizeof(set), &set) != 0) {
@@ -197,7 +200,8 @@ static long long now_ns(void) {
 
 static void report(
 	const char *name,
-	int ok) {
+	int ok
+) {
 	printf(">> regress-check %s: %s\n", name, ok ? "PASS" : "FAIL");
 }
 
@@ -206,7 +210,8 @@ static void report(
 static const char *errno_text(
 	int err,
 	char *buf,
-	size_t size) {
+	size_t size
+) {
 	if (err == 0) {
 		snprintf(buf, size, "ok");
 	} else {
@@ -239,15 +244,17 @@ static const char *run_state_name(int state) {
  * 有请求方绑定失败 (-2) 或两个请求方的目标 hart 相同, 则本用例的前提不成立. */
 static int distinct_harts(
 	const struct shared_ctl *ctl,
-	int cnt) {
+	int cnt
+) {
 	for (int i = 0; i < cnt; i++) {
 		if (ctl->obs_hart[i] == -2) {
 			return 0;
 		}
 		for (int j = i + 1; j < cnt; j++) {
-			if (ctl->pin_hart[i] == ctl->pin_hart[j]
-				|| (ctl->obs_hart[i] >= 0 && ctl->obs_hart[j] >= 0
-					&& ctl->obs_hart[i] == ctl->obs_hart[j])) {
+			if (ctl->pin_hart[i] == ctl->pin_hart[j] ||
+				(ctl->obs_hart[i] >= 0 &&
+				 ctl->obs_hart[j] >= 0 &&
+				 ctl->obs_hart[i] == ctl->obs_hart[j])) {
 				return 0;
 			}
 		}
@@ -259,7 +266,8 @@ static int distinct_harts(
  * 这是本用例的核心判据 -- 并发到达者被拒绝时 (用户态 EACCES) 此处为假. */
 static int all_served(
 	const struct shared_ctl *ctl,
-	int cnt) {
+	int cnt
+) {
 	for (int i = 0; i < cnt; i++) {
 		if (ctl->rc[i] < 0) {
 			return 0;
@@ -272,7 +280,8 @@ static int all_served(
  * 递增. 请求方个数不超过 hart 数, 两两比较即可覆盖全部次序, 不需要另建排序副本. */
 static int serve_order_matches(
 	const struct shared_ctl *ctl,
-	int cnt) {
+	int cnt
+) {
 	for (int i = 0; i < cnt; i++) {
 		for (int j = i + 1; j < cnt; j++) {
 			int early = (ctl->req_ns[i] <= ctl->req_ns[j]) ? i : j;
@@ -291,7 +300,8 @@ static int serve_order_matches(
 static void print_order(
 	const struct shared_ctl *ctl,
 	int cnt,
-	int by_arrival) {
+	int by_arrival
+) {
 	int order[MAX_REQUESTERS];
 
 	for (int i = 0; i < cnt; i++) {
@@ -320,19 +330,17 @@ static void print_order(
 static void print_phase(
 	const char *label,
 	const struct shared_ctl *ctl,
-	int cnt) {
+	int cnt
+) {
 	char buf[64];
 
 	for (int i = 0; i < cnt; i++) {
 		long long wait_ms = (ctl->done_ns[i] - ctl->req_ns[i]) / 1000000;
 
 		printf(
-			"  [%s %d] hart %d (pinned %d), waited %lld ms, ",
-			label,
-			i,
-			ctl->obs_hart[i],
-			ctl->pin_hart[i],
-			wait_ms);
+			"  [%s %d] hart %d (pinned %d), waited %lld ms, ", label, i, ctl->obs_hart[i],
+			ctl->pin_hart[i], wait_ms
+		);
 		if (ctl->rc[i] >= 0) {
 			printf("returned %s\n", run_state_name(TEE_RUN_STATE(ctl->rc[i])));
 		} else {
@@ -357,7 +365,8 @@ static int run_phase(
 	unsigned long req,
 	void *arg,
 	const int *hart_of,
-	int cnt) {
+	int cnt
+) {
 	pid_t pids[MAX_REQUESTERS];
 	int i;
 
@@ -423,7 +432,8 @@ static int run_phase(
 
 int main(
 	int argc,
-	char **argv) {
+	char **argv
+) {
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s <payload_path> [concurrent_requests]\n", argv[0]);
 		return 2;
@@ -459,8 +469,8 @@ int main(
 			"[info] %d hart(s) online allow %d concurrent request(s), two concurrent "
 			"requests need at least 2 harts, the precondition of this case does not "
 			"hold\n",
-			hart_count,
-			requester_cnt);
+			hart_count, requester_cnt
+		);
 		report("concurrent-enter-two-harts", 0);
 		report("concurrent-enter-queued-served", 0);
 		report("concurrent-enter-resume-queued", 0);
@@ -469,9 +479,8 @@ int main(
 		return 1;
 	}
 	printf(
-		"[info] %d hart(s) online, %d concurrent request(s)\n",
-		hart_count,
-		requester_cnt);
+		"[info] %d hart(s) online, %d concurrent request(s)\n", hart_count, requester_cnt
+	);
 
 	/* 主进程绑定到最后一个在线 hart, 各请求方绑定在线 hart 的前 requester_cnt 个. 请求方
 	 * 个数不超过 hart 数, 故与主进程共用的那个 hart 上至多有一个请求方, 即最后一个请求
@@ -503,7 +512,8 @@ int main(
 	int baseline_ok = (tee_ioctl(fd, TEE_IOC_GET_MEM, &mem_before) == 0);
 
 	struct shared_ctl *ctl = mmap(
-		NULL, sizeof(*ctl), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+		NULL, sizeof(*ctl), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0
+	);
 	if (ctl == MAP_FAILED) {
 		fprintf(stderr, "mmap shared ctl: %s\n", strerror(errno));
 		free(payload);
@@ -561,8 +571,8 @@ int main(
 	/* ---- RESUME 路径 ---- */
 	int resume_two_harts = 0, resume_served = 0, resume_order = 0, resume_ran = 0;
 	if (enter_served && TEE_RUN_STATE(ctl->rc[0]) == TEE_RUN_SUSPENDED) {
-		if (run_phase(ctl, fd, TEE_IOC_RESUME, &resume_args, req_harts, requester_cnt)
-			!= 0) {
+		if (run_phase(ctl, fd, TEE_IOC_RESUME, &resume_args, req_harts, requester_cnt) !=
+			0) {
 			free(payload);
 			close(fd);
 			return 1;
@@ -577,11 +587,13 @@ int main(
 		printf(
 			"[info] the enclave returned %s after the ENTER phase, the RESUME case "
 			"needs a payload that suspends\n",
-			run_state_name(TEE_RUN_STATE(ctl->rc[0])));
+			run_state_name(TEE_RUN_STATE(ctl->rc[0]))
+		);
 	} else {
 		printf(
 			"[info] the ENTER phase did not obtain an execution result, the RESUME "
-			"case cannot be constructed\n");
+			"case cannot be constructed\n"
+		);
 	}
 
 	/* 清理: 终止飞地. TEE_IOC_SHUTDOWN 为 _IOW, 驱动 copy_from_user 读取
@@ -597,30 +609,36 @@ int main(
 	}
 
 	/* 无泄漏: 飞地占用的分区必须全部归还. */
-	int no_leak = baseline_ok && (tee_ioctl(fd, TEE_IOC_GET_MEM, &mem_after) == 0)
-				  && mem_before.free_total == mem_after.free_total
-				  && mem_before.max_contiguous == mem_after.max_contiguous;
+	int no_leak = baseline_ok &&
+				  (tee_ioctl(fd, TEE_IOC_GET_MEM, &mem_after) == 0) &&
+				  mem_before.free_total == mem_after.free_total &&
+				  mem_before.max_contiguous == mem_after.max_contiguous;
 	printf(
 		"[info] memory pool free partitions: before %lu (max contiguous %lu), after "
 		"%lu (max contiguous %lu)\n",
-		(unsigned long)mem_before.free_total,
-		(unsigned long)mem_before.max_contiguous,
-		(unsigned long)mem_after.free_total,
-		(unsigned long)mem_after.max_contiguous);
+		(unsigned long)mem_before.free_total, (unsigned long)mem_before.max_contiguous,
+		(unsigned long)mem_after.free_total, (unsigned long)mem_after.max_contiguous
+	);
 
 	report(
 		"concurrent-enter-two-harts",
-		enter_two_harts && (resume_ran ? resume_two_harts : 1));
+		enter_two_harts && (resume_ran ? resume_two_harts : 1)
+	);
 	report("concurrent-enter-queued-served", enter_served);
 	report("concurrent-enter-resume-queued", resume_served);
 	report(
-		"concurrent-enter-serve-order", enter_order && (resume_ran ? resume_order : 0));
+		"concurrent-enter-serve-order", enter_order && (resume_ran ? resume_order : 0)
+	);
 	report("concurrent-enter-no-leak", no_leak);
 
 	free(payload);
 	close(fd);
-	return (enter_two_harts && enter_served && resume_served && enter_order
-			&& (resume_ran ? resume_order : 0) && no_leak)
+	return (enter_two_harts &&
+			enter_served &&
+			resume_served &&
+			enter_order &&
+			(resume_ran ? resume_order : 0) &&
+			no_leak)
 			   ? 0
 			   : 1;
 }

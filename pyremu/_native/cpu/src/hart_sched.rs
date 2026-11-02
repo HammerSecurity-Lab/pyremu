@@ -1,4 +1,5 @@
 use crate::atom_instr::handle_amo_concurrent_dispatch;
+use crate::check_ext_isa;
 use crate::concurrent::{
 	advance_clock_source, ConcurrentClintCtx, ModuleState, SharedDevCtx, SharedMemCtx,
 	SharedPmpCtx, StopInfo,
@@ -305,7 +306,7 @@ pub(crate) fn handle_load_concurrent(
 	}
 
 	// CLINT 读取
-	if let Some(data) = try_handle_clint_concurrent(tr.pa, false, 0, state, clint, module) {
+	if let Some(data) = try_handle_clint_concurrent(tr.pa, false, 0, size as u64, state, clint) {
 		let result_val = if signed {
 			match size {
 				1 => sext(data, 8),
@@ -484,7 +485,7 @@ pub(crate) fn handle_store_concurrent(
 	let val = read_gpr(state, f.rs2);
 
 	// 写入 CLINT
-	if let Some(_) = try_handle_clint_concurrent(tr.pa, true, val, state, clint, module) {
+	if let Some(_) = try_handle_clint_concurrent(tr.pa, true, val, size as u64, state, clint) {
 		return 4;
 	}
 
@@ -1428,6 +1429,15 @@ pub(crate) fn hart_worker(
 
 		// ---- 译码与执行 ----
 		let f = decode_fields(instr_word);
+		// 平台未声明的扩展所对应的指令不存在, 投递 IllInstr 而不进入处理器.
+		// 判定与 Python 侧 ``check_ext_isa`` 一致.
+		if !check_ext_isa::check_ext_isa(&state.isa_exts, &f) {
+			deliver_illegal_instruction(state, instr_word as u64);
+			if !post_instr_checks(state, hart_id, module, breakpoints) {
+				return;
+			}
+			continue;
+		}
 		if f.is_compressed != 0 {
 			if !exec_compressed_concurrent(
 				state,
