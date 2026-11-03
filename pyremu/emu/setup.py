@@ -320,7 +320,7 @@ class SetupOps:
         for i, hart in enumerate(self.harts):
             hart.marshal_isa_exts(self._speedup_hart_states[i])
         # IMSIC 的中断写入目标取引擎正在读取的这份 hart 状态数组, 与 PLIC 的
-        # _ffi_pending 与 _ffi_level 同理: 设备线程经 set_ip_number 注入的 eip
+        # pending 与 level 同理: 设备线程经 set_ip_number 注入的 eip
         # 必须落在引擎正在读的这份数组上, 否则 AIA 模式下外部中断要等到轮边界
         # _native_sync_plic_mip 才可见, 输入回显延迟以百毫秒计.
         if self.imsic is not None:
@@ -344,20 +344,9 @@ class SetupOps:
         self._pmp_num: int = 0
         self._pmp_cfg_buf = (ctypes.c_uint8 * 0)()
         self._pmp_addr_buf = (ctypes.c_uint64 * 0)()
-
-        # PLIC 的 ctypes 数组跨轮保留, 由 Rust 直接读写. 与 CLINT 每轮重新分配
-        # 不同, 这几个数组必须跨轮保持同一份, 否则设备线程写入的数组与
-        # run_parallel 读取的不是同一份, 单轮内新到达的设备中断对 Rust 不可见.
-        # pending 与 level 由 PLIC 对象持有, 即 _ffi_pending 与 _ffi_level,
-        # set_irq 时直接写入; 本处仅保留 priority、enable、threshold 与
-        # claimed, 由 _native_marshal_plic 在尺寸变化时才重新分配.
-        self._plic_base: int = 0
-        self._plic_num_sources: int = 0
-        self._plic_num_contexts: int = 0
-        self._plic_priority_arr = (ctypes.c_uint8 * 0)()
-        self._plic_enable_arr = (ctypes.c_uint32 * 0)()
-        self._plic_threshold_arr = (ctypes.c_uint8 * 0)()
-        self._plic_claimed_arr = (ctypes.c_uint32 * 0)()
+        self._pmp_cfg_snapshot: bytes = b""
+        self._pmp_addr_snapshot: bytes = b""
+        self._bind_pmp_buffers()
 
         # UART 的 ctypes 上下文跨轮保持同一份, 与 PLIC 的数组同理: Rust 处理受
         # 调试程序对 IP 寄存器的读取时, 数据源必须是设备侧持续更新的那个对象,
@@ -365,3 +354,28 @@ class SetupOps:
         if self.uart is not None:
             self._native_uart_ffi = FfiUartCtx()
             self.uart._ffi_ctx = self._native_uart_ffi
+
+    def _bind_pmp_buffers(self) -> None:
+        """把全部 hart 的 PMP 条目数组指向同一份共享缓冲区中的各自切片.
+
+        每个 hart 占用连续的 ``n`` 项, ``n`` 为该 hart 的 PMP 条目数: hart h 的
+        pmpcfg 位于 ``[h*n, h*n+n)``, pmpaddr 位于 ``[h*n, h*n+n)`` 的 64 位元素
+        区间. 加速执行引擎按 hart_id 乘以 ``n`` 定位各自的切片, 两侧读写同一份
+        存储, 每轮不再复制条目.
+        """
+        total = len(self.harts)
+        self._pmp_num = self.harts[0].pmp.num_entries if total else 0
+        self._pmp_cfg_buf = (ctypes.c_uint8 * (self._pmp_num * total))()
+        self._pmp_addr_buf = (ctypes.c_uint64 * (self._pmp_num * total))()
+        if self._pmp_num == 0:
+            return
+        addr_stride = self._pmp_num * ctypes.sizeof(ctypes.c_uint64)
+        for hid, hart in enumerate(self.harts):
+            hart.pmp.bind_flat_buffers(
+                (ctypes.c_uint8 * self._pmp_num).from_buffer(
+                    self._pmp_cfg_buf, hid * self._pmp_num
+                ),
+                (ctypes.c_uint64 * self._pmp_num).from_buffer(
+                    self._pmp_addr_buf, hid * addr_stride
+                ),
+            )

@@ -42,6 +42,9 @@ malloc_churn-p2、modular_form、nc_udp、orbit、stress_ng 512M、stress_ng 1G�
 dune-poisson。
 输出哪些行仍由日志中出现的飞地决定, 不按该清单筛选。
 
+日志中的控制字符按空白处理, 写表时替换为空格, 使日志带有 NUL 等损坏字节时仍可解析并
+写出表格。
+
 用法:
 
     uv run python tools/parse_dbg_stats.py output/rec.log -o build/dbg_stats.xlsx
@@ -63,6 +66,8 @@ from openpyxl.utils import get_column_letter
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 ENCL_STAT_HINT = re.compile(r"encl_stat<")
+# openpyxl 拒绝 C0 控制字符中除制表与换行以外的项, 也拒绝 DEL.
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 CYCLE_PATTERNS = (
     re.compile(r"encl_stat<cycle>:\s*\(eid,cycles\):\s*(\d+),(\d+)"),
@@ -202,6 +207,13 @@ def canonical_name(name: str) -> str:
     return NAME_ALIASES.get(collapsed, collapsed)
 
 
+def sanitize_cell(value: object) -> object:
+    """把字符串中的控制字符替换为空格, 其余类型原样返回。"""
+    if isinstance(value, str):
+        return CONTROL_CHARS.sub(" ", value)
+    return value
+
+
 def match_cycle(line: str, line_no: int) -> Record | None:
     for pattern in CYCLE_PATTERNS:
         match = pattern.search(line)
@@ -315,7 +327,8 @@ def parse_log(
 
     text = path.read_text(encoding="utf-8", errors="replace")
     for line_no, raw in enumerate(text.splitlines(), 1):
-        line = ANSI_ESCAPE.sub("", raw)
+        # 日志可能带有 NUL 等控制字符, 按空白处理, 名称与统计行仍可解析.
+        line = CONTROL_CHARS.sub(" ", ANSI_ESCAPE.sub("", raw))
 
         hit = match_name(line, patterns)
         if hit is not None:
@@ -451,7 +464,9 @@ def build_rows(
 def write_csv(stream, rows: list[dict[str, object]], columns: list[str]) -> None:
     writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\n")
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(
+        {column: sanitize_cell(row.get(column)) for column in columns} for row in rows
+    )
 
 
 def write_xlsx(
@@ -467,7 +482,7 @@ def write_xlsx(
 
     sheet.append(list(columns))
     for row in rows:
-        sheet.append([row.get(column) for column in columns])
+        sheet.append([sanitize_cell(row.get(column)) for column in columns])
 
     for cells in sheet.iter_rows():
         for cell in cells:

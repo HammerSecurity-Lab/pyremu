@@ -69,7 +69,6 @@ class SysInstrOps:
         self._flush_tlbs(vpn, self._all_harts)
 
     def _sys_mfence_did(self, instr: int) -> None:
-        """MFENCE.DID: 按内存域刷新全部 hart 的 TLB 与共享 L2 缓存."""
         mdid_val = self.mdid_val
         for h in self._all_harts or [self]:
             h.itlb.flush_by_mdid(mdid_val)

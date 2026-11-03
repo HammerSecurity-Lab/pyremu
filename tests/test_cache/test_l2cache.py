@@ -388,6 +388,61 @@ class TestL2FlushAll:
         assert len(l2) == 0
 
 
+class TestL2TagIndex:
+    """有效行的 tag 索引: 填入时登记, 逐出与失效时移除.
+
+    flush_all 与 invalidate_all 只遍历该索引, 索引漏登记会使脏行丢失或残留有效行.
+    """
+
+    @pytest.fixture
+    def l2(self) -> L2Cache:
+        ram, rf, wf = make_test_ram(64 * 1024)
+        l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
+        l2.set_ram_backend(rf, wf)
+        return l2
+
+    def test_write_allocate_registers_tag_index(self, l2):
+        """写分配填入的行登记入索引, flush_all 回写该行."""
+        l2.write(0x1000, b"\xa5" * 8)
+        assert (0x1000 >> l2._line_shift) in l2._tag_to_idx
+        assert l2.flush_all() == 1
+        assert l2._ram_read(0x1000, 8) == b"\xa5" * 8
+
+    def test_index_tracks_valid_line_count(self, l2):
+        """索引条目数与有效行数一致."""
+        for addr in (0x1000, 0x1040, 0x2000, 0x3000):
+            l2.read(addr, 8)
+        assert len(l2._tag_to_idx) == len(l2) == 4
+
+    def test_invalidate_removes_tag_index(self, l2):
+        """invalidate 移除该行的索引条目, 不留指向无效行的映射."""
+        l2.write(0x1000, b"\xff" * 8)
+        l2.invalidate(0x1000)
+        assert (0x1000 >> l2._line_shift) not in l2._tag_to_idx
+        assert len(l2) == 0
+        assert l2.flush_all() == 0
+
+    def test_eviction_moves_tag_index(self):
+        """逐出后索引只指向当前驻留的行, flush_all 不重复回写同一行."""
+        ram, rf, wf = make_test_ram(64 * 1024)
+        tiny = L2Cache(size=64, line_size=64, ways=1)
+        tiny.set_ram_backend(rf, wf)
+        tiny.write(0x1000, b"\x11" * 8)
+        tiny.write(0x2000, b"\x22" * 8)
+        assert len(tiny._tag_to_idx) == 1
+        assert tiny.flush_all() == 1
+        assert tiny._ram_read(0x1000, 8) == b"\x11" * 8
+        assert tiny._ram_read(0x2000, 8) == b"\x22" * 8
+
+    def test_invalidate_all_clears_tag_index(self, l2):
+        """invalidate_all 清空索引."""
+        for addr in (0x1000, 0x2000, 0x3000):
+            l2.read(addr, 8)
+        assert l2.invalidate_all() == 3
+        assert l2._tag_to_idx == {}
+        assert l2.flush_all() == 0
+
+
 class TestL2Degenerate:
     """退化情形: 尺寸为 0 或极小值时的防御行为."""
 

@@ -16,7 +16,9 @@ endif
 
 __uv-check:
 ifndef uv_check
-	$(error can not find uv, which could be installed by: curl -LsSf https://astral.sh/uv/install.sh | sh)
+	$(error can not find uv, \
+	which could be installed by: \
+	curl -LsSf https://astral.sh/uv/install.sh | sh)
 endif
 phony += __uv-check
 
@@ -103,14 +105,19 @@ $(SITTIM_CFG_STAMP): FORCE
 	@cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
 
 SITTIM_SRC_DEPS := $(shell find $(SITTIM_DIR)/src -type f 2>/dev/null)
-SITTIM_SRC_DEPS += $(SITTIM_DIR)/config.mk $(SITTIM_DIR)/Makefile $(SITTIM_DIR)/link.ld.S
-SITTIM_SRC_DEPS += $(SITTIM_DIR)/Cargo.toml $(SITTIM_DIR)/Cargo.lock
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/config.mk
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/Makefile
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/link.ld.S
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/Cargo.toml
+SITTIM_SRC_DEPS += $(SITTIM_DIR)/Cargo.lock
 SITTIM_SRC_DEPS += $(SITTIM_DIR)/.cargo/config.toml
 
 # sittim 的 config.mk 不包含根目录的配置文件, 平台级取值在此经命令行传入: 经本文件构建
 # 时采用 mk/ 下配置分片的取值, 单独在 bsp/sittim 下构建时采用其 config.mk 的默认值.
 $(SITTIM_BIN): $(SITTIM_SRC_DEPS) $(SITTIM_CFG_STAMP)
-	$(MAKE) -C $(SITTIM_DIR) build TIMER_FREQ=$(TIMER_FREQ) UART_BASE=$(UART_BASE)
+	$(MAKE) -C $(SITTIM_DIR) build \
+	TIMER_FREQ=$(TIMER_FREQ) \
+	UART_BASE=$(UART_BASE)
 
 build-sittim: $(SITTIM_BIN)
 phony += build-sittim
@@ -140,15 +147,15 @@ $(fw_payload): $(FW_BUILD_DIR)/fw_payload.elf
 	cp $(FW_BUILD_DIR)/fw_payload.elf $(fw_payload)
 	cp $(FW_BUILD_DIR)/fw_jump.elf $(fw_jump)
 	cp $(FW_BUILD_DIR)/fw_dynamic.elf $(fw_dynamic)
-	@echo "固件已拷贝: $(fw_payload)"
+	@echo "copied firmware: $(fw_payload)"
 
 $(fw_jump): $(FW_BUILD_DIR)/fw_jump.elf
 	@mkdir -p $(elf_dir)
 	cp $(FW_BUILD_DIR)/fw_jump.elf $(fw_jump)
-	@echo "固件已拷贝: $(fw_jump)"
+	@echo "copied firmware: $(fw_jump)"
 
 $(fw_payload_linux): $(SITTIM_BIN) $(FW_SRC_DEPS) $(FW_CFG_STAMP) | fw-src-check
-	@echo "构建opensbi与Linux内核..."
+	@echo "build opensbi and Linux..."
 	$(MAKE) -C $(FW_SRC_DIR) distclean $(FW_MAKE_FLAGS) \
 		FW_PAYLOAD_PATH=$(realpath $(LINUX_IMG))
 	$(MAKE) -C $(FW_SRC_DIR) $(FW_MAKE_FLAGS) \
@@ -168,7 +175,6 @@ phony += build-fw-jump
 # 依赖固件产物, 保证启动模拟器前固件已构建完成
 kei-sav: $(fw_payload)
 	$(MAKE) -C bsp/kei-boot kei-sav
-
 
 build-fw-linux: $(fw_payload_linux)
 phony += build-fw-linux
@@ -220,21 +226,21 @@ phony += gen-dtb
 
 # 项目打包
 pkg-up: __pyenv-check
-	python3 -m build --sdist --sdist-extract-dir pyremu
+	uv run python -m build --sdist --sdist-extract-dir pyremu
 
 
 # ---- 主入口: 启动模拟器 ----
 # 完整依赖链: Rust 编译、固件编译、拷贝、kei.sav、模拟器
 emu: kei-sav __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
-	python -m pyremu.debugger --hart-logs=output/ $(pyargs)
+	uv run python -m pyremu.debugger --hart-logs=output/ $(pyargs)
 phony += emu
 
 # fw_payload 模式 (Linux 内嵌 OpenSBI payload)
 # 注意，嵌入的是vmlinux，会缺乏调试符号
 emu-linux-payload: kei-sav $(fw_payload_linux) __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
-	python -m pyremu.debugger \
+	uv run python -m pyremu.debugger \
 		--hart-logs=output/ --ram-base=0x80000000 --ram 512M $(zsbl_args) \
 		--harts=$(NUM_HARTS) $(fw_payload_linux)
 phony += emu-linux-payload
@@ -295,6 +301,3 @@ cov-test: __pyenv-check test-build
 phony += cov-test
 
 .PHONY: $(phony)
-
-# 由 mk/ 下的配置分片生成 Python 常量
-# include pyremu/makefile

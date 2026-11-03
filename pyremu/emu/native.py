@@ -36,6 +36,7 @@ from pyremu.core.hart_ffi import (
 from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.trap_def import TrapType
 from pyremu.emu.run import RunStopReason
+from pyremu.stat import recording
 from pyremu.utils.mask import mask64
 
 
@@ -92,6 +93,7 @@ class NativeOps:
         return self._handle_native_sys_exit(hart, instr)
 
     def _speedup_for_cmd_step(self, active: list[Hart]) -> int:
+        recording.begin_round()
         # 将 L2 缓存的脏行写回 bytearray, 使加速执行引擎直接读取 bytearray 中的
         # 指令与数据时, 能看到 Python 侧的全部写入.
         self.bus.flush_l2()
@@ -117,6 +119,7 @@ class NativeOps:
         # PIE 链接地址区间随本轮回传给加速执行引擎, 引擎按同一换算访问主存.
         pie_ofs_base, pie_ofs_size = self.bus.pie_ofs_pair()
 
+        recording.mark_phase("sync_before")
         # 各 hart 由一个线程执行, 统一经 run_parallel 调用.
         virtio_ffi = run_parallel(
             RunConfig(
@@ -142,6 +145,7 @@ class NativeOps:
                 flush_cnt_per_hart=self._tlb_flush_cnt_per_hart,
             )
         )
+        recording.mark_phase("engine")
 
         result = self._speedup_instr_group
         # 外部中断为电平触发: 环形缓冲区与 UART FIFO 均为空时才清零 ext_irq.
@@ -185,7 +189,6 @@ class NativeOps:
         # 发送环形缓冲区的归档由 _tx_archive 守护线程异步处理,
         # 不在此处同步调用; UART 输入输出与单轮加速执行循环完全解耦.
         self._native_unmarshal_clint(clint_info)
-        self._native_unmarshal_plic(plic_info)
 
         # mtime 已由加速执行引擎在执行期间按指令增量推进, 见
         # advance_clock_source, 此处不再重复推进; _cycle 记录时钟源流逝, 供
@@ -211,6 +214,16 @@ class NativeOps:
         # 重放至多执行一条指令, 记录随即失效, 后续命令单步不受影响
         if self.virtio_blk is not None:
             self.virtio_blk.clear_notify_served()
+        recording.mark_phase("sync_after")
+        # result.total_instrs 是各 hart 的累计值, 与上一轮累计值之差即本轮的指令数.
+        # _native_finalize 会推进 _prev_all_exec_cnt, 故在它之前登记.
+        recording.end_round(
+            result.exit_reason,
+            all_exec_cnt - self._prev_all_exec_cnt,
+            result.exit_instr,
+            result.exit_pc,
+            result.exit_hart_id,
+        )
         return self._native_finalize(all_exec_cnt)
 
     # ---- _speedup_for_cmd_step 的组成: 进入前的状态复制、退出后的结果同步与收尾 ----
@@ -235,83 +248,26 @@ class NativeOps:
             hart.mip_val = (hart.mip_val & ~ext_mask) | ext_mip
 
     def _native_marshal_plic(self) -> PlicInfo | None:
-        """把 Python 的 PLIC 状态写入跨轮保留的 ctypes 数组, 返回 PlicInfo 交给 Rust.
+        """构造 PlicInfo, 各数组即 PLIC 对象持有的 ctypes 数组, 不做复制.
 
-        pending 与 level 由 PLIC 对象持有, 即 _ffi_pending 与 _ffi_level 两个
-        数组, set_irq 改变中断线时直接写入这两个数组, 故此处无需复制.
-        优先级、使能位、阈值与已认领状态由本函数写入, 这几个数组跨单轮加速执行
-        保留, 尺寸不变时不重新分配. 设备中断投递目标经 plic.set_irq 写入的正是
-        同一批数组, 单轮内新到达的设备中断因此对 Rust 直接可见. 仅在
-        num_sources 或 num_contexts 变化时重新分配.
+        引擎与 Python 侧读写同一份存储: 优先级、使能位、阈值、已认领状态、
+        挂起位与电平位均由引擎在单轮内直接修改; 设备线程经 set_irq 写的是同一批
+        数组, 单轮内新到达的设备中断因此对引擎直接可见.
         """
         plic = self.plic
         if plic is None:
             return None
-        ns = plic._num_sources
-        nc = plic._num_contexts
-        nw = (ns + 31) // 32
-        if len(self._plic_priority_arr) != ns + 1 or len(self._plic_enable_arr) != nc * nw:
-            self._plic_priority_arr = (ctypes.c_uint8 * (ns + 1))()
-            self._plic_enable_arr = (ctypes.c_uint32 * (nc * nw))()
-            self._plic_threshold_arr = (ctypes.c_uint8 * nc)()
-            self._plic_claimed_arr = (ctypes.c_uint32 * nc)()
-        # 把 Python 的 PLIC 状态写入数组: 中断源 0 为保留项, 保持为 0.
-        # pending 与 level 由 set_irq 直接写入, 此处无需复制.
-        for i in range(1, ns + 1):
-            self._plic_priority_arr[i] = plic._priority[i] & 0x7
-        for c in range(nc):
-            for w in range(nw):
-                word = 0
-                base = w * 32
-                for b in range(32):
-                    src = base + b
-                    if 0 < src <= ns and plic._enable[c][src]:
-                        word |= 1 << b
-                self._plic_enable_arr[c * nw + w] = word
-            self._plic_threshold_arr[c] = plic._threshold[c] & 0x7
-            self._plic_claimed_arr[c] = plic._claimed[c]
-        self._plic_base = plic.base_addr
-        self._plic_num_sources = ns
-        self._plic_num_contexts = nc
         return PlicInfo(
             base=plic.base_addr,
-            num_sources=ns,
-            num_contexts=nc,
-            priority=self._plic_priority_arr,
-            pending=plic._ffi_pending,
-            level=plic._ffi_level,
-            enable=self._plic_enable_arr,
-            threshold=self._plic_threshold_arr,
-            claimed=self._plic_claimed_arr,
+            num_sources=plic.num_sources,
+            num_contexts=plic.num_contexts,
+            priority=plic.priority,
+            pending=plic.pending,
+            level=plic.level,
+            enable=plic.enable,
+            threshold=plic.threshold,
+            claimed=plic.claimed,
         )
-
-    def _native_unmarshal_plic(self, plic_info: PlicInfo | None) -> None:
-        """把 Rust 改写过的数组同步到 Python 的 PLIC 对象.
-
-        优先级、使能位、阈值与已认领状态在单轮加速执行内由 Rust 直接修改数组,
-        边界处复制回来, 使下一轮 _native_sync_plic_mip 读到的是本轮结束后的仲裁
-        状态, 而非本轮开始前的取值.
-        """
-        if plic_info is None or self.plic is None:
-            return
-        plic = self.plic
-        ns = plic._num_sources
-        nc = plic._num_contexts
-        nw = (ns + 31) // 32
-        for i in range(1, ns + 1):
-            plic._priority[i] = self._plic_priority_arr[i] & 0x7
-            plic._pending[i] = bool(plic._ffi_pending[i])
-            plic._level[i] = bool(plic._ffi_level[i])
-        for c in range(nc):
-            for w in range(nw):
-                word = self._plic_enable_arr[c * nw + w]
-                base = w * 32
-                for b in range(32):
-                    src = base + b
-                    if 0 < src <= ns:
-                        plic._enable[c][src] = bool(word & (1 << b))
-            plic._threshold[c] = self._plic_threshold_arr[c] & 0x7
-            plic._claimed[c] = self._plic_claimed_arr[c]
 
     def _native_marshal_dev(self) -> DevInfo:
         """把设备 MMIO 地址范围写入 DevInfo, 供 Rust 判定 MMIO 直通."""
@@ -327,74 +283,53 @@ class NativeOps:
         return DevInfo(bases=dev_bases, ends=dev_ends)
 
     def _native_marshal_pmp(self, active: list[Hart]) -> PmpInfo:
+        """按 hart 刷新 PMP 条目数组, 并把本轮开始时的数组内容记为快照.
+
+        每个 hart 的 pmpcfg 与 pmpaddr 数组是共享缓冲区中的切片, 长度等于该 hart
+        的条目数 n, hart h 的切片从索引 h*n 开始; 引擎按 hart_id 乘以 n 定位各自
+        的切片. 数组只在 CSR 写入后标记失效时才按 CSR 重建, 其余轮次不做复制.
         """
-        构建每个 hart 各占一个切片的 PMP 缓冲区.
-
-        每个 hart 有独立的 PMP, 记每个 hart 的条目数为 n, hart h 的条目位于
-        [h*n, h*n+n), 缓冲区共 n * num_harts 项; 加速执行引擎按 hart_id 乘以 n
-        的偏移读取各自的切片.
-
-        条目数由芯片设备树与配置中的较大者给出, 全部 hart 相同: 设备树未按 hart
-        分别声明条目数时, 全部 hart 的 PMP 按同一份配置构造.
-
-        多个 hart 不得共用同一 PMP 缓冲区: SMP 启动时各 hart 在各自的
-        run_parallel 线程中并发重写自己的 PMP, 共用缓冲区会造成数据竞争, 一个
-        hart 取指时可能读到另一个 hart 刚写下的条目, 其地址不在这些条目覆盖的
-        范围内, 因而触发访问故障, cause 为 1, 多出现在 handle_exception 入口.
-        """
-        total = len(self.harts)
-        ref_pmp = self.harts[0]._pmp
-        self._pmp_num = ref_pmp._num_entries if ref_pmp is not None else 0
-        self._pmp_cfg_buf = (ctypes.c_uint8 * 0)()
-        self._pmp_addr_buf = (ctypes.c_uint64 * 0)()
-        if self._pmp_num > 0:
-            self._pmp_cfg_buf = (ctypes.c_uint8 * (self._pmp_num * total))()
-            self._pmp_addr_buf = (ctypes.c_uint64 * (self._pmp_num * total))()
-            for hid, h in enumerate(self.harts):
-                hp = h._pmp
-                if hp is None or hp._num_entries == 0:
-                    continue
-                if hp._cache_dirty:
-                    hp._rebuild_cache()
-                base = hid * self._pmp_num
-                fc = hp._flat_cfg
-                fa = hp._flat_addr
-                for j in range(self._pmp_num):
-                    self._pmp_cfg_buf[base + j] = fc[j]
-                    self._pmp_addr_buf[base + j] = fa[j]
+        for hart in self.harts:
+            if hart.pmp.is_cache_dirty:
+                hart.pmp.rebuild_cache()
+        self._pmp_cfg_snapshot = bytes(self._pmp_cfg_buf)
+        self._pmp_addr_snapshot = bytes(self._pmp_addr_buf)
         return PmpInfo(
             cfg=self._pmp_cfg_buf,
             addr=self._pmp_addr_buf,
             pmpsplit=active[0].pmpsplit_val if active else 0,
-            hart_num=total,
+            hart_num=len(self.harts),
         )
 
     def _native_unmarshal_pmp(self) -> None:
-        """把各 hart 的 PMP 切片复制回其独立的 PMP, 仅在实际改动时同步 CSR.
+        """把引擎改写过的条目切片对应的 CSR 同步为数组中的取值.
 
-        每个 hart 的 OpenSBI 把 pmpcfg 与 pmpaddr 写入自己的切片, 不复制到
-        其它 hart. sync_from_flat 写入 CSR 的开销较大, 绝大多数单轮加速执行中
-        PMP 无变化, 故仅在切片确实被 Rust 改写时才同步.
+        引擎与各 hart 的 PMP 共用同一份数组, 数组内容与本轮开始时的快照相同即
+        表示 PMP 无变化, 此时不写 CSR. 某个 hart 的切片发生变化时, 只同步该 hart
+        的 pmpcfg 与 pmpaddr.
         """
         if self._pmp_num <= 0:
             return
-        for hid, h in enumerate(self.harts):
-            hp = h._pmp
-            if hp is None or hp._num_entries == 0:
+        cfg_now = bytes(self._pmp_cfg_buf)
+        addr_now = bytes(self._pmp_addr_buf)
+        if cfg_now == self._pmp_cfg_snapshot and addr_now == self._pmp_addr_snapshot:
+            return
+        cfg_before = self._pmp_cfg_snapshot
+        addr_before = self._pmp_addr_snapshot
+        self._pmp_cfg_snapshot = cfg_now
+        self._pmp_addr_snapshot = addr_now
+        addr_stride = self._pmp_num * ctypes.sizeof(ctypes.c_uint64)
+        for hid, hart in enumerate(self.harts):
+            cfg_base = hid * self._pmp_num
+            addr_base = hid * addr_stride
+            if (
+                cfg_now[cfg_base : cfg_base + self._pmp_num]
+                == cfg_before[cfg_base : cfg_base + self._pmp_num]
+                and addr_now[addr_base : addr_base + addr_stride]
+                == addr_before[addr_base : addr_base + addr_stride]
+            ):
                 continue
-            base = hid * self._pmp_num
-            fc = hp._flat_cfg
-            fa = hp._flat_addr
-            changed = False
-            for j in range(self._pmp_num):
-                cv = self._pmp_cfg_buf[base + j]
-                av = self._pmp_addr_buf[base + j]
-                if cv != fc[j] or av != fa[j]:
-                    fc[j] = cv
-                    fa[j] = av
-                    changed = True
-            if changed:
-                hp._sync_from_flat()
+            hart.pmp.sync_from_flat()
 
     def _native_marshal_clint(self) -> ClintInfo:
         """构建 ClintInfo 数组, Rust 侧可直接更新其中的 MSIP 与 MTIMECMP.

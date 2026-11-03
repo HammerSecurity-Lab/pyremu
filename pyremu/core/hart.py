@@ -117,6 +117,11 @@ class GprFile:
     def __len__(self) -> int:
         return 32
 
+    def assign(self, values: Iterable[int]) -> None:
+        """整体写入 32 个寄存器的取值; x0 在写入之后仍为 0."""
+        self._r[:] = values
+        self._r[0] = 0
+
     def as_list(self) -> list[int]:
         return self._r.copy()
 
@@ -275,8 +280,8 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         self._imsic: IMSIC | None = None
         self._imsic_select_m: int = 0  # miselect (0x350) 缓存
         self._imsic_select_s: int = 0  # siselect (0x150) 缓存
-        self._imsic_pre_m_eip: list[int] | None = None  # _marshal_imsic 快照
-        self._imsic_pre_s_eip: list[int] | None = None  # _marshal_imsic 快照
+        self._imsic_pre_m_eip: bytes | None = None  # _marshal_imsic 快照
+        self._imsic_pre_s_eip: bytes | None = None  # _marshal_imsic 快照
 
         # LR/SC 预留
         # 执行 LR 时记录预留地址; 任何 hart 向该地址写入时清除预留;
@@ -480,7 +485,7 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         return True
 
     def _write_pmp_csr(self, csr_name: str, val: int) -> None:
-        """PMP CSR 写入: 失效扁平缓存并同步到其他 hart."""
+        """PMP CSR 写入: 标记条目数组缓存失效, 并同步到其他 hart."""
         self._csr_write_raw(csr_name, val)
         self._pmp.invalidate_cache()
         for h in self._all_harts or ():
@@ -984,6 +989,11 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         val = mask64(v)
         self._mdid_val = val
         self.csrs["mdid"].val = val
+
+    @property
+    def pmp(self) -> Pmp:
+        """本 hart 的物理内存保护检查器."""
+        return self._pmp
 
     @property
     def pmpsplit_val(self) -> int:

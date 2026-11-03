@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ctypes
+import struct
 import time
 from unittest import mock
 
@@ -33,6 +34,7 @@ from pyremu.configs_gen import CPU_FREQ_HZ
 from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.emulator import Emulator, RunStopReason
+from pyremu.interrupt.imsic import IMSIC
 from pyremu.utils.disassem import Opc
 from pyremu.utils.isa import encode_misa, isa_ext_list
 from pyremu.utils.mask import mask64
@@ -1200,82 +1202,80 @@ class TestNativePmpSlice:
 
 @pytest.mark.usefixtures("legacy_plic")
 class TestPlicNativeInline:
-    """PLIC 内联 (Rust batch) 的 Python 侧 marshal/unmarshal 契约.
+    """PLIC 内联 (Rust batch) 的数组共享契约.
 
     回归: kernel 直映射包含 PLIC MMIO (enable 写约 767/s), 旧实现每次访问都
     退出 Rust batch 回落到 Python MMIO, 使 EXT4 recovery 阶段吞吐跌至 ~0.6M/s.
-    修复为 Rust 内联处理 PLIC MMIO (claim/complete/enable/threshold/priority),
-    状态经持久 ctypes 数组在 batch 边界 marshal/unmarshal 往返, 设备线程
-    ``irq_sink`` 直接 write-through pending/level, 保证 batch 内新设备
+    修复为 Rust 内联处理 PLIC MMIO (claim/complete/enable/threshold/priority).
+    PLIC 对象持有全部 ctypes 数组, 引擎与 Python 侧读写同一份存储, marshal 只
+    传递地址; 设备线程经 ``irq_sink`` 写穿 pending/level, 保证 batch 内新设备
     中断对 Rust 内联仲裁可见.
     """
 
-    def test_marshal_plic_fields(self):
-        """marshal 产出正确的 base/num_sources/num_contexts 与位打包 enable."""
+    def test_marshal_plic_shares_plic_arrays(self):
+        """marshal 返回的数组就是 PLIC 持有的数组, 不做复制."""
         emu = Emulator(num_harts=2)
         plic = emu.plic
         assert plic is not None
-        plic._priority[10] = 5
-        plic._enable[0][10] = True  # word 0, bit 10
-        plic._enable[0][33] = True  # word 1, bit 1 (source 33)
-        plic._enable[1][7] = True  # context 1, word 0, bit 7
+        plic.priority[10] = 5
+        plic.enable[0 * plic.num_enable_words + 0] = 1 << 10
+        plic.enable[0 * plic.num_enable_words + 1] = 1 << 1
+        plic.enable[1 * plic.num_enable_words + 0] = 1 << 7
         info = emu._native_marshal_plic()
         assert info is not None
         assert info.base == plic.base_addr
-        assert info.num_sources == plic._num_sources
-        assert info.num_contexts == plic._num_contexts
-        # enable 数组: context * num_words + word
-        nw = (plic._num_sources + 31) // 32
-        assert len(info.enable) == plic._num_contexts * nw
+        assert info.num_sources == plic.num_sources
+        assert info.num_contexts == plic.num_contexts
+        assert info.priority is plic.priority
+        assert info.pending is plic.pending
+        assert info.level is plic.level
+        assert info.enable is plic.enable
+        assert info.threshold is plic.threshold
+        assert info.claimed is plic.claimed
         assert info.priority[10] == 5
+        nw = plic.num_enable_words
         assert info.enable[0 * nw + 0] & (1 << 10) != 0, "source 10 应落 word 0 bit 10"
         assert info.enable[0 * nw + 1] & (1 << 1) != 0, "source 33 应落 word 1 bit 1"
         assert info.enable[1 * nw + 0] & (1 << 7) != 0, "context 1 source 7"
 
-    def test_unmarshal_plic_roundtrip(self):
-        """marshal -> (模拟 Rust 内联改 state) -> unmarshal 往返保真."""
+    def test_claim_and_complete_use_shared_arrays(self):
+        """引擎内联 claim/complete 改写的数组就是 PLIC 仲裁读取的数组."""
         emu = Emulator(num_harts=2)
         plic = emu.plic
-        plic._priority[10] = 5
-        plic._enable[0][10] = True
-        plic._enable[1][7] = True
-        plic._threshold[1] = 3
-        plic._claimed[0] = 10
-        # pending/level 由 set_irq 写穿 FFI 数组 (直接改 Python 列表不会同步)
+        assert plic is not None
+        plic.priority[10] = 5
+        plic.enable[0] = 1 << 10
         plic.set_irq(10, True)
         info = emu._native_marshal_plic()
-        # 模拟 Rust 内联: claim 清 pending, 记录 claimed; complete 后电平仍高重挂.
-        info.pending[10] = 0
-        info.claimed[0] = 10
-        info.pending[10] = 1
-        info.threshold[0] = 7
-        emu._native_unmarshal_plic(info)
-        assert plic._priority[10] == 5
-        assert plic._pending[10] is True
-        assert plic._level[10] is True
-        assert plic._enable[0][10] is True
-        assert plic._enable[1][7] is True
-        assert plic._threshold[1] == 3
-        assert plic._threshold[0] == 7
-        assert plic._claimed[0] == 10
+        assert info is not None and info.pending is plic.pending
+        # claim: 清 pending 并记录 claimed, 仲裁随即看不到该源
+        claimed = int.from_bytes(plic.read(0x200004, 4), "little")
+        assert claimed == 10
+        assert plic.pending[10] == 0
+        assert plic.claimed[0] == 10
+        assert plic.level[10] == 1
+        assert plic.get_pending_mip(0) & (1 << 11) == 0
+        # complete 时电平仍高, 重新置位 pending
+        plic.write(0x200004, (10).to_bytes(4, "little"))
+        assert plic.claimed[0] == 0
+        assert plic.pending[10] == 1
+        assert plic.get_pending_mip(0) & (1 << 11) != 0
 
     def test_irq_sink_write_through(self):
-        """设备线程经 irq_sink 写穿到 FFI 持久数组, 使 batch 内对 Rust 可见."""
+        """设备线程经 irq_sink 写穿到 PLIC 持有的数组, 使 batch 内对 Rust 可见."""
         emu = Emulator(num_harts=2)
-        emu._native_marshal_plic()  # 首次分配持久数组
         emu.irq_sink(25, True)
-        assert emu.plic._ffi_pending[25] == 1
-        assert emu.plic._ffi_level[25] == 1
+        assert emu.plic.pending[25] == 1
+        assert emu.plic.level[25] == 1
         emu.irq_sink(25, False)
-        assert emu.plic._ffi_pending[25] == 0
-        assert emu.plic._ffi_level[25] == 0
+        assert emu.plic.pending[25] == 0
+        assert emu.plic.level[25] == 0
 
     def test_marshal_plic_none_when_no_plic(self):
         """无 PLIC 时 marshal 返回 None (native 侧回落 MMIO)."""
         emu = Emulator(num_harts=1)
         emu.plic = None
         assert emu._native_marshal_plic() is None
-        assert emu._native_unmarshal_plic(None) is None
 
 
 class TestClockDecoupling:
@@ -1506,6 +1506,30 @@ class TestMarshalUnmarshalRoundtrip:
         out = self._roundtrip(hart)
         actual = out.csrs[csr_name].val
         assert actual == val, f"{csr_name}: {actual:#018x} ≠ expected {val:#018x}"
+
+    # ---------- TLB 刷新 ----------
+    def test_unmarshal_keeps_tlb_when_satp_unchanged(self) -> None:
+        """satp 往返取值相同时保持既有 TLB 条目."""
+        hart = self._fresh_hart()
+        hart.satp_val = (8 << 60) | 0x12345
+        hart.itlb.insert(0xABC, 0xDEF, 5)
+        hart.dtlb.insert(0xABC, 0xDEF, 3)
+        state = HartState()
+        hart.marshal_to(state)
+        hart.unmarshal_from(state)
+        assert hart.itlb.lookup(0xABC)[0] is True
+        assert hart.dtlb.lookup(0xABC)[0] is True
+
+    def test_unmarshal_flushes_tlb_when_satp_changed(self) -> None:
+        """satp 往返取值不同时刷新 TLB."""
+        hart = self._fresh_hart()
+        hart.satp_val = (8 << 60) | 0x12345
+        hart.dtlb.insert(0xABC, 0xDEF, 3)
+        state = HartState()
+        hart.marshal_to(state)
+        state.satp = (8 << 60) | 0x54321
+        hart.unmarshal_from(state)
+        assert hart.dtlb.lookup(0xABC)[0] is False
 
     # ---------- 状态字段 ----------
     def test_pc_roundtrip(self) -> None:
@@ -1796,3 +1820,131 @@ class TestNativeXonlyFetch:
             f"X-only 页数据读应触发 LoadPageFault, 实际 scause=0x{h.csrs['scause'].val:x}"
         )
         assert h.csrs["stval"].val == self.TRAP_VEC_VA
+
+
+class TestImsicMarshalRoundtrip:
+    """IMISC 的 eip 与 eie 在编组与解组之间的取值.
+
+    eip 与 eie 各为 64 个 32 位字, 编组按字整体拷贝. 解组时引擎写回的 eip 需
+    与编组之后由接收线程置位的位合并; eie 由引擎写回, 不参与合并.
+    """
+
+    _EIP_WORDS = 64
+    _LAST_WORD = 63
+
+    @staticmethod
+    def _make_hart() -> tuple[Hart, IMSIC]:
+        """创建一个接 IMSIC 的 hart, 编号为 0."""
+        hart = Hart(id=0)
+        hart.imsic = IMSIC(
+            num_harts=1,
+            m_base_addr=0x2400_0000,
+            s_base_addr=0x2800_0000,
+        )
+        return hart, hart.imsic
+
+    @staticmethod
+    def _eip_of(state: HartState, priv: str) -> tuple[int, ...]:
+        mirror = state.imsic_m if priv == "M" else state.imsic_s
+        return struct.unpack_from("<64I", bytes(mirror.eip))
+
+    @staticmethod
+    def _eie_of(state: HartState, priv: str) -> tuple[int, ...]:
+        mirror = state.imsic_m if priv == "M" else state.imsic_s
+        return struct.unpack_from("<64I", bytes(mirror.eie))
+
+    def test_eip_last_word_copied(self) -> None:
+        """中断号 2047 落在第 63 个字, 编组之后该字必须带位.
+
+        只拷贝前 63 个字时该中断号丢失.
+        """
+        hart, imsic = self._make_hart()
+        imsic.set_ip_number(0, "M", 2047)
+        state = HartState()
+        hart.marshal_to(state)
+        words = self._eip_of(state, "M")
+        assert words[self._LAST_WORD] == 1 << 31
+        assert all(w == 0 for w in words[: self._LAST_WORD])
+
+    def test_s_file_eip_copied(self) -> None:
+        """S 模式的 eip 单独编组到 imsic_s, 不混入 M 模式."""
+        hart, imsic = self._make_hart()
+        imsic.set_ip_number(0, "S", 40 * 32 + 5)
+        state = HartState()
+        hart.marshal_to(state)
+        assert self._eip_of(state, "S")[40] == 1 << 5
+        assert all(w == 0 for w in self._eip_of(state, "M"))
+
+    def test_ipi_only_is_not_external(self) -> None:
+        """只有软件中断 (中断号 1 与 3) 挂起时 eip_ext_any 为 0."""
+        hart, imsic = self._make_hart()
+        imsic.set_ip_number(0, "M", 1)
+        imsic.set_ip_number(0, "M", 3)
+        state = HartState()
+        hart.marshal_to(state)
+        assert state.imsic_m.eip_ext_any == 0
+
+    def test_external_bit_sets_ext_any(self) -> None:
+        """中断号不小于 6 的位挂起时 eip_ext_any 为 1."""
+        hart, imsic = self._make_hart()
+        imsic.set_ip_number(0, "M", 10)
+        state = HartState()
+        hart.marshal_to(state)
+        assert state.imsic_m.eip_ext_any == 1
+
+    def test_bit_set_after_marshal_survives_unmarshal(self) -> None:
+        """编组之后由接收线程置位的 eip 位在解组之后仍然存在.
+
+        引擎写回的 eip 是编组时刻的旧值, 直接覆盖会丢掉这一位.
+        """
+        hart, imsic = self._make_hart()
+        state = HartState()
+        hart.marshal_to(state)
+        imsic.set_ip_number(0, "M", 10)
+        hart.unmarshal_from(state)
+        state2 = HartState()
+        hart.marshal_to(state2)
+        assert self._eip_of(state2, "M")[0] == 1 << 10
+
+    def test_engine_set_bit_applied(self) -> None:
+        """引擎写回的 eip 位在解组之后进入中断文件."""
+        hart, imsic = self._make_hart()
+        state = HartState()
+        hart.marshal_to(state)
+        state.imsic_m.eip[0] = 1 << 12
+        hart.unmarshal_from(state)
+        state2 = HartState()
+        hart.marshal_to(state2)
+        assert self._eip_of(state2, "M")[0] == 1 << 12
+
+    def test_engine_eie_overwrites_file(self) -> None:
+        """引擎写回的 eie 覆盖中断文件的 eie."""
+        hart, imsic = self._make_hart()
+        imsic.csr_write(0, "M", 0xC0, 1 << 10)
+        state = HartState()
+        hart.marshal_to(state)
+        assert self._eie_of(state, "M")[0] == 1 << 10
+        state.imsic_m.eie[0] = 0
+        hart.unmarshal_from(state)
+        assert imsic.csr_read(0, "M", 0xC0) == 0
+
+    def test_eie_last_word_roundtrip(self) -> None:
+        """eie 的第 63 个字双向可传, 且不影响相邻的字."""
+        hart, imsic = self._make_hart()
+        imsic.csr_write(0, "M", 0xFF, 0x8000_0001)
+        state = HartState()
+        hart.marshal_to(state)
+        assert self._eie_of(state, "M")[self._LAST_WORD] == 0x8000_0001
+        state.imsic_m.eie[self._LAST_WORD] = 0x1
+        hart.unmarshal_from(state)
+        assert imsic.csr_read(0, "M", 0xFF) == 0x1
+
+    def test_no_imsic_clears_present(self) -> None:
+        """未接 IMSIC 的 hart 编组之后 present 为 0."""
+        hart = Hart(id=0)
+        state = HartState()
+        state.imsic_m.present = 1
+        state.imsic_s.present = 1
+        hart.marshal_to(state)
+        assert state.imsic_m.present == 0
+        assert state.imsic_s.present == 0

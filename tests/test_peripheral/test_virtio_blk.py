@@ -763,10 +763,10 @@ class TestPlicInterrupt:
             mem_write=mem_write,
             irq_sink=(VIRTIO_BLK_IRQ, plic.set_irq),
         )
-        assert plic._pending[VIRTIO_BLK_IRQ] is False
+        assert plic.pending[VIRTIO_BLK_IRQ] == 0
         self._submit_read(vblk, guest_ram)
         # 处理完成后 PLIC 源 VIRTIO_BLK_IRQ 被拉高
-        assert plic._pending[VIRTIO_BLK_IRQ] is True
+        assert plic.pending[VIRTIO_BLK_IRQ] == 1
 
     def test_ack_lowers_plic_irq(self, disk_image, mem_read, mem_write, guest_ram):
         plic = PLIC(num_sources=128, num_contexts=2)
@@ -777,10 +777,10 @@ class TestPlicInterrupt:
             irq_sink=(VIRTIO_BLK_IRQ, plic.set_irq),
         )
         self._submit_read(vblk, guest_ram)
-        assert plic._pending[VIRTIO_BLK_IRQ] is True
+        assert plic.pending[VIRTIO_BLK_IRQ] == 1
         # 受调试程序 ACK 清 InterruptStatus 后, PLIC 源不再挂起
         _mmio_write(vblk, VIRTIO_MMIO_INTERRUPT_ACK, 1)
-        assert plic._pending[VIRTIO_BLK_IRQ] is False
+        assert plic.pending[VIRTIO_BLK_IRQ] == 0
 
     def test_no_plic_no_crash(self, vblk, guest_ram):
         # 无中断上报入口 (irq=0) 时完成不应报错, InterruptStatus 仍照常置位
@@ -986,7 +986,7 @@ class TestIrqReportPath:
 
         assert _mmio_read(emu.virtio_blk, VIRTIO_MMIO_INTERRUPT_STATUS) == 1
         assert emu.plic is not None
-        assert emu.plic._pending[VIRTIO_BLK_IRQ] is True
+        assert emu.plic.pending[VIRTIO_BLK_IRQ] == 1
         # irq_sink 的两项副作用: 引擎通知位与 WFI 唤醒
         assert emu._native_ext_irq.pending == 1
         assert emu._wake_event.is_set()
@@ -1002,10 +1002,10 @@ class TestIrqReportPath:
             emu.bus.ram_base + _Q_DEVICE_OFF,
         )
         _mmio_write(emu.virtio_blk, VIRTIO_MMIO_QUEUE_NOTIFY, 0)
-        assert emu.plic._pending[VIRTIO_BLK_IRQ] is True
+        assert emu.plic.pending[VIRTIO_BLK_IRQ] == 1
 
         emu._native_ext_irq.pending = 0
         _mmio_write(emu.virtio_blk, VIRTIO_MMIO_INTERRUPT_ACK, 1)
 
-        assert emu.plic._pending[VIRTIO_BLK_IRQ] is False, "确认后中断源应被拉低"
+        assert emu.plic.pending[VIRTIO_BLK_IRQ] == 0, "确认后中断源应被拉低"
         assert emu._native_ext_irq.pending == 1, "拉低同样经 irq_sink 通知引擎"

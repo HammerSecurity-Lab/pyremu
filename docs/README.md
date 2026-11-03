@@ -42,15 +42,15 @@ uv run python tools/jmp_instr_counter.py  # 统计基本块终结指令的静态
 ## 提交前检查 (pre-commit)
 
 仓库自带的 [tools/git-hooks/pre-commit](tools/git-hooks/pre-commit) 在每次 `git commit` 前
-运行检查与格式化: 逐个文件做格式检查, 需要格式化的文件由钩子格式化并加入索引, 格式化
-失败或静态检查不通过时中止提交。Git 默认只从 `.git/hooks/` 读取钩子, 需要在仓库根目录
-执行一次以下命令, 把钩子目录指向该脚本:
+运行检查与格式化: 逐个文件做格式检查, 需要格式化的文件由挂载器(hook)格式化并加入索引, 格式化
+失败或静态检查不通过时中止提交。Git 默认只从 `.git/hooks/` 读取待挂载执行的脚本, 需在仓库根目录
+执行一次以下命令, 把项目挂载目录指向该脚本:
 
 ```bash
 git config core.hooksPath tools/git-hooks
 ```
 
-该设置写入当前克隆的 `.git/config`, 不影响其他克隆; 重新克隆或换机器后需要再次执行。
+该设置写入当前克隆的 `.git/config`, 不影响其他克隆; 重新克隆或更换机器后需再次执行。
 取消绑定用 `git config --unset core.hooksPath`。
 
 
@@ -66,7 +66,7 @@ git config core.hooksPath tools/git-hooks
 | **缓存** | 共享 L2 缓存，MESI 一致性协议 |
 | **中断** | CLINT：`mtime`/`mtimecmp` 定时器与 MSIP 核间中断；PLIC：电平语义，每 hart 一对 M/S context；AIA：每 hart 一个 IMSIC M 文件与一个 S 文件，APLIC 的 S 域与 M 域把有线中断转为 MSI；投递优先级 MEI > MSI > MTI > SEI > SSI > STI |
 | **外设** | UART、SPI、I2C、GPIO、看门狗、随机数发生器；virtio-mmio 块设备与网卡，网卡分宿主侧与飞地侧两个实例；终端输入输出桥接 |
-| **平台** | FDT 设备树生成；PlatformConfig 预设 qemu_virt 与 sifive_u54，支持从 JSON、TOML、YAML 反序列化 |
+| **平台** | FDT 设备树生成；PlatformConfig 预设 qemu\_virt 与 sifive\_u54，支持从 JSON、TOML、YAML 反序列化 |
 
 未实现：
 - RVV 1.0 向量扩展（opcode 0x57）
@@ -157,7 +157,6 @@ pyremu/                       模拟器包
 bsp/                          板级支持包
   sittim/                     可嵌入 OpenSBI 的 S 模式运行时
   kei-boot/                   模拟器的零阶段加载器
-  ref-impl/                   飞地二进制接口、扩展模块与构建补丁的参考实现
   tee_aux_tools/              辅助驱动、签名工具与评测套件
     linux-driver/             Linux 飞地交互内核驱动, 提供 /dev/tee_enclave
     ext-mod-loader/           扩展模块加载器
@@ -166,7 +165,6 @@ bsp/                          板级支持包
     cache-probe-exploit/      TEE 评测套件, 部署到根文件系统的 /eval/cache-probe-exploit
     stress-test/              TEE 压力测试套件, 部署到根文件系统的 /eval/stress-test
   linux/                      内核源码树, 需要自行复制到本仓库
-  musl-gc-sysroot/            musl 与 libc++ 的交叉编译 sysroot
   setup-rootfs/               用 debootstrap 构建根文件系统, 并打包测试程序与驱动
 
 fn_apps/                      可信应用载荷
@@ -242,7 +240,7 @@ Python 侧通过 `marshal_hart()` 将全部 hart 的寄存器文件序列化为 
 ```bash
 make build-native # Release 构建 + 复制到 pyremu/_native/libdecode.so
 ```
-也可以手动构建:
+也可手动构建:
 
 ```bash
 cargo build --release --manifest-path pyremu/_native/Cargo.toml
@@ -251,10 +249,10 @@ cp pyremu/_native/target/release/libdecode.so pyremu/_native/libdecode.so
 cargo test --manifest-path pyremu/_native/Cargo.toml   # Rust 侧单元测试
 ```
 
-构建依赖: Rust 工具链 (edition 2021), 无需 `maturin`/`setuptools-rust`——输出为标准
-cdylib，通过 CPython 内置 `ctypes` 加载。
+构建依赖: Rust 工具链 (edition 2021), 通过 CPython 内置 `ctypes` 加载。
 
-当 `.so` 缺失或不兼容时，模拟器将回退到纯 Python 执行路径。但执行用时较长，且目前缺乏维护。
+当 `.so` 缺失或不兼容时，模拟器将回退到纯 Python 执行路径。
+但执行用时较长，且目前缺乏维护。
 
 
 ### 状态结构体布局

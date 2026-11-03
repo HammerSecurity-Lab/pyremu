@@ -660,7 +660,7 @@ class TestRepl:
         text = buf.getvalue()
         assert "RISC-V Interactive Debugger" in text
         assert "Harts: 1" in text
-        assert "Active hart: 0" in text
+        assert "Active Hart(s): 0" in text
         assert "0x800f0000" in text
 
     def test_banner_marks_missing_fdt(self, monkeypatch):

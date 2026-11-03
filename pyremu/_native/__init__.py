@@ -1453,12 +1453,10 @@ class DevInfo:
 
 @dataclass(slots=True)
 class PlicInfo:
-    """PLIC inline context — 持久 ctypes 数组, Rust 在加速执行内联读写.
+    """PLIC 内联上下文: 数组由 PLIC 对象持有, Rust 在加速执行内联读写.
 
-    与 ClintInfo 每轮 marshal 重新分配不同: PLIC 状态必须跨 batch 持久, 因为
-    设备中断投递目标需 write-through 到同一批数组, 使 batch 内
-    新到达的设备中断对 Rust inline 仲裁可见. Emulator 持有这些数组, marshal
-    仅复制 Python PLIC 状态入数组, unmarshal 反向复制.
+    数组在该对象生命周期内保持同一份, 设备线程经 set_irq 写穿 pending 与 level,
+    使批次内新到达的设备中断对 Rust 内联仲裁可见.
     """
 
     base: int = 0

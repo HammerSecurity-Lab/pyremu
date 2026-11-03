@@ -70,41 +70,24 @@ class PLIC(Device):
         num_contexts: int = 1,
     ) -> None:
         self.base_addr = base_addr
-        self._num_sources = num_sources  # source 1..N (source 0 保留)
-        self._num_contexts = num_contexts
+        self.num_sources = num_sources  # source 1..N (source 0 保留)
+        self.num_contexts = num_contexts
+        self.num_enable_words = (num_sources + 31) // 32
 
-        # 寄存器状态
-        # _priority[i]: source i 的优先级
-        self._priority: list[int] = [0] * (num_sources + 1)
+        # 下列四个 ctypes 数组由本对象持有, 加速执行引擎直接读写同一份存储.
+        # priority[i] 为 source i 的优先级; enable[c * num_enable_words + w] 为
+        # context c 第 w 个使能字; threshold[c] 为 context c 的优先级阈值;
+        # claimed[c] 为 context c 当前正在服务的中断源, 0 表示无.
+        self.priority = (ctypes.c_uint8 * (num_sources + 1))()
+        self.enable = (ctypes.c_uint32 * (num_contexts * self.num_enable_words))()
+        self.threshold = (ctypes.c_uint8 * num_contexts)()
+        self.claimed = (ctypes.c_uint32 * num_contexts)()
 
-        # _pending[i]: source i 是否挂起
-        self._pending: list[bool] = [False] * (num_sources + 1)
-
-        # _level[i]: source i 的电平状态。
-        # PLIC gateway 语义: claim 清除 pending,
-        # complete 时若电平仍为高则重新置位 pending — 否则电平中断在
-        # "claim 后无任何设备寄存器访问" 的窗口内会永久丢失.
-        self._level: list[bool] = [False] * (num_sources + 1)
-
-        # FFI 持久数组 — 经 ctypes 直接暴露给 Rust batch 引擎, set_irq 每次改线时
-        # 同步写穿, 与 Python 列表同源. Rust 内联仲裁 plic_recompute_mip /
-        # plic_do_claim / plic_do_complete 直接读写这两份数组; 设备线程的 RX drain
-        # 与主线程上由受调试程序发起的 MMIO 电平变化经 set_irq 保持实时同步, 否则
-        # batch 起始快照会覆盖 SEIP 而使 UART 输入冻结, 且 complete 时陈旧的 level
-        # 重挂起, 产生虚假中断风暴.
-        self._ffi_pending = (ctypes.c_uint8 * (num_sources + 1))()
-        self._ffi_level = (ctypes.c_uint8 * (num_sources + 1))()
-
-        # _enable[c][i]: context c 启用 source i
-        self._enable: list[list[bool]] = [
-            [False] * (num_sources + 1) for _ in range(num_contexts)
-        ]
-
-        # _threshold[c]: context c 的优先级阈值 (低于此的 source 不通知)
-        self._threshold: list[int] = [0] * num_contexts
-
-        # _claimed[c]: context c 当前正在服务的中断源 (0 = 无)
-        self._claimed: list[int] = [0] * num_contexts
+        # pending 与 level 同样由本对象持有, 引擎在批次内直接改写这两份数组.
+        # PLIC gateway 语义: claim 清除 pending, complete 时若电平仍为高则重新
+        # 置位 pending, 否则电平中断在 claim 后无设备寄存器访问的窗口内丢失.
+        self.pending = (ctypes.c_uint8 * (num_sources + 1))()
+        self.level = (ctypes.c_uint8 * (num_sources + 1))()
 
         # 计算设备区域大小 — 到最后一个 context + 4 KiB
         last_context_end = (
@@ -123,14 +106,13 @@ class PLIC(Device):
 
         level-triggered 语义: pending 镜像电平, 非
         边沿锁存 — deassert 时同时清除挂起, 由驱动保持数据源电平直到消费完成.
-        同时写穿 FFI 持久数组, 使 batch 内 Rust 内联仲裁实时看到电平变化.
+        两个数组与引擎共享, 批次内 Rust 内联仲裁实时看到电平变化.
         """
         with self._lock:
-            if 0 < source <= self._num_sources:
-                self._level[source] = pending
-                self._pending[source] = pending
-                self._ffi_pending[source] = 1 if pending else 0
-                self._ffi_level[source] = 1 if pending else 0
+            if 0 < source <= self.num_sources:
+                val = 1 if pending else 0
+                self.level[source] = val
+                self.pending[source] = val
 
     def get_pending_mip(self, hart_id: int) -> int:
         """返回该 hart 的待处理外部中断 mip 位.
@@ -145,9 +127,9 @@ class PLIC(Device):
         s_ctx = m_ctx + 1
         mip = 0
         with self._lock:
-            if m_ctx < self._num_contexts and self._find_highest(m_ctx) > 0:
+            if m_ctx < self.num_contexts and self._find_highest(m_ctx) > 0:
                 mip |= 1 << 11  # MEIP (M-context)
-            if s_ctx < self._num_contexts and self._find_highest(s_ctx) > 0:
+            if s_ctx < self.num_contexts and self._find_highest(s_ctx) > 0:
                 mip |= 1 << 9  # SEIP (S-context)
             return mip
 
@@ -159,27 +141,31 @@ class PLIC(Device):
         条件: pending[i] AND enable[context][i] AND priority[i] > threshold[context]
         有多个时取最高优先级; 同优先级取最小 source id (RISC-V spec §7.3).
 
-        注意: 不检查 ``_claimed`` 状态.  PLIC 规范中 pending 是 per-source
+        注意: 不检查 ``claimed`` 状态.  PLIC 规范中 pending 是 per-source
         (非 per-context), claim 操作原子清除 pending, 其他 context 自然看不到.
         complete 后若 level 仍高则重挂 pending, 所有 context (含原 claimer)
-        均可再次 claim.  添加 _claimed 检查会阻止同一 context 重入 claim
+        均可再次 claim.  添加 claimed 检查会阻止同一 context 重入 claim
         (level 重挂场景) 或其他 context claim (多 hart 共享场景),
         导致 MEIP/SEIP 断言但 claim 返回 0 的死锁.
         """
-        threshold = self._threshold[context]
+        threshold = self.threshold[context]
+        enable_base = context * self.num_enable_words
         best_source = 0
         best_prio = 0
-
-        for i in range(1, self._num_sources + 1):
-            if not self._pending[i] or not self._enable[context][i]:
-                continue
-            pri = self._priority[i]
-            if pri <= threshold:
-                continue
-            if pri > best_prio:
-                best_prio = pri
-                best_source = i
-            # 同优先级取最小 ID (由于 id 递增遍历, 自然满足)
+        # 使能位只覆盖 enable 数组的字数, 字号超出数组的 source 不参与仲裁
+        limit = min(self.num_sources, self.num_enable_words * 32 - 1)
+        # 挂起的中断源通常只有少数几个: 先把 pending 整份读成字节串, 再按置起
+        # 的字节升序遍历, 访问次数与挂起的中断源数成正比, 与中断源总数无关.
+        # 升序保证同优先级取编号最小的中断源.
+        pending_bytes = bytes(self.pending)
+        i = pending_bytes.find(1, 1, limit + 1)
+        while i != -1:
+            if (self.enable[enable_base + (i >> 5)] >> (i & 31)) & 1:
+                pri = self.priority[i]
+                if pri > threshold and pri > best_prio:
+                    best_prio = pri
+                    best_source = i
+            i = pending_bytes.find(1, i + 1, limit + 1)
 
         return best_source
 
@@ -204,7 +190,7 @@ class PLIC(Device):
         # Source priorities (0x000000 - 0x000FFC)
         if offset < PLIC_PENDING_BASE:
             src = offset // PLIC_PRIORITY_STRIDE
-            return self._priority[src] & 0x7 if 1 <= src <= self._num_sources else 0
+            return self.priority[src] & 0x7 if 1 <= src <= self.num_sources else 0
 
         # Pending bits (0x001000 - 0x00107C)
         if offset < PLIC_ENABLE_BASE:
@@ -224,10 +210,10 @@ class PLIC(Device):
         """读取 context 段: 阈值寄存器与 claim 寄存器, 其余偏移读零."""
         context = rel // PLIC_CONTEXT_STRIDE
         ctx_off = rel % PLIC_CONTEXT_STRIDE
-        if context >= self._num_contexts:
+        if context >= self.num_contexts:
             return 0
         if ctx_off == PLIC_CONTEXT_THRESHOLD_OFF:
-            return self._threshold[context] & 0x7
+            return self.threshold[context] & 0x7
         if ctx_off == PLIC_CONTEXT_CLAIM_OFF:
             return self._do_claim(context)
         return 0
@@ -236,8 +222,8 @@ class PLIC(Device):
         # Source priorities
         if offset < PLIC_PENDING_BASE:
             src = offset // PLIC_PRIORITY_STRIDE
-            if 1 <= src <= self._num_sources:
-                self._priority[src] = val & 0x7
+            if 1 <= src <= self.num_sources:
+                self.priority[src] = val & 0x7
             return
 
         # Pending bits — read-only (pending 由硬件 set_irq 控制)
@@ -257,11 +243,11 @@ class PLIC(Device):
         context = rel // PLIC_CONTEXT_STRIDE
         ctx_off = rel % PLIC_CONTEXT_STRIDE
 
-        if context >= self._num_contexts:
+        if context >= self.num_contexts:
             return
 
         if ctx_off == PLIC_CONTEXT_THRESHOLD_OFF:
-            self._threshold[context] = val & 0x7
+            self.threshold[context] = val & 0x7
         elif ctx_off == PLIC_CONTEXT_CLAIM_OFF:
             self._do_complete(context, val)
 
@@ -276,8 +262,8 @@ class PLIC(Device):
         """
         src = self._find_highest(context)
         if src > 0:
-            self._pending[src] = False
-            self._claimed[context] = src
+            self.pending[src] = 0
+            self.claimed[context] = src
         return src
 
     def _do_complete(self, context: int, src: int) -> None:
@@ -286,10 +272,10 @@ class PLIC(Device):
         若设备电平仍为高 (claim 后设备未拉低 set_irq),
         complete 时重新置位 pending, 使中断再次投递
         """
-        if 0 < src <= self._num_sources and self._claimed[context] == src:
-            self._claimed[context] = 0
-            if self._level[src]:
-                self._pending[src] = True
+        if 0 < src <= self.num_sources and self.claimed[context] == src:
+            self.claimed[context] = 0
+            if self.level[src]:
+                self.pending[src] = 1
 
     # ---- 位数组辅助 ----
 
@@ -298,27 +284,24 @@ class PLIC(Device):
         word_idx <<= 5
         for i in range(32):
             src = word_idx + i
-            if src <= self._num_sources and self._pending[src]:
+            if src <= self.num_sources and self.pending[src]:
                 result |= 1 << i
         return result
 
     def _read_enable_word(self, context: int, word_idx: int) -> int:
-        if context >= self._num_contexts:
+        if context >= self.num_contexts or word_idx >= self.num_enable_words:
             return 0
-        result = 0
-        word_idx <<= 5
-        for i in range(32):
-            src = word_idx + i
-            if src <= self._num_sources and self._enable[context][src]:
-                result |= 1 << i
-        return result
+        return self.enable[context * self.num_enable_words + word_idx]
 
     def _write_enable_word(self, context: int, word_idx: int, val: int) -> None:
-        if context >= self._num_contexts:
+        if context >= self.num_contexts or word_idx >= self.num_enable_words:
             return
-        word_idx <<= 5
-        for i in range(32):
-            src = word_idx + i
-            if src < 1 or src > self._num_sources:
-                continue
-            self._enable[context][src] = (val >> i) & 1 != 0
+        src_base = word_idx << 5
+        bits = val & 0xFFFF_FFFF
+        # source 0 为保留项, 始终不使能
+        if src_base == 0:
+            bits &= ~1
+        bit_count = self.num_sources + 1 - src_base
+        if bit_count < 32:
+            bits &= (1 << bit_count) - 1
+        self.enable[context * self.num_enable_words + word_idx] = bits

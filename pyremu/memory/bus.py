@@ -33,6 +33,7 @@ PMA (Physical Memory Attributes):
 from abc import ABC, abstractmethod
 import ctypes
 from functools import partialmethod
+import sys
 
 from pyremu._native import (
     bus_read_ram,
@@ -162,7 +163,11 @@ class DirectRam:
         ram_size: int = 128 * 1024 * 1024,
         ram_base: int = 0x8000_0000,
     ) -> None:
-        self._ram = bytearray(ram_size)
+        try:
+            self._ram = bytearray(ram_size)
+        except MemoryError:
+            print("check ulimit in current shell environment.")
+            sys.exit(1)
         self._ram_base = ram_base
         self._ram_end = ram_base + ram_size
         self._ram_size = ram_size

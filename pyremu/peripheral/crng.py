@@ -55,7 +55,8 @@ class CRNG(Device):
         self.base_addr = base
         self.size = size
         self._rand: random.Random | None = None
-        if seed is None:
+        # 未给出 seed 时走 os.urandom 路径, 给出 seed 时使用确定性的随机流
+        if seed is not None:
             self._rand = random.Random(seed)
 
     def _entropy(

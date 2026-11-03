@@ -786,12 +786,12 @@ class TestTxWatermarkInterrupt:
         plic = PLIC(base_addr=0x0C00_0000, num_sources=4, num_contexts=2)
         uart = UART(base=0x1000_0000, plic=plic, irq=1)
         uart.write(self.REG_TXCTRL, (0x1 | (1 << 16)).to_bytes(4, "little"))
-        assert not plic._pending[1], "IE 未使能时不应挂起"
+        assert not plic.pending[1], "IE 未使能时不应挂起"
         uart.write(self.REG_IE, (0x1).to_bytes(4, "little"))  # IE.txwm
-        assert plic._pending[1], "IE.txwm 使能后 PLIC 线必须拉高"
+        assert plic.pending[1], "IE.txwm 使能后 PLIC 线必须拉高"
         # 驱动排空后关闭 IE.txwm ->线拉低
         uart.write(self.REG_IE, (0x0).to_bytes(4, "little"))
-        assert not plic._pending[1]
+        assert not plic.pending[1]
 
     def test_ip_register_is_read_only(self):
         """SiFive spec: IP 为电平状态只读寄存器, 写入被忽略."""
@@ -848,7 +848,7 @@ class TestRxWatermarkInterrupt:
         uart.write(self.REG_RXCTRL, self.RXEN.to_bytes(4, "little"))
         uart.write(self.REG_IE, (0x2).to_bytes(4, "little"))  # IE.rxwm
         uart.preload(b"\n")
-        assert plic._pending[1], "单字节到达且阈值满足时 PLIC 线必须拉高"
+        assert plic.pending[1], "单字节到达且阈值满足时 PLIC 线必须拉高"
 
     def test_rxwm_respects_rxcnt_threshold(self):
         """rxcnt=1 (bits[18:16]) 时: 1 字节不触发, 第 2 字节触发."""
@@ -869,10 +869,10 @@ class TestRxWatermarkInterrupt:
         uart.write(self.REG_RXCTRL, (self.RXEN | (1 << 16)).to_bytes(4, "little"))
         uart.write(self.REG_IE, (0x2).to_bytes(4, "little"))
         uart.preload(b"a")  # 占用 1, rxcnt=1 ->不满足
-        assert not plic._pending[1]
+        assert not plic.pending[1]
         # 驱动重写 rxcnt=0, 既有字节立即满足触发条件
         uart.write(self.REG_RXCTRL, self.RXEN.to_bytes(4, "little"))
-        assert plic._pending[1], "rxcnt 降低后既有 FIFO 数据必须立即触发中断"
+        assert plic.pending[1], "rxcnt 降低后既有 FIFO 数据必须立即触发中断"
 
 
 class TestUartNativeRegsPublish:

@@ -135,10 +135,6 @@ class L2Cache(CacheBase):
         tag = addr >> self._line_shift
         return tag, set_index, offset
 
-    def _get_set_entries(self, set_index: int) -> list[L2CacheLine]:
-        """返回指定组的所有路条目 — O(1) 无分配 (预分区)."""
-        return self._sets[set_index]
-
     # ----------------------------------------------------------
     #  缓存读写
     # ----------------------------------------------------------
@@ -239,7 +235,9 @@ class L2Cache(CacheBase):
         if self._ram_read:
             line_data = self._ram_read(line_addr, self._line_size)
 
-        # 写入新行
+        # 写入新行; tag 的组索引位决定该行所在组, 与 victim_idx 一起给出条目索引
+        if victim.valid:
+            self._tag_to_idx.pop(victim.tag, None)
         victim.tag = tag
         victim.data[:] = line_data
         victim.valid = True
@@ -247,6 +245,8 @@ class L2Cache(CacheBase):
         victim.mesi = MESIState.EXCLUSIVE
         victim.mdid = self._current_mdid
         victim.last_access = self._clock
+        set_index = tag & self._set_mask
+        self._tag_to_idx[tag] = set_index * self._ways + victim_idx
 
         return bytes(victim.data[offset : offset + size])
 
@@ -344,12 +344,17 @@ class L2Cache(CacheBase):
         if self._ram_read:
             line_data = self._ram_read(line_addr, self._line_size)
 
+        # tag 的组索引位决定该行所在组, 与 victim_idx 一起给出条目索引
+        set_index = tag & self._set_mask
+        if victim.valid:
+            self._tag_to_idx.pop(victim.tag, None)
         victim.tag = tag
         victim.data[:] = line_data
         victim.valid = True
         victim.mesi = MESIState.EXCLUSIVE
         victim.mdid = self._current_mdid
         victim.last_access = self._clock
+        self._tag_to_idx[tag] = set_index * self._ways + victim_idx
 
         # 现在写入数据
         victim.data[offset : offset + len(data)] = data
@@ -387,18 +392,19 @@ class L2Cache(CacheBase):
 
     def invalidate(self, addr: int) -> None:
         """使某个物理地址对应的缓存行失效 (其他 hart 写入导致)."""
-        tag, set_index, _offset = self._addr_fields(addr)
-        way_entries = self._get_set_entries(set_index)
-        for e in way_entries:
-            if not e.valid or e.tag != tag:
-                continue
-                # M 状态需回写
-            if e.mesi == MESIState.MODIFIED and self._ram_write:
-                pa = e.tag << self._line_shift
-                self._ram_write(pa, bytes(e.data))
-            e.valid = False
-            e.mesi = MESIState.INVALID
+        tag = addr >> self._line_shift
+        idx = self._tag_to_idx.pop(tag, None)
+        if idx is None:
             return
+        e = self._entries[idx]
+        if not e.valid or e.tag != tag:
+            return
+        # M 状态需回写
+        if e.mesi == MESIState.MODIFIED and self._ram_write:
+            pa = e.tag << self._line_shift
+            self._ram_write(pa, bytes(e.data))
+        e.valid = False
+        e.mesi = MESIState.INVALID
 
     def flush_all(self) -> int:
         """将全部脏行 (MODIFIED) 回写到 RAM, 保持有效 (降级为 EXCLUSIVE).
@@ -410,8 +416,9 @@ class L2Cache(CacheBase):
             回写的缓存行数.
         """
         count = 0
-        for e in self._entries:
-            if not e.valid or e.mesi != MESIState.MODIFIED:
+        for idx in self._tag_to_idx.values():
+            e = self._entries[idx]
+            if e.mesi != MESIState.MODIFIED:
                 continue
             if self._ram_write is not None:
                 pa = e.tag << self._line_shift
@@ -433,13 +440,13 @@ class L2Cache(CacheBase):
             失效的缓存行数.
         """
         count = 0
-        for e in self._entries:
-            if not e.valid:
-                continue
+        for idx in self._tag_to_idx.values():
+            e = self._entries[idx]
             e.valid = False
             e.mesi = MESIState.INVALID
             e.dirty = False
             count += 1
+        self._tag_to_idx.clear()
         return count
 
     def set_ram_backend(self, read_fn, write_fn) -> None:

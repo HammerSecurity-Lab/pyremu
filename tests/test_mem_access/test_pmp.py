@@ -5,6 +5,7 @@
 
 """PMP (Physical Memory Protection) 测试: 地址匹配、权限控制、CSR 范围."""
 
+import ctypes
 from unittest import mock
 
 import pytest
@@ -670,7 +671,7 @@ class TestNativeBatchPmpFetch:
 
 
 class TestSyncFromFlat:
-    """验证 _sync_from_flat 正确将 flat 数组同步回 CSR entries."""
+    """验证 sync_from_flat 把条目数组同步回 CSR."""
 
     @staticmethod
     def _make_pmp(num_entries: int = 16) -> Pmp:
@@ -686,13 +687,13 @@ class TestSyncFromFlat:
         return Pmp(csrs, num_entries)
 
     def test_sync_cfg_to_entries(self):
-        """_sync_from_flat 将 flat_cfg 字节写回 pmpcfg CSR."""
+        """sync_from_flat 将条目数组中的 pmpcfg 字节写回 pmpcfg CSR."""
         pmp = self._make_pmp(16)
         # Modify flat arrays directly (as Rust would)
-        pmp._flat_cfg[0] = 0x9F  # NAPOT, R=W=X=1 (locked)
-        pmp._flat_cfg[3] = 0x0B  # TOR, R=W=1
-        pmp._flat_cfg[8] = 0x18  # pmpcfg2, entry 8: NA4, X=1
-        pmp._sync_from_flat()
+        pmp.flat_cfg[0] = 0x9F  # NAPOT, R=W=X=1 (locked)
+        pmp.flat_cfg[3] = 0x0B  # TOR, R=W=1
+        pmp.flat_cfg[8] = 0x18  # pmpcfg2, entry 8: NA4, X=1
+        pmp.sync_from_flat()
 
         # pmpcfg0 = entries 0-7: byte 0 = 0x9F, byte 3 = 0x0B
         cfg0 = pmp._csrs["pmpcfg0"].val
@@ -703,44 +704,107 @@ class TestSyncFromFlat:
         assert (cfg2 >> 0) & 0xFF == 0x18, f"entry 8 cfg: {cfg2:016x}"
 
     def test_sync_addr_to_entries(self):
-        """_sync_from_flat 将 flat_addr 值写回 pmpaddr CSR."""
+        """sync_from_flat 将条目数组中的 pmpaddr 值写回 pmpaddr CSR."""
         pmp = self._make_pmp(8)
-        pmp._flat_addr[0] = 0x8000_0000
-        pmp._flat_addr[5] = 0xDEAD_BEEF_CAFE
-        pmp._flat_addr[7] = 0xFFFF_FFFF_FFFF_FFFF
-        pmp._sync_from_flat()
+        pmp.flat_addr[0] = 0x8000_0000
+        pmp.flat_addr[5] = 0xDEAD_BEEF_CAFE
+        pmp.flat_addr[7] = 0xFFFF_FFFF_FFFF_FFFF
+        pmp.sync_from_flat()
 
         assert pmp._csrs["pmpaddr0"].val == 0x8000_0000
         assert pmp._csrs["pmpaddr5"].val == 0xDEAD_BEEF_CAFE
         assert pmp._csrs["pmpaddr7"].val == 0xFFFF_FFFF_FFFF_FFFF
 
     def test_sync_clears_cache_dirty(self):
-        """_sync_from_flat 完成后 _cache_dirty 应为 False."""
+        """sync_from_flat 完成后条目数组不再需要重建."""
         pmp = self._make_pmp(4)
-        pmp._cache_dirty = True
-        pmp._sync_from_flat()
-        assert pmp._cache_dirty is False
+        pmp.invalidate_cache()
+        pmp.sync_from_flat()
+        assert pmp.is_cache_dirty is False
 
     def test_sync_roundtrip(self):
-        """_sync_from_flat -> _rebuild_cache 往返应保持数据一致."""
+        """sync_from_flat 与 rebuild_cache 往返之后条目数组保持一致."""
         pmp = self._make_pmp(12)
         # Set via flat arrays
         for i in range(12):
-            pmp._flat_cfg[i] = (i * 17 + 3) & 0xFF
-            pmp._flat_addr[i] = 0x8000_0000 + i * 0x1000
-        pmp._sync_from_flat()
+            pmp.flat_cfg[i] = (i * 17 + 3) & 0xFF
+            pmp.flat_addr[i] = 0x8000_0000 + i * 0x1000
+        pmp.sync_from_flat()
 
         # Rebuild flat from entries
-        pmp._rebuild_cache()
+        pmp.rebuild_cache()
 
         for i in range(12):
-            assert pmp._flat_cfg[i] == (i * 17 + 3) & 0xFF, f"cfg[{i}] mismatch"
-            assert pmp._flat_addr[i] == 0x8000_0000 + i * 0x1000, f"addr[{i}] mismatch"
+            assert pmp.flat_cfg[i] == (i * 17 + 3) & 0xFF, f"cfg[{i}] mismatch"
+            assert pmp.flat_addr[i] == 0x8000_0000 + i * 0x1000, f"addr[{i}] mismatch"
 
     def test_sync_without_cfg_registers_skips_entries(self):
         """条目数非零但 CSR 字典缺失 pmpcfg 寄存器时跳过该条目."""
         pmp = Pmp({}, 2)
-        pmp._flat_cfg[0] = 0x1F
-        pmp._flat_addr[0] = 0x400
-        pmp._sync_from_flat()
-        assert pmp._cache_dirty is False
+        pmp.flat_cfg[0] = 0x1F
+        pmp.flat_addr[0] = 0x400
+        pmp.sync_from_flat()
+        assert pmp.is_cache_dirty is False
+
+
+class TestBindFlatBuffers:
+    """条目数组指向共享缓冲区切片时的重建与失效标记."""
+
+    @staticmethod
+    def _bound_pmp(
+        csrs: dict,
+        num_entries: int,
+        cfg_buf,
+        addr_buf,
+        offset_entries: int,
+    ) -> Pmp:
+        pmp = Pmp(csrs, num_entries)
+        pmp.bind_flat_buffers(
+            (ctypes.c_uint8 * num_entries).from_buffer(cfg_buf, offset_entries),
+            (ctypes.c_uint64 * num_entries).from_buffer(
+                addr_buf, offset_entries * ctypes.sizeof(ctypes.c_uint64)
+            ),
+        )
+        return pmp
+
+    def test_bind_marks_cache_dirty(self):
+        """绑定新切片之后必须按 CSR 重建, 不得沿用旧数组."""
+        pmp = Pmp({}, 4)
+        pmp.rebuild_cache()
+        assert pmp.is_cache_dirty is False
+        cfg_buf = (ctypes.c_uint8 * 4)(1, 2, 3, 4)
+        addr_buf = (ctypes.c_uint64 * 4)(11, 12, 13, 14)
+        pmp.bind_flat_buffers(cfg_buf, addr_buf)
+        assert pmp.is_cache_dirty is True
+
+    def test_rebuild_keeps_neighbour_slice(self):
+        """重建只写本 hart 的切片, 相邻 hart 的条目保持不变.
+
+        条目数组是更大缓冲区中的一个切片时, 按固定容量清除剩余条目会越过
+        切片末尾, 覆盖下一个 hart 的条目.
+        """
+        cfg_buf = (ctypes.c_uint8 * 8)()
+        addr_buf = (ctypes.c_uint64 * 8)()
+        cfg_buf[4] = 0xAA
+        addr_buf[4] = 0x1234
+        pmp = self._bound_pmp({}, 4, cfg_buf, addr_buf, 0)
+        pmp.rebuild_cache()
+        assert list(pmp.flat_cfg) == [0, 0, 0, 0]
+        assert list(pmp.flat_addr) == [0, 0, 0, 0]
+        assert cfg_buf[4] == 0xAA
+        assert addr_buf[4] == 0x1234
+
+    def test_rebuild_fills_from_csr_into_slice(self):
+        """重建把 CSR 中的条目写入绑定切片."""
+        cfg_buf = (ctypes.c_uint8 * 8)()
+        addr_buf = (ctypes.c_uint64 * 8)()
+        csrs = {
+            "pmpcfg0": CSR(name="pmpcfg0", access=CsrAccess.m_rw),
+            "pmpaddr0": CSR(name="pmpaddr0", access=CsrAccess.m_rw),
+        }
+        csrs["pmpcfg0"].val = 0x9F
+        csrs["pmpaddr0"].val = 0x8000_0000
+        pmp = self._bound_pmp(csrs, 4, cfg_buf, addr_buf, 4)
+        pmp.rebuild_cache()
+        assert cfg_buf[4] == 0x9F
+        assert addr_buf[4] == 0x8000_0000

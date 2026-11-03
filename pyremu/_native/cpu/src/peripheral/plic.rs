@@ -42,10 +42,15 @@ fn plic_find_highest(plic: &FfiPlicCtx, context: usize) -> u32 {
 	let mut best = 0u32;
 	let mut best_prio = 0u32;
 	for src in 1..=plic.num_sources as usize {
+		let word = src / 32;
+		// 每个 context 的使能位图只有 num_words 个字, 字号超出该范围的中断源没有使能位.
+		// 中断源数恰为 32 的倍数时, 编号最大的中断源即落在这一范围内.
+		if word >= num_words {
+			continue;
+		}
 		if unsafe { *plic.pending.add(src) } == 0 {
 			continue;
 		}
-		let word = src / 32;
 		let bit = 1u32 << (src % 32);
 		if unsafe { *plic.enable.add(context * num_words + word) } & bit == 0 {
 			continue;
@@ -153,7 +158,8 @@ fn plic_write_enable_word(context: u64, word_idx: u64, val: u64, plic: &FfiPlicC
 		return;
 	}
 	let src_base = (word_idx as usize) * 32;
-	let valid_bits = plic.num_sources as usize - src_base;
+	// 有效位覆盖中断源 0 至 num_sources, 共 num_sources + 1 个.
+	let valid_bits = plic.num_sources as usize + 1 - src_base;
 	let mut mask: u32 = if valid_bits >= 32 {
 		0xFFFF_FFFF
 	} else {
@@ -449,6 +455,30 @@ mod tests {
 
 		set_prio(&mut plic, 7, 4);
 		assert_eq!(plic_find_highest(&plic, 0), 7, "最高优先级胜出");
+	}
+
+	/// 中断源数恰为 32 的倍数时, 编号最大的中断源没有使能位.
+	///
+	/// 该中断源的字号等于 num_words, 不得按该字号读取下一个 context 的使能字,
+	/// 否则 context 1 的使能位会被当作 context 0 对该中断源的使能.
+	#[test]
+	fn find_highest_skips_source_beyond_enable_words() {
+		let (_p, mut pending, _l, mut enable, mut threshold, _c, mut plic) = make_plic(32, 2);
+		pending[32] = 1;
+		// context 1 的第 0 个字; 与中断源 32 在 context 0 中算出的字下标相同
+		enable[1] = 1;
+		set_prio(&mut plic, 32, 7);
+		threshold[0] = 0;
+		assert_eq!(plic_find_highest(&plic, 0), 0);
+	}
+
+	/// 中断源数不是 32 的倍数时, 编号等于 num_sources 的中断源仍有一个使能位.
+	#[test]
+	fn write_enable_word_keeps_last_source_bit() {
+		let (_p, _pending, _l, enable, _t, _c, plic) = make_plic(30, 1);
+		plic_write_enable_word(0, 0, 0xFFFF_FFFF, &plic);
+		// 中断源 0 为保留项; 中断源 1 至 30 对应 bit 1 至 bit 30
+		assert_eq!(enable[0], 0x7FFF_FFFE);
 	}
 
 	/// mip 同步: claim 清除最后一个 pending 后 MEIP 立即清零.

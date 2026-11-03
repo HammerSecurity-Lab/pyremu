@@ -11,6 +11,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import struct
+
 from pyremu._native import HartState
 from pyremu.core.priv_defs import RiscvMode
 
@@ -21,6 +24,36 @@ _MODE_FROM_U8: dict[int, RiscvMode] = {
     2: RiscvMode.H,
     3: RiscvMode.M,
 }
+
+# IMSIC 的 eip 与 eie 各为 64 个 u32 字, 两处列表按小端序整体编组到 HartState.
+_IMSIC_PACK_FORMAT = "<64I"
+_IMSIC_PACK_BYTES = 64 * 4
+# 第 0 个字中对应 S 模式与 M 模式软件中断的位, 不属于外部中断.
+_IMSIC_IPI_WORD0_MASK = (1 << 1) | (1 << 3)
+
+
+def _has_ext_interrupt(eip: list[int]) -> int:
+    """判定 eip 中是否有中断编号不小于 6 的位."""
+    if eip[0] & ~_IMSIC_IPI_WORD0_MASK:
+        return 1
+    return 1 if any(eip[1:]) else 0
+
+
+def _merge_eip(
+    engine_words: tuple[int, ...],
+    before: bytes | None,
+    current: list[int],
+) -> list[int]:
+    """合并引擎写回的 eip 与设备线程在单轮执行期间置位的位.
+
+    ``before`` 为编组时刻的 eip; ``current`` 中不在 ``before`` 里的位由设备线程
+    在编组之后置位, 合并结果必须保留. ``before`` 为 ``None`` 时没有可保留的位.
+    """
+    if before is None:
+        return list(engine_words)
+    before_words = struct.unpack(_IMSIC_PACK_FORMAT, before)
+    return [e | (c & ~p) for e, c, p in zip(engine_words, current, before_words)]
+
 
 # 加速执行的退出原因, 取值必须与 Rust 侧一致
 EXIT_NORMAL = 0
@@ -47,8 +80,7 @@ class HartFfiOps:
 
     def marshal_to(self, state: HartState) -> None:
         """把本 hart 的状态写入 Rust ``HartState``."""
-        for i in range(32):
-            state.gprs[i] = self.gprs[i]
+        state.gprs[:] = self.gprs
 
         state.mstatus = self.mstatus_val
         state.mtvec = self.csrs["mtvec"].val
@@ -94,16 +126,14 @@ class HartFfiOps:
 
         state.total_instrs = self._total_instrs
 
-        for i in range(32):
-            state.fprs[i] = self._fpr_bits[i]
+        state.fprs[:] = self._fpr_bits
         state.fcsr = self.csrs["fcsr"].val & 0xFF
 
         self._marshal_imsic(state)
 
     def unmarshal_from(self, state: HartState) -> None:
         """把 Rust ``HartState`` 写回本 hart."""
-        for i in range(32):
-            self.gprs[i] = state.gprs[i]
+        self.gprs.assign(state.gprs[:])
 
         self.mstatus_val = state.mstatus
         self.csrs["mtvec"].val = state.mtvec
@@ -114,7 +144,10 @@ class HartFfiOps:
         self.scause_val = state.scause
         self.mtval_val = state.mtval
         self.stval_val = state.stval
-        self.satp_val = state.satp
+        # satp 取值与 Python 侧一致时保持指令 TLB 与数据 TLB 的既有条目; 取值不同时
+        # 经 satp_val 写回, 该属性写入时刷新两个 TLB.
+        if state.satp != self.csrs["satp"].val:
+            self.satp_val = state.satp
         self._csr_write_raw("mie", state.mie)
         self._csr_write_raw("mip", state.mip)
         self.csrs["medeleg"].val = state.medeleg
@@ -155,8 +188,7 @@ class HartFfiOps:
 
         self._total_instrs = state.total_instrs
 
-        for i in range(32):
-            self._fpr_bits[i] = state.fprs[i]
+        self._fpr_bits[:] = state.fprs[:]
         self.csrs["fcsr"].val = state.fcsr & 0xFF
         self.csrs["frm"].val = (state.fcsr >> 5) & 0x7
         self.csrs["fflags"].val = state.fcsr & 0x1F
@@ -181,37 +213,39 @@ class HartFfiOps:
             # 外部中断无法排空, 守护线程置位的 eip 位会反复触发中断
             state.imsic_m.present = 0
             state.imsic_s.present = 0
+            self._imsic_pre_m_eip = None
+            self._imsic_pre_s_eip = None
             return
         # 持锁: 读取 eip/eie 快照与接收线程的置位互斥, 避免读到只改了一半的状态
         with imsic._lock:
             mf, sf = imsic._files[self.id]
             # 保存 eip 快照, 供 _unmarshal_imsic 识别加速期间由接收线程置位的位
-            self._imsic_pre_m_eip = list(mf.eip)
-            self._imsic_pre_s_eip = list(sf.eip)
-            # 编组 eip/eie 并算出 eip_ext_any 供引擎判断;
-            # 第 0 个字的两个 IPI 位 (S 模式为 1, M 模式为 3) 不计入,
-            # 只有中断编号不小于 6 的位属于外部中断
-            _ext_m, _ext_s = 0, 0
-            _mask0 = ~((1 << 1) | (1 << 3))
-            for j in range(64):
-                state.imsic_m.eip[j] = mf.eip[j]
-                state.imsic_m.eie[j] = mf.eie[j]
-                state.imsic_s.eip[j] = sf.eip[j]
-                state.imsic_s.eie[j] = sf.eie[j]
-                if (mf.eip[0] & _mask0) or (j != 0 and mf.eip[j]):
-                    _ext_m = 1
-                if (sf.eip[0] & _mask0) or (j != 0 and sf.eip[j]):
-                    _ext_s = 1
+            eip_m = struct.pack(_IMSIC_PACK_FORMAT, *mf.eip)
+            eip_s = struct.pack(_IMSIC_PACK_FORMAT, *sf.eip)
+            self._imsic_pre_m_eip = eip_m
+            self._imsic_pre_s_eip = eip_s
+            ctypes.memmove(state.imsic_m.eip, eip_m, _IMSIC_PACK_BYTES)
+            ctypes.memmove(
+                state.imsic_m.eie,
+                struct.pack(_IMSIC_PACK_FORMAT, *mf.eie),
+                _IMSIC_PACK_BYTES,
+            )
+            ctypes.memmove(state.imsic_s.eip, eip_s, _IMSIC_PACK_BYTES)
+            ctypes.memmove(
+                state.imsic_s.eie,
+                struct.pack(_IMSIC_PACK_FORMAT, *sf.eie),
+                _IMSIC_PACK_BYTES,
+            )
             state.imsic_m.eidelivery = mf.eidelivery
             state.imsic_m.eithreshold = mf.eithreshold
             state.imsic_m.select = self._imsic_select_m
             state.imsic_m.present = 1
-            state.imsic_m.eip_ext_any = _ext_m
+            state.imsic_m.eip_ext_any = _has_ext_interrupt(mf.eip)
             state.imsic_s.eidelivery = sf.eidelivery
             state.imsic_s.eithreshold = sf.eithreshold
             state.imsic_s.select = self._imsic_select_s
             state.imsic_s.present = 1
-            state.imsic_s.eip_ext_any = _ext_s
+            state.imsic_s.eip_ext_any = _has_ext_interrupt(sf.eip)
 
     def _unmarshal_imsic(self, state: HartState) -> None:
         """把 ``HartState`` 的 IMSIC 字段写回本 hart 的 IMSIC.
@@ -228,16 +262,18 @@ class HartFfiOps:
         # 置位的位会被引擎写回的旧值覆盖, 或在计算时读到只改了一半的状态
         with imsic._lock:
             mf, sf = imsic._files[self.id]
-            # 接收线程在编组之后置位、快照中没有的位必须保留
-            pre_m = getattr(self, "_imsic_pre_m_eip", None)
-            pre_s = getattr(self, "_imsic_pre_s_eip", None)
-            for j in range(64):
-                daemon_m = mf.eip[j] & ~pre_m[j] if pre_m else 0
-                daemon_s = sf.eip[j] & ~pre_s[j] if pre_s else 0
-                mf.eip[j] = state.imsic_m.eip[j] | daemon_m
-                mf.eie[j] = state.imsic_m.eie[j]
-                sf.eip[j] = state.imsic_s.eip[j] | daemon_s
-                sf.eie[j] = state.imsic_s.eie[j]
+            mf.eip[:] = _merge_eip(
+                struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_m.eip),
+                self._imsic_pre_m_eip,
+                mf.eip,
+            )
+            sf.eip[:] = _merge_eip(
+                struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_s.eip),
+                self._imsic_pre_s_eip,
+                sf.eip,
+            )
+            mf.eie[:] = struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_m.eie)
+            sf.eie[:] = struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_s.eie)
             mf.eidelivery = state.imsic_m.eidelivery
             mf.eithreshold = state.imsic_m.eithreshold
             sf.eidelivery = state.imsic_s.eidelivery

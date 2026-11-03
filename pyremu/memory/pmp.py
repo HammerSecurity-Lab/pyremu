@@ -134,7 +134,8 @@ class Pmp:
     """Physical Memory Protection 检查器.
 
     直接读取 hart CSRs, 每次 check() 调用时重新计算.
-    支持 Rust native 加速路径 (零状态共享, 纯函数 FFI).
+    条目数组可按 hart 指向共享缓冲区中的切片, 与加速执行引擎读写同一份存储;
+    条目由 CSR 重建, 引擎的改动经 ``sync_from_flat()`` 写回 CSR.
     """
 
     def __init__(
@@ -147,7 +148,7 @@ class Pmp:
             raise ValueError("num_entries must be 0..64")
         self._num_entries = num_entries
 
-        # Rust 加速: 扁平化 PMP 条目缓存 (64 u8 cfg + 64 u64 addr)
+        # 按条目编号排列的 pmpcfg 字节数组与 pmpaddr 数组, 默认不与其他 hart 共享
         self._flat_cfg: bytearray = bytearray(64)
         self._flat_addr: array = array("Q", [0] * 64)
         self._cache_dirty: bool = True
@@ -159,25 +160,51 @@ class Pmp:
     def num_entries(self) -> int:
         return self._num_entries
 
+    @property
+    def flat_cfg(self):
+        """本 hart 的 pmpcfg 字节数组, 按条目编号排列, 长度为 ``num_entries``."""
+        return self._flat_cfg
+
+    @property
+    def flat_addr(self):
+        """本 hart 的 pmpaddr 数组, 按条目编号排列, 长度为 ``num_entries``."""
+        return self._flat_addr
+
+    @property
+    def is_cache_dirty(self) -> bool:
+        """条目数组是否需要按 CSR 重建."""
+        return self._cache_dirty
+
     # ---- 缓存管理 ----
 
     def invalidate_cache(self) -> None:
         """PMP CSR 写入后标记缓存失效."""
         self._cache_dirty = True
 
-    def _rebuild_cache(self) -> None:
-        """从 CSR dict 重建扁平化 PMP 数组 (entries -> flat)."""
+    def bind_flat_buffers(self, flat_cfg, flat_addr) -> None:
+        """把条目数组指向外部持有的缓冲区切片.
+
+        加速执行引擎直接读写该切片, 本对象不再另行复制. 新切片的内容未知,
+        故标记缓存失效, 由下一次 ``rebuild_cache()`` 按 CSR 重建.
+        """
+        self._flat_cfg = flat_cfg
+        self._flat_addr = flat_addr
+        self._cache_dirty = True
+
+    def rebuild_cache(self) -> None:
+        """按条目编号从 CSR 重建 pmpcfg 与 pmpaddr 数组."""
         for i in range(self._num_entries):
             self._flat_cfg[i] = self._read_cfg(i)
             self._flat_addr[i] = self._read_addr(i)
-        # 清除剩余条目
-        for i in range(self._num_entries, 64):
+        # 数组可能只是更大缓冲区中的一个切片, 只清除其中剩余的条目
+        for i in range(self._num_entries, len(self._flat_cfg)):
             self._flat_cfg[i] = 0
+        for i in range(self._num_entries, len(self._flat_addr)):
             self._flat_addr[i] = 0
         self._cache_dirty = False
 
-    def _sync_from_flat(self) -> None:
-        """将调用动态链接库加速修改后的 flat 数组同步回 CSR entries (flat -> entries).
+    def sync_from_flat(self) -> None:
+        """把加速执行引擎修改后的条目数组写回 CSR.
 
         逐字节写回 pmpcfg 寄存器: 先读 CSR 当前值, 替换目标字节,
         写回, 确保同一寄存器内其他条目不受影响.
@@ -214,10 +241,10 @@ class Pmp:
         if mdid != 0 and pmpsplit > 0 and pmpsplit >= self._num_entries:
             return False
 
-        # Rust native 加速路径 (处理全部 PMP 逻辑: M-mode bypass, MPRV, pmpsplit, etc.)
+        # 加速执行路径: 由加速执行引擎处理 M 模式旁路、MPRV、pmpsplit 等全部逻辑
         if self._use_native:
             if self._cache_dirty:
-                self._rebuild_cache()
+                self.rebuild_cache()
             return pmp_check(
                 bytes(self._flat_cfg),
                 self._flat_addr,
@@ -225,11 +252,11 @@ class Pmp:
                 info,
             )
 
-        # 纯 Python fallback
+        # 加速执行库不可用时的纯 Python 路径
         return self._check_py(info)
 
     def _check_py(self, info: PmpAccessInfo) -> bool:
-        """纯 Python PMP 检查 (native 库缺失时的 fallback)."""
+        """纯 Python PMP 检查, 加速执行库缺失时使用."""
         pa, size = info.pa, info.size
         mode_val, mstatus_val = info.mode_val, info.mstatus_val
         is_write, is_execute = info.is_write, info.is_execute

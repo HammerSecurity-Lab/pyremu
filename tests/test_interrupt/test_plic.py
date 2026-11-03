@@ -378,6 +378,30 @@ class TestMultiSource:
 # ============================================================
 
 
+class TestEnableWordBound:
+    def test_last_source_without_enable_word_is_not_arbitrated(self):
+        """中断源数恰为 32 的倍数时, 编号最大的中断源没有使能位.
+
+        该中断源算出的使能字下标等于使能位图的字数: 按该下标读取时, 读到的是
+        下一个 context 的字 0, 使 context 1 的使能位被当作 context 0 对该中断源
+        的使能. 最后一个 context 则越过数组. 两种情形都不得参与仲裁.
+        """
+        plic = PLIC(num_sources=32, num_contexts=2)
+        plic.pending[32] = 1
+        plic.enable[1] = 1
+        plic.priority[32] = 7
+        assert plic.get_pending_mip(0) == 0
+
+    def test_enable_word_keeps_bit_of_last_source(self):
+        """中断源数不是 32 的倍数时, 编号等于 num_sources 的中断源仍可使能."""
+        plic = PLIC(num_sources=30, num_contexts=2)
+        plic.set_irq(30, True)
+        plic.priority[30] = 7
+        _write_u32(plic, _enable_offset(0, 0), 0xFFFF_FFFF)
+        assert _read_u32(plic, _enable_offset(0, 0)) == 0x7FFF_FFFE
+        assert plic.get_pending_mip(0) == 1 << 11
+
+
 class TestLevelRetrigger:
     """complete 时设备电平仍高则 pending 重新置位, 与 QEMU sifive_plic gateway 语义一致.
 

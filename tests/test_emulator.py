@@ -5,6 +5,7 @@
 
 """模拟器集成测试: 执行循环、状态导出、固件装载与空闲等待."""
 
+import ctypes
 import threading
 import time
 
@@ -622,8 +623,8 @@ class TestWfiIdleSleep:
         batch 运行期间 Rust 内联 plic_recompute_mip 用 batch 起始的旧数组
         (源挂起=0) 覆盖 SEIP -> UART 中断永远投递不出去, 受调试程序在 nohz 空闲
         路径自旋冻结 (make emu-linux-sh 间歇性卡死)。修复后 drain 经
-        on_irq (= irq_sink) -> plic.set_irq 内联写穿 _ffi_pending/
-        _ffi_level, 使 batch 内 Rust 仲裁立即看到 UART 源挂起。
+        on_irq (= irq_sink) -> plic.set_irq 内联写穿 pending/
+        level, 使 batch 内 Rust 仲裁立即看到 UART 源挂起。
         """
         emu = Emulator(num_harts=1)
         uart = emu.uart
@@ -637,59 +638,52 @@ class TestWfiIdleSleep:
             ext_irq=emu._native_ext_irq,
             on_irq=emu.irq_sink,
         )
-        emu._native_marshal_plic()  # 分配持久数组 (真实启动路径先于首个 batch)
-
         # Rust termio 线程写入 stdin -> ring buffer, daemon drain
         termio._rx_buf[0] = ord("H")
         termio._rx_wr.value = 1
         termio._rx_rd.value = 0
         assert termio.drain_rx() is True
-        # write-through: FFI 持久数组 (PLIC 持有) 与 ext_irq 通知位同步置位
-        assert emu.plic._ffi_pending[UART_IRQ] == 1
-        assert emu.plic._ffi_level[UART_IRQ] == 1
+        # write-through: PLIC 持有的共享数组与 ext_irq 通知位同步置位
+        assert emu.plic.pending[UART_IRQ] == 1
+        assert emu.plic.level[UART_IRQ] == 1
         assert emu._native_ext_irq.pending == 1
-        assert emu.plic._pending[UART_IRQ] is True
         assert ev.is_set()
 
         # 反向: 受调试程序关闭 RX 中断 (IE=0) 后 drain 不得强制拉高挂起位 —
-        # 电平语义, irq_sink 收到真实电平 False 时持久数组清零.
+        # 电平语义, irq_sink 收到真实电平 False 时共享数组清零.
         uart._ie = 0
         uart.clear_rx()
-        emu._native_unmarshal_plic(emu._native_marshal_plic())
         termio._rx_buf[1] = ord("B")
         termio._rx_wr.value = 2
         termio._rx_rd.value = 1
         emu._native_ext_irq.pending = 0
         assert termio.drain_rx() is True
-        assert emu.plic._ffi_pending[UART_IRQ] == 0, "IE 关闭时不得虚假挂起"
-        assert emu.plic._pending[UART_IRQ] is False
+        assert emu.plic.pending[UART_IRQ] == 0, "IE 关闭时不得虚假挂起"
 
     @pytest.mark.usefixtures("legacy_plic")
-    def test_uart_read_empty_deasserts_ffi_level(self):
-        """回归: 受调试程序读空 RX FIFO 必须写穿 FFI level=0, 防 Rust complete 重挂起风暴.
+    def test_uart_read_empty_deasserts_level(self):
+        """回归: 受调试程序读空 RX FIFO 必须写穿 level=0, 防 Rust complete 重挂起风暴.
 
-        修复前 UART._publish_state 仅更新 Python PLIC 对象, 不写 FFI 持久数组。
+        修复前 UART._publish_state 仅更新 Python PLIC 对象, 不写引擎读取的数组。
         batch 运行期间受调试程序读空 FIFO 后, Rust 内联 plic_do_complete 读到陈旧
         level=1 -> 重挂起 pending -> SEIP 再次置位 -> spurious 中断无限循环
-        (batch 永不结束, 等价冻结)。修复后 set_irq 内联写穿 _ffi_pending/
-        _ffi_level, complete 读到 level=0 不再重挂。
+        (batch 永不结束, 等价冻结)。修复后 set_irq 写穿 pending/
+        level, complete 读到 level=0 不再重挂。
         """
         emu = Emulator(num_harts=1)
         uart = emu.uart
         assert uart is not None and uart._irq == UART_IRQ
         uart._ie = 1 << 1  # 使能 rxwm 中断, 即 IE 的 bit1
-        # 数据入队 -> set_irq 写穿: FFI 数组与 Python 对象同步置位
+        # 数据入队 -> set_irq 写穿: 引擎读取的数组同步置位
         uart.preload(b"AB")
-        assert emu.plic._ffi_pending[UART_IRQ] == 1
-        assert emu.plic._ffi_level[UART_IRQ] == 1
+        assert emu.plic.pending[UART_IRQ] == 1
+        assert emu.plic.level[UART_IRQ] == 1
         # 模拟受调试程序的中断服务程序逐个读出 FIFO 中的字节; 读空后电平写穿为 0
         uart.read(0x04, 1)
-        assert emu.plic._ffi_pending[UART_IRQ] == 1, "还有数据时不得 deassert"
+        assert emu.plic.pending[UART_IRQ] == 1, "还有数据时不得 deassert"
         uart.read(0x04, 1)
-        assert emu.plic._ffi_pending[UART_IRQ] == 0, "读空后不得残留挂起"
-        assert emu.plic._ffi_level[UART_IRQ] == 0, "读空后陈旧电平不得残留"
-        assert emu.plic._level[UART_IRQ] is False
-        assert emu.plic._pending[UART_IRQ] is False
+        assert emu.plic.pending[UART_IRQ] == 0, "读空后不得残留挂起"
+        assert emu.plic.level[UART_IRQ] == 0, "读空后陈旧电平不得残留"
 
     @pytest.mark.usefixtures("legacy_plic")
     def test_uart_ffi_regs_track_device_state_live(self):
@@ -734,3 +728,56 @@ class TestWfiIdleSleep:
         assert emu._native_marshal_uart().ffi is ctx
         assert ctx.ie == 0
         assert ctx.rx_fifo_len == 1
+
+
+class TestSpeedupPmpBuffers:
+    """加速执行期间 PMP 条目数组与各 hart 共享缓冲区的绑定."""
+
+    @staticmethod
+    def _make_speedup_emu(num_harts: int = 2) -> Emulator:
+        emu = Emulator(num_harts=num_harts)
+        assert emu.uart is not None
+        emu._termio = TerminalIO(
+            emu.uart,
+            threading.Event(),
+            ext_irq=emu._native_ext_irq,
+            on_irq=emu.irq_sink,
+        )
+        emu._init_for_speedup_lib()
+        return emu
+
+    def test_hart_slices_share_buffer(self):
+        """每个 hart 的条目数组是共享缓冲区中从 hid*n 开始的切片."""
+        emu = self._make_speedup_emu(2)
+        n = emu._pmp_num
+        assert n > 0
+        base_cfg = ctypes.addressof(emu._pmp_cfg_buf)
+        base_addr = ctypes.addressof(emu._pmp_addr_buf)
+        for hid, hart in enumerate(emu.harts):
+            assert len(hart.pmp.flat_cfg) == n
+            assert ctypes.addressof(hart.pmp.flat_cfg) == base_cfg + hid * n
+            assert ctypes.addressof(hart.pmp.flat_addr) == base_addr + hid * n * 8
+
+    def test_engine_write_syncs_only_changed_hart(self):
+        """引擎写入某个 hart 的切片之后只同步该 hart 的 CSR."""
+        emu = self._make_speedup_emu(2)
+        emu._native_marshal_pmp([])
+        emu.harts[1].pmp.flat_cfg[0] = 0x9F
+        emu.harts[1].pmp.flat_addr[0] = 0x8000_0000
+        emu._native_unmarshal_pmp()
+        assert emu.harts[1].csrs["pmpcfg0"].val == 0x9F
+        assert emu.harts[1].csrs["pmpaddr0"].val == 0x8000_0000
+        assert emu.harts[0].csrs["pmpcfg0"].val == 0
+        assert emu.harts[0].csrs["pmpaddr0"].val == 0
+
+    def test_unchanged_buffers_skip_sync(self):
+        """数组内容与快照相同时不写 CSR, 切片变化之后才写回."""
+        emu = self._make_speedup_emu(1)
+        hart = emu.harts[0]
+        emu._native_marshal_pmp([])
+        hart.csrs["pmpcfg0"].val = 0xAB
+        emu._native_unmarshal_pmp()
+        assert hart.csrs["pmpcfg0"].val == 0xAB
+        hart.pmp.flat_cfg[0] = 0x1F
+        emu._native_unmarshal_pmp()
+        assert hart.csrs["pmpcfg0"].val == 0x1F
