@@ -5,7 +5,8 @@
 
 """NTFS 的引导扇区解析与 $Bitmap 统计.
 
-引导扇区给出几何参数与主文件表的位置, 主文件表与 $Bitmap 数据流的解析由 pyfsntfs 完成,
+引导扇区给出几何参数与主文件表的位置,
+主文件表与 $Bitmap 数据流的解析由 pyfsntfs 完成,
 $Bitmap 中值为 1 的位给出已分配簇数. 本模块只读映像, 不写入任何扇区.
 """
 
@@ -114,7 +115,9 @@ def _parse_boot_sector(boot: bytes) -> NtfsBootSector:
 
     if bytes_per_sector not in VALID_SECTOR_SIZES:
         raise DiskFormatError(f"每扇区字节数 {bytes_per_sector} 不合法")
-    if sectors_per_cluster == 0 or sectors_per_cluster & (sectors_per_cluster - 1):
+    if sectors_per_cluster == 0 or sectors_per_cluster & (
+        sectors_per_cluster - 1
+    ):
         raise DiskFormatError(f"每簇扇区数 {sectors_per_cluster} 不是 2 的幂")
     if bytes_per_sector * sectors_per_cluster > MAX_CLUSTER_BYTES:
         raise DiskFormatError("簇大小超出 NTFS 允许的范围")
@@ -143,7 +146,10 @@ def _parse_boot_sector(boot: bytes) -> NtfsBootSector:
     )
 
 
-def _read_volume_fields(fp: BinaryIO, superblock: NtfsBootSector) -> NtfsBootSector:
+def _read_volume_fields(
+    fp: BinaryIO,
+    superblock: NtfsBootSector,
+) -> NtfsBootSector:
     """经 pyfsntfs 读取卷标、主文件表参数与 $Bitmap 的已分配簇数."""
     volume = pyfsntfs.volume()
     try:
@@ -168,7 +174,10 @@ def _read_volume_fields(fp: BinaryIO, superblock: NtfsBootSector) -> NtfsBootSec
         volume.close()
 
 
-def _count_allocated_clusters(entry: pyfsntfs.file_entry, cluster_count: int) -> int:
+def _count_allocated_clusters(
+    entry: pyfsntfs.file_entry,
+    cluster_count: int,
+) -> int:
     """在 $Bitmap 的前 *cluster_count* 位中统计值为 1 的位."""
     allocated = 0
     offset = 0
@@ -179,7 +188,9 @@ def _count_allocated_clusters(entry: pyfsntfs.file_entry, cluster_count: int) ->
         if len(data) < byte_count:
             raise DiskFormatError(f"{BITMAP_PATH} 短于簇数所需")
         bits = min(remaining, byte_count * 8)
-        allocated += (int.from_bytes(data, "little") & ((1 << bits) - 1)).bit_count()
+        allocated += (
+            int.from_bytes(data, "little") & ((1 << bits) - 1)
+        ).bit_count()
         offset += byte_count
         remaining -= bits
     return allocated

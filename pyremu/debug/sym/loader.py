@@ -39,7 +39,9 @@ def load_symbol_module(
     space: str | None,
     base: int | None,
 ) -> "model.SymMod | None":
-    """解析 *path* 指向的 ELF, 按 *space* 与 *base* 部署并校验, 通过后返回模块."""
+    """解析 *path* 指向的 ELF, 按 *space* 与 *base* 部署并校验,
+    通过后返回模块.
+    """
     try:
         mod = _build_module(dbg, path, space, base)
     except DeployError as exc:
@@ -93,7 +95,9 @@ def _open_elf(path: str) -> "elf_idx.ElfFile":
     try:
         return elf_idx.ElfFile(path)
     except OSError as exc:
-        raise DeployError(f"无法读取符号文件 {path}: {exc.strerror or exc}") from exc
+        raise DeployError(
+            f"无法读取符号文件 {path}: {exc.strerror or exc}"
+        ) from exc
     except ElfFormatError as exc:
         raise DeployError(f"无法加载符号文件 {path}: {exc}") from exc
 
@@ -117,7 +121,10 @@ def _build_index(
             index.entry_count,
             elf_idx.ADDRESS_INDEX_BYTES_PER_SYMBOL,
         )
-        name_mb = _index_mb(index.entry_count, elf_idx.NAME_INDEX_BYTES_PER_SYMBOL)
+        name_mb = _index_mb(
+            index.entry_count,
+            elf_idx.NAME_INDEX_BYTES_PER_SYMBOL,
+        )
         dbg._warn(
             f"符号表条目 {index.entry_count:,} 条, 地址索引约 {address_mb} MB,"
             f" 名称索引建立后另加约 {name_mb} MB;"
@@ -161,7 +168,11 @@ def _deploy_and_verify(
     base: int | None,
 ) -> "model.SymMod":
     sample = _prepare_sample(index.elf, index, path)
-    pa_base, va_base, sample.runtime_pa = _resolve_bases(dbg, sample, space, base)
+    (
+        pa_base,
+        va_base,
+        sample.runtime_pa,
+    ) = _resolve_bases(dbg, sample, space, base)
 
     is_same, mis_offset = _compare_sample(dbg, sample)
     if not is_same:
@@ -219,7 +230,9 @@ def _coverage(
     elf: "elf_idx.ElfFile",
     index: "elf_idx.ElfSymbolIndex",
 ) -> tuple[int, int] | None:
-    alloc = [s for s in elf.sections if s.flags & elf_idx.SHF_ALLOC and s.size > 0]
+    alloc = [
+        s for s in elf.sections if s.flags & elf_idx.SHF_ALLOC and s.size > 0
+    ]
     if alloc:
         start = min(s.addr for s in alloc)
         end = max(s.addr + s.size for s in alloc)
@@ -229,9 +242,16 @@ def _coverage(
     return index.value_min, index.value_max_end
 
 
-def _find_anchor(elf: "elf_idx.ElfFile", cover_start: int, cover_end: int) -> int | None:
+def _find_anchor(
+    elf: "elf_idx.ElfFile",
+    cover_start: int,
+    cover_end: int,
+) -> int | None:
     entry = elf.entry
-    if cover_start <= entry < cover_end and _locate_sample(elf, entry) is not None:
+    if (
+        cover_start <= entry < cover_end
+        and _locate_sample(elf, entry) is not None
+    ):
         return entry
     exec_start = _lowest_exec_start(elf)
     if exec_start is None or not (cover_start <= exec_start < cover_end):
@@ -243,7 +263,11 @@ def _lowest_exec_start(elf: "elf_idx.ElfFile") -> int | None:
     starts = [
         s.addr
         for s in elf.sections
-        if s.size > 0 and s.flags & elf_idx.SHF_ALLOC and s.flags & elf_idx.SHF_EXECINSTR
+        if (
+            s.size > 0
+            and s.flags & elf_idx.SHF_ALLOC
+            and s.flags & elf_idx.SHF_EXECINSTR
+        )
     ]
     return min(starts) if starts else None
 
@@ -284,12 +308,21 @@ def _resolve_bases(
         pa_first = _translate(dbg, va_base)
         pa_last = _translate(dbg, mask64(va_base + span - 1))
         if pa_first is None or pa_last is None:
-            raise DeployError(f"虚拟地址区间 [0x{va_base:x}, 0x{va_base + span:x}) 无法翻译")
-        if not (bus.is_storage_range(pa_first, 1) and bus.is_storage_range(pa_last, 1)):
-            raise DeployError(_storage_text(bus, pa_first, pa_last - pa_first + 1))
+            raise DeployError(
+                f"虚拟地址区间 [0x{va_base:x}, 0x{va_base + span:x}) 无法翻译"
+            )
+        if not (
+            bus.is_storage_range(pa_first, 1)
+            and bus.is_storage_range(pa_last, 1)
+        ):
+            raise DeployError(
+                _storage_text(bus, pa_first, pa_last - pa_first + 1)
+            )
         pa_sample = _translate(dbg, mask64(va_base + offset))
         if pa_sample is None:
-            raise DeployError(f"校验样本的虚拟地址 0x{va_base + offset:x} 无法翻译")
+            raise DeployError(
+                f"校验样本的虚拟地址 0x{va_base + offset:x} 无法翻译"
+            )
         return mask64(pa_sample - offset), va_base, pa_sample
 
     va_base = sample.cover_start
@@ -310,9 +343,12 @@ def _translate(dbg, va: int) -> int | None:
 def _storage_text(bus, base: int, size: int) -> str:
     """给出部署区间的错误说明, 列出该总线上的全部存储区间."""
     spans = ", ".join(
-        f"{name} [0x{lo:x}, 0x{lo + extent:x})" for name, lo, extent in bus.storage_intervals
+        f"{name} [0x{lo:x}, 0x{lo + extent:x})"
+        for name, lo, extent in bus.storage_intervals
     )
-    return f"部署区间 [0x{base:x}, 0x{base + size:x}) 不在任何存储区间内: {spans}"
+    return (
+        f"部署区间 [0x{base:x}, 0x{base + size:x}) 不在任何存储区间内: {spans}"
+    )
 
 
 def _compare_sample(dbg, sample: _Sample) -> tuple[bool, int]:

@@ -6,7 +6,8 @@
 """加速执行每轮的记录: 批次数、退出原因、每批指令数与三段耗时.
 
 三段耗时: ``sync_before`` 为本轮进入加速执行引擎之前的状态复制与 L2 缓存回写,
-``engine`` 为 ``run_parallel`` 的执行时间, ``sync_after`` 为退出之后的状态回读与收尾.
+``engine`` 为 ``run_parallel`` 的执行时间, ``sync_after`` 为退出之后的状态
+回读与收尾.
 """
 
 from __future__ import annotations
@@ -167,7 +168,10 @@ class BatchStats:
         self.exit_kind_counts[kind] += 1
         self.exit_kind_instrs[kind] += instrs
         self.exit_hart_counts[exit_hart_id] += 1
-        if exit_pc in self.exit_pc_counts or len(self.exit_pc_counts) < EXIT_PC_TRACK_LIMIT:
+        if (
+            exit_pc in self.exit_pc_counts
+            or len(self.exit_pc_counts) < EXIT_PC_TRACK_LIMIT
+        ):
             self.exit_pc_counts[exit_pc] += 1
         for index, upper in enumerate(INSTR_BUCKETS):
             if instrs <= upper:
@@ -190,7 +194,8 @@ class BatchStats:
             ns = self.phase_ns.get(key, 0)
             share = 100.0 * ns / total_ns if total_ns else 0.0
             lines.append(
-                f"\t{PHASE_LABELS[key]}: 每批 {ns / self.batch_count / 1e3:.1f} us, "
+                f"\t{PHASE_LABELS[key]}: 每批 "
+                f"{ns / self.batch_count / 1e3:.1f} us, "
                 f"占 {share:.1f}%"
             )
         lines.append("  退出原因:")
@@ -198,18 +203,28 @@ class BatchStats:
             name = EXIT_REASON_NAMES.get(reason, str(reason))
             avg = self.exit_instrs[reason] / count
             share = 100.0 * count / self.batch_count
-            lines.append(f"\t{name}: {count} 批次, 占 {share:.1f}%, 平均每批 {avg:.1f} 条")
+            lines.append(
+                f"\t{name}: {count} 批次, 占 {share:.1f}%, "
+                f"平均每批 {avg:.1f} 条"
+            )
         lines.append("\t每批指令数:")
         lower = 0
         for index, upper in enumerate(INSTR_BUCKETS):
-            lines.append(f"\t{lower + 1}-{upper}: {self.instr_bucket_counts[index]}")
+            lines.append(
+                f"\t{lower + 1}-{upper}: {self.instr_bucket_counts[index]}"
+            )
             lower = upper
-        lines.append(f"\t大于 {INSTR_BUCKETS[-1]}: {self.instr_bucket_counts[-1]}")
+        lines.append(
+            f"\t大于 {INSTR_BUCKETS[-1]}: {self.instr_bucket_counts[-1]}"
+        )
         lines.append("  退出指令:")
         for kind, count in self.exit_kind_counts.most_common():
             avg = self.exit_kind_instrs[kind] / count
             share = 100.0 * count / self.batch_count
-            lines.append(f"\t{kind}: {count} 批次, 占 {share:.1f}%, 平均每批 {avg:.1f} 条")
+            lines.append(
+                f"\t{kind}: {count} 批次, 占 {share:.1f}%, "
+                f"平均每批 {avg:.1f} 条"
+            )
         lines.append("  退出 hart:")
         for hart_id, count in sorted(self.exit_hart_counts.items()):
             lines.append(f"\t{hart_id}: {count} 批次")

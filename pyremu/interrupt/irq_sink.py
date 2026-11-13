@@ -26,7 +26,11 @@ if TYPE_CHECKING:
 class DeviceIrqSink:
     """设备中断投递目标"""
 
-    def __init__(self, ext_irq: FfiExtIrqCtx, wake_event: threading.Event) -> None:
+    def __init__(
+        self,
+        ext_irq: FfiExtIrqCtx,
+        wake_event: threading.Event,
+    ) -> None:
         self.ext_irq = ext_irq
         self.wake_event = wake_event
         # 中断源编号与中断控制器的对应关系, 未登记的中断源交给 fallback.

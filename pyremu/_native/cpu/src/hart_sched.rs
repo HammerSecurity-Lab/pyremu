@@ -224,10 +224,8 @@ pub(crate) fn write_ram_cross_page(
 	let page_off = va & 0xfff;
 	let bytes_first = (0x1000 - page_off) as u8;
 
-	for b in 0..bytes_first {
-		let byte = (val >> (b * 8)) as u8;
-		ram_write_raw(ctx, pa_first + (b as u64), byte as u64, 1);
-	}
+	// 先翻译并检查第二页, 再写入第一页的字节: 第二页发生陷态时本次存储不得
+	// 修改任何内存.
 	let va2 = va.wrapping_add(bytes_first as u64);
 	let tr2 = match translate_va(state, ctx, va2, rwx_write(), pmp) {
 		Ok(t) => t,
@@ -246,6 +244,10 @@ pub(crate) fn write_ram_cross_page(
 		return false;
 	}
 
+	for b in 0..bytes_first {
+		let byte = (val >> (b * 8)) as u8;
+		ram_write_raw(ctx, pa_first + (b as u64), byte as u64, 1);
+	}
 	for b in bytes_first..size {
 		let byte = (val >> (b * 8)) as u8;
 		ram_write_raw(
@@ -650,8 +652,6 @@ pub(crate) fn ram_write_raw(ctx: &WalkCtx, pa: u64, val: u64, size: u8) {
 		2 => {
 			unsafe {
 				*ptr.add(off) = val as u8;
-			}
-			unsafe {
 				*ptr.add(off + 1) = (val >> 8) as u8;
 			}
 			atomic::fence(Ordering::Release);
@@ -663,14 +663,8 @@ pub(crate) fn ram_write_raw(ctx: &WalkCtx, pa: u64, val: u64, size: u8) {
 		4 => {
 			unsafe {
 				*ptr.add(off) = val as u8;
-			}
-			unsafe {
 				*ptr.add(off + 1) = (val >> 8) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 2) = (val >> 16) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 3) = (val >> 24) as u8;
 			}
 			atomic::fence(Ordering::Release);
@@ -682,26 +676,12 @@ pub(crate) fn ram_write_raw(ctx: &WalkCtx, pa: u64, val: u64, size: u8) {
 		8 => {
 			unsafe {
 				*ptr.add(off) = val as u8;
-			}
-			unsafe {
 				*ptr.add(off + 1) = (val >> 8) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 2) = (val >> 16) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 3) = (val >> 24) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 4) = (val >> 32) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 5) = (val >> 40) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 6) = (val >> 48) as u8;
-			}
-			unsafe {
 				*ptr.add(off + 7) = (val >> 56) as u8;
 			}
 			atomic::fence(Ordering::Release);
@@ -756,14 +736,11 @@ pub(crate) fn handle_system_concurrent(
 			return priv_ecall_concurrent(state, instr, clint, module, dev);
 		}
 		1 => {
-			// 内联服务关闭: 与 Python 引擎的 trap_ebreak 一致, 投递断点异常
 			if !CFG_HAS_SEMIHOSTING {
 				let ebreak_pc = state.pc;
 				deliver_trap(state, mcause_val(exc_code::BREAKPOINT, false), ebreak_pc);
 				return 0;
 			}
-			// EBREAK: semihosting 或普通断点.
-			// SYS_EXIT: 停机序列, 一个 hart 执行即可停止整个引擎, 状态保留在 hart 状态数组
 			if state.gprs[10] == crate::handlers::SH_SYS_EXIT
 				&& crate::handlers::semihosting_match(ctx, state.pc)
 			{
@@ -790,7 +767,12 @@ pub(crate) fn handle_system_concurrent(
 			return priv_wfi_concurrent(state, instr);
 		}
 		f_val if (f_val >> 5) == 0x09 => {
-			// SFENCE.VMA: 刷新本 hart 的指令 TLB 与数据 TLB, 并使其余 hart 的条目作废.
+			// SFENCE.VMA: S 模式在 mstatus.TVM=1 时触发 IllInstr
+			if state.mode == riscv_mode::S && ((state.mstatus >> 20) & 1) != 0 {
+				deliver_illegal_instruction(state, instr as u64);
+				return 0;
+			}
+			// 刷新本 hart 的指令 TLB 与数据 TLB, 并使其余 hart 的条目作废.
 			//
 			// RISC-V 的 SFENCE.VMA 只刷新执行该指令的 hart 的 TLB, 刷新其余 hart 的
 			// 条目本需发送核间中断. 此处改为递增刷新计数; 其余 hart 在取下一条指令前
@@ -800,10 +782,9 @@ pub(crate) fn handle_system_concurrent(
 			tlb_flush_all(&mut state.dtlb);
 			let new_cnt = module
 				.tlb_flush_cnt
-				.fetch_add(1, std::sync::atomic::Ordering::Release)
+				.fetch_add(1, Ordering::Release)
 				.wrapping_add(1);
-			module.tlb_flush_cnt_per_hart[hart_id as usize]
-				.store(new_cnt, std::sync::atomic::Ordering::Relaxed);
+			module.tlb_flush_cnt_per_hart[hart_id as usize].store(new_cnt, Ordering::Relaxed);
 			return 4;
 		}
 		0x5a0 => {
@@ -991,7 +972,9 @@ fn fetch_instr_word(
 	let fetch_pa2 = match translate_fetch_pc_concurrent(state, ctx, pc_before.wrapping_add(2), pmp)
 	{
 		Some(pa) => pa,
-		None => return FetchWord::Fault,
+		None => {
+			return FetchWord::Fault;
+		}
 	};
 	// 第二页同样做 PMP 判定.
 	if !pmp_ok(state, fetch_pa2, 4, false, true, pmp) {
@@ -1030,9 +1013,7 @@ fn fetch_instr_word(
 	FetchWord::Word(lo | (hi << 16))
 }
 
-// ============================================================
 //  hart_worker 辅助函数
-// ============================================================
 
 enum Step {
 	/// 进入下一个流水线阶段.
@@ -1096,7 +1077,7 @@ fn mark_tlb_dirty_if_stale(state: &mut HartState, module: &ModuleState, hart_id:
 	module.tlb_flush_cnt_per_hart[hart_id as usize].store(flush_cnt, Ordering::Relaxed);
 }
 
-/// 处理 WFI 等待与唤醒, 返回 (Step, just_woke).
+/// 处理 WFI 等待与唤醒.
 fn handle_wfi_state(
 	state: &mut HartState,
 	hart_id: u8,
@@ -1106,9 +1087,9 @@ fn handle_wfi_state(
 	stop_flag: *const u8,
 	uart: &FfiUartCtx,
 	ext_irq: *mut FfiExtIrqCtx,
-) -> (Step, bool) {
+) -> Step {
 	if state.waiting == 0 {
-		return (Step::Next, false);
+		return Step::Next;
 	}
 	// Python 侧有待处理的工作, 如 virtio 的 QueueNotify，则退出本轮,
 	if dev.has_pending_python_work() {
@@ -1118,7 +1099,7 @@ fn handle_wfi_state(
 			pc: state.pc,
 			..StopInfo::empty()
 		});
-		return (Step::Exit, false);
+		return Step::Exit;
 	}
 	if !wfi_spin(
 		state,
@@ -1132,9 +1113,9 @@ fn handle_wfi_state(
 		// 退出 WFI: 等待期间可能有其余 hart 执行了 SFENCE.VMA,
 		// 故按刷新计数标记陈旧条目.
 		mark_tlb_dirty_if_stale(state, module, hart_id);
-		return (Step::Exit, false);
+		return Step::Exit;
 	}
-	(Step::Next, true)
+	Step::Next
 }
 
 /// 同步硬件中断线路, 并投递优先级最高的挂起中断.
@@ -1143,34 +1124,15 @@ fn step_interrupts(
 	state: &mut HartState,
 	_hart_id: u8,
 	clint: &ConcurrentClintCtx,
-	just_woke_from_wfi: bool,
 	plic: *mut FfiPlicCtx,
 ) -> bool {
 	sync_mtip(state, clint);
-	// 刚从 WFI 唤醒时, wfi_sync_and_check 已调用 sync_msip 并清除 CLINT 电平位.
-	// 此处再次调用 sync_msip 会读到电平 0 并清除 mip.MSIP, check_and_deliver
-	// 因而收不到第一次 MSIP, 引发 TLB 失效死锁. 故先保存该位, 同步后写回;
-	// 其余情形直接同步, 以便接收重发的 MSIP, 例如 tlb_sync 自旋期间的重发.
-	if just_woke_from_wfi {
-		// 保留 wfi_sync_and_check 经 msip_pending 置位的 MSIP.
-		let msip_saved = state.mip.load(Ordering::Acquire) & (1 << 3);
-		sync_msip(state, clint);
-		if msip_saved != 0 {
-			state.mip.fetch_or(1 << 3, Ordering::AcqRel); // 恢复该位, 不让 sync_msip 清除
-		}
-	} else {
-		sync_msip(state, clint);
-	}
+	sync_msip(state, clint);
 
 	// IMSIC 同步不在每指令执行路径上进行: 加速执行开始时, Python 侧
 	// _native_sync_plic_mip 与 marshal_imsic 已写入正确的 mip 位. 执行期间 IMSIC
 	// 状态只经 CSR 写入改变, 如 stopei 与 mtopei 的 claim、mireg 与 sireg, 这些
 	// 路径经 sync_imsic_one() 就地更新 mip; 跨 hart 的 IPI 也直接置位目标 hart 的 mip.
-	let msip_was_pending = (state.mip.load(Ordering::Acquire) & (1 << 3)) != 0;
-	if msip_was_pending && (state.mie & (1 << 3)) == 0 {
-		state.mie |= 1 << 3;
-	}
-
 	// 清理陈旧的 MEIP 与 SEIP: sync_imsic 不在每条指令的执行路径上执行, 两位的取值
 	// 可能落后于 IMSIC eip; 不清理会投递虚假 SEI, 内核读 stopi 得 0 后转入 STIP,
 	// 形成 SEI 与 STIP 反复投递的空转. 清除只在 imsic_topei_peek 返回 0 时进行,
@@ -1310,9 +1272,7 @@ fn step_fetch_instr(
 	Ok((pc_before, instr_word))
 }
 
-// ============================================================
 //  每 hart 的工作线程主循环
-// ============================================================
 
 /// IMSIC 是否独占本 hart 的外部中断线路, 任一中断文件的 eidelivery 非 0 即为独占.
 ///
@@ -1394,7 +1354,7 @@ pub(crate) fn hart_worker(
 		}
 
 		// ---- WFI 等待与唤醒 ----
-		let (wfi_step, just_woke_from_wfi) =
+		let wfi_step =
 			handle_wfi_state(state, hart_id, clint, dev, module, stop_flag, uart, ext_irq);
 		match wfi_step {
 			Step::Exit => {
@@ -1407,7 +1367,7 @@ pub(crate) fn hart_worker(
 		}
 
 		// ---- 中断 ----
-		if step_interrupts(state, hart_id, clint, just_woke_from_wfi, dev.plic) {
+		if step_interrupts(state, hart_id, clint, dev.plic) {
 			continue;
 		}
 
@@ -1480,9 +1440,7 @@ pub(crate) fn hart_worker(
 	}
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -1677,9 +1635,83 @@ mod tests {
 		);
 	}
 
-	// ============================================================
+	/// 跨页写入的第二页缺页时, 本次存储不得修改第一页的任何字节.
+	///
+	/// 映射虚拟地址 0x1000 到物理地址 0x1000, 虚拟地址 0x2000 的页表项置为无效。
+	/// 虚拟地址 0x1FFC 处的 8 字节写入的前 4 个字节属于第一页, 后 4 个字节触发
+	/// StPageFault, mtval 为第二段的虚拟地址 0x2000。
+	#[test]
+	fn cross_page_write_second_page_fault_writes_nothing() {
+		const RAM_SIZE: usize = 0x8000;
+		let mut ram = vec![0u8; RAM_SIZE];
+
+		let satp = setup_two_pages(
+			&mut ram,
+			0x1000,
+			0x1000,
+			0x2000,
+			0x3000,
+			crate::translate::PTE_R | crate::translate::PTE_W | crate::translate::PTE_U,
+		);
+		// 把虚拟地址 0x2000 的末级页表项置为无效.
+		let vpn_b = crate::mmu::sv39_decompose_va(0x2000);
+		let l0_off_b = 0x7000usize + ((vpn_b.vpn0 * 8) as usize);
+		ram[l0_off_b..l0_off_b + 8].copy_from_slice(&0u64.to_le_bytes());
+
+		// 第一页末尾的 4 个字节预先写入 0xAA.
+		for i in 0x1ffc..0x2000 {
+			ram[i] = 0xaa;
+		}
+
+		let mut state: HartState = unsafe { std::mem::zeroed() };
+		state.mode = riscv_mode::U;
+		state.mmu_mode = 8;
+		state.satp = satp;
+		for e in state.dtlb.iter_mut() {
+			*e = TlbEntry::empty();
+		}
+
+		let ctx = WalkCtx {
+			ram: ram.as_mut_ptr(),
+			ram_size: RAM_SIZE as u64,
+			ram_base: 0,
+			shadow_base: 0,
+			shadow_size: 0,
+			tlb_flush_cnt: std::ptr::null(),
+			lr_reserved: std::ptr::null_mut(),
+			num_harts: 1,
+		};
+		let mut _pmp_cfg = vec![0u8; 64];
+		let mut _pmp_addr = vec![0u64; 64];
+		let pmp = make_permissive_pmp(&mut _pmp_cfg, &mut _pmp_addr);
+
+		let ok = write_ram_cross_page(
+			&mut state,
+			&ctx,
+			0x1ffc,
+			0x1ffc,
+			0xcccc_cccc_dddd_dddd,
+			8,
+			&pmp,
+		);
+		assert!(!ok, "second page fault must fail the store");
+		assert_eq!(
+			state.mcause,
+			mcause_val(exc_code::ST_PAGE_FAULT, false),
+			"expected StPageFault"
+		);
+		assert_eq!(
+			state.mtval, 0x2000,
+			"mtval must be the second chunk address"
+		);
+		assert_eq!(
+			&ram[0x1ffc..0x2000],
+			&[0xaa, 0xaa, 0xaa, 0xaa],
+			"first page must not be partially written"
+		);
+	}
+
 	//  rd 与 rs1 相同的用例
-	// ============================================================
 
 	/// rd 与 rs1 相同的加载指令必须先读取基址寄存器, 再写入载入值.
 	/// ``lhu a5, 0x336(a5)`` 在 a5 为 7 时曾于虚拟地址 0x33D 处失败, 原因是
@@ -1901,7 +1933,9 @@ mod tests {
 	fn csrrw_rd_equals_rs1_swaps_correctly() {
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		state.mode = riscv_mode::M;
-		state.gprs[15] = 0xdeadbeef; // a5 为写入 CSR 的值
+		// a5 为写入 CSR 的值. stvec 的 MODE 取 2 及以上为保留编码, 写入被忽略,
+		// 故取 MODE 为 0 的合法值
+		state.gprs[15] = 0xdeadbee0;
 		state.stvec = 0x80001000; // stvec 的旧值
 
 		let mut result = unsafe { std::mem::zeroed() };
@@ -1925,14 +1959,14 @@ mod tests {
 		// CSRRW a5, stvec, a5: funct3 为 001, rd 为 15, rs1 为 15, csr 为 0x105
 		let adv = crate::csr::handle_csr(&mut csr_ctx, 15, 15, 0x105, 1, 0, &mut result);
 		assert_eq!(adv, 4);
-		// a5 此时应为 stvec 的旧值 0x80001000, 而不是 0xDEADBEEF
+		// a5 此时应为 stvec 的旧值 0x80001000, 而不是写入值
 		assert_eq!(
 			csr_ctx.state.gprs[15], 0x80001000,
 			"CSRRW rd==rs1: a5 must swap to old CSR value"
 		);
-		// stvec 此时应为 a5 的旧值 0xDEADBEEF
+		// stvec 此时应为 a5 的旧值 0xDEADBEE0
 		assert_eq!(
-			csr_ctx.state.stvec, 0xdeadbeef,
+			csr_ctx.state.stvec, 0xdeadbee0,
 			"CSRRW rd==rs1: CSR must get old a5 value"
 		);
 	}
@@ -2019,14 +2053,15 @@ mod tests {
 			"a0 必须读到 CLINT 实时 mtime"
 		);
 
-		// timeh 即 0xC81: csrrs a1, timeh, x0 读取高 32 位
+		// timeh 即 0xC81: 仅 RV32 存在, RV64 上读取触发 IllInstr
 		result.exit_reason = 0;
 		let adv = crate::csr::handle_csr(&mut csr_ctx, 11, 0, 0xc81, 2, 0xc810_25f3, &mut result);
-		assert_eq!(adv, 4, "rdtimeh 必须一轮加速中完成");
-		assert_eq!(result.exit_reason, 0, "rdtimeh 不得设置退出原因");
+		assert_eq!(adv, 0, "rdtimeh 在 RV64 上须触发 IllInstr");
+		assert_eq!(result.exit_reason, 0, "IllInstr 不应退出加速执行");
 		assert_eq!(
-			csr_ctx.state.gprs[11], 0x1234_5678,
-			"a1 必须读到 mtime 高 32 位"
+			csr_ctx.state.mcause,
+			exc_code::ILL_INSTR as u64,
+			"rdtimeh 的陷态原因必须为 IllInstr"
 		);
 
 		// cycle 即 0xC00: csrrs a2, cycle, x0 同样只读, 写回值被忽略
@@ -2244,7 +2279,7 @@ mod tests {
 		state.mie = 0; // 中断使能位全为 0, 含 MEIE
 		state.mip.store(1 << 11, Ordering::Release); // 瞬时 MEIP
 
-		step_interrupts(&mut state, 0, &clint, false, std::ptr::null_mut());
+		step_interrupts(&mut state, 0, &clint, std::ptr::null_mut());
 
 		assert_eq!(
 			state.mie & (1 << 11),
@@ -2275,7 +2310,7 @@ mod tests {
 		// 否则 eidelivery 为 0 且无 IPI 时会清除 MEIP, 后续断言失去意义.
 		state.imsic_m.eip[0].store(1 << crate::interrupt::imsic::IID_M_IPI, Ordering::Release);
 
-		step_interrupts(&mut state, 0, &clint, false, std::ptr::null_mut());
+		step_interrupts(&mut state, 0, &clint, std::ptr::null_mut());
 
 		assert_eq!(
 			state.mie & (1 << 11),
@@ -2312,7 +2347,7 @@ mod tests {
 		let clint = clint_ctx_empty();
 		let mut state = aia_state_with_seip_asserted(7);
 
-		step_interrupts(&mut state, 0, &clint, false, std::ptr::null_mut());
+		step_interrupts(&mut state, 0, &clint, std::ptr::null_mut());
 
 		assert_eq!(
 			state.mie & (1 << 9),
@@ -2329,7 +2364,7 @@ mod tests {
 		let clint = clint_ctx_empty();
 		let mut state = aia_state_with_seip_asserted(HOST_MDID);
 
-		step_interrupts(&mut state, 0, &clint, false, std::ptr::null_mut());
+		step_interrupts(&mut state, 0, &clint, std::ptr::null_mut());
 
 		assert_eq!(
 			state.mie & (1 << 9),

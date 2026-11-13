@@ -8,11 +8,9 @@
 所有函数均为模块级, 不依赖 Debugger 实例.
 """
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 import unicodedata
 
-from pyremu.configs_aux import cfg_str
 from pyremu.core import trap_def
 from pyremu.core.hart import RiscvMode
 from pyremu.debug.exception import UsageError
@@ -22,10 +20,6 @@ from pyremu.utils.mask import mask64
 if TYPE_CHECKING:
     from pyremu.core.hart import HartWithRegs
     from pyremu.memory.bus import Bus
-
-# ============================================================
-#  格式化
-# ============================================================
 
 MAX_INSTR_COUNT = 100_000  # 指令条数上限
 _TRI_SPLIT = ["", "K", "M", "B", "T", "P", "E"]
@@ -39,10 +33,6 @@ SIZE_UNITS: tuple[tuple[str, int], ...] = (
     ("KB", 1 << 10),
     ("B", 1),
 )
-
-# ============================================================
-#  异常/中断名称表
-# ============================================================
 
 EXC_NAMES: dict[int, str] = {
     0: "InstrAddrMisaligned",
@@ -70,10 +60,6 @@ IRQ_NAMES: dict[int, str] = {
     11: "MEIP (M 模式外部中断)",
 }
 
-# ============================================================
-#  断点常量
-# ============================================================
-
 INSTR_BP_NAMES: dict[str, int] = {
     "ecall": 0x000,
     "ebreak": 0x001,
@@ -83,14 +69,8 @@ INSTR_BP_NAMES: dict[str, int] = {
 }
 
 KNOWN_OPCODES: frozenset[int] = frozenset(o.value for o in Opc)
-# ============================================================
-#  历史文件
-# ============================================================
 MAX_ADDR = (1 << 64) - 1
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
-
-# 未配置路径时使用的文件名, 位于用户主目录下.
-HISTORY_FILE_NAME = ".pyremu_history"
 
 
 def hex_addr(v: int, styled: bool = True) -> str:
@@ -161,7 +141,9 @@ def fmt_display_name(text: str) -> str:
     使含空白的文件名在 ``sym load`` 中仍可作为单个参数给出.
     """
     escaped = "".join(
-        _escape_nonprintable(ch) if unicodedata.category(ch).startswith("C") else ch
+        _escape_nonprintable(ch)
+        if unicodedata.category(ch).startswith("C")
+        else ch
         for ch in text
     )
     if escaped == text and not any(ch.isspace() for ch in text):
@@ -187,9 +169,7 @@ def trap_cause_name(mcause_val: int) -> str:
     return trap_def.trap_cause_name(mcause_val)
 
 
-# ============================================================
 #  虚拟地址读取
-# ============================================================
 
 
 def read_pa_bytes(
@@ -200,7 +180,8 @@ def read_pa_bytes(
     """从物理地址读取内存, 只读取主存与已注册设备的地址范围.
 
     Returns:
-        读到的字节; 地址不是整数, 超出 64 位范围或落在未定义的物理空间时返回 None.
+        读到的字节; 地址不是整数, 超出 64 位范围或落在未定义的物理空间时
+        返回 None.
     """
     if not isinstance(pa, int) or pa < 0 or pa > MAX_ADDR:
         return None
@@ -244,9 +225,7 @@ def read_va_bytes(
     return bytes(result)
 
 
-# ============================================================
 #  校验
-# ============================================================
 
 
 def check_rv64_addr(v: int) -> bool:
@@ -254,9 +233,7 @@ def check_rv64_addr(v: int) -> bool:
     return 0 <= v < (1 << 64)
 
 
-# ============================================================
 #  中断/IP 位描述
-# ============================================================
 
 
 def ip_bits() -> list[tuple[str, int, str]]:
@@ -272,33 +249,6 @@ def ip_bits() -> list[tuple[str, int, str]]:
         ("SEIP", 9, "S 模式外部中断挂起"),
         ("MEIP", 11, "M 模式外部中断挂起"),
     ]
-
-
-def history_file_path() -> Path:
-    """命令历史文件的路径.
-
-    取环境变量 PYREMU_HISTORY_FILE 或 configs_gen 中的同名配置; 两者都没有时取用户
-    主目录下的 HISTORY_FILE_NAME.
-    """
-    configured = cfg_str("PYREMU_HISTORY_FILE")
-    if len(configured) > 0:
-        return Path(configured).expanduser()
-    return Path.home() / HISTORY_FILE_NAME
-
-
-def trim_history(max_entries: int = 10000) -> None:
-    """若历史文件超过 *max_entries* 行, 仅保留最近一半."""
-    hist_path = history_file_path()
-    if not hist_path.is_file():
-        return
-    try:
-        lines = hist_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if len(lines) <= max_entries:
-            return
-        keep = max_entries // 2
-        hist_path.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
-    except OSError:
-        pass  # 文件被锁或权限不足时静默跳过
 
 
 def group_order(key: str) -> tuple[int, str]:

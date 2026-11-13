@@ -11,9 +11,7 @@ use crate::prim::arith;
 use super::types::{Rlimit, Rusage, Sysinfo, Timespec, Timeval, Tms, Utsname};
 use super::{EINVAL, ENOSYS};
 
-// ---------------------------------------------------------------
 //  辅助函数
-// ---------------------------------------------------------------
 
 fn read_time() -> u64 {
 	let t: u64;
@@ -28,9 +26,7 @@ unsafe fn fill_uts_field(src: &[u8], dst: &mut [u8; 65]) {
 	dst[n] = 0;
 }
 
-// ---------------------------------------------------------------
 //  uname handler (160)
-// ---------------------------------------------------------------
 
 pub fn uname_handler(buf: *mut Utsname) -> u64 {
 	if buf.is_null() {
@@ -50,9 +46,7 @@ pub fn uname_handler(buf: *mut Utsname) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  gettimeofday handler (169)
-// ---------------------------------------------------------------
 
 pub fn gettimeofday_handler(tv: *mut Timeval) -> u64 {
 	if tv.is_null() {
@@ -67,9 +61,7 @@ pub fn gettimeofday_handler(tv: *mut Timeval) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  clock_gettime handler (113)
-// ---------------------------------------------------------------
 
 pub fn clock_gettime_handler(clock_id: u64, tp: *mut Timespec) -> u64 {
 	if tp.is_null() {
@@ -88,9 +80,7 @@ pub fn clock_gettime_handler(clock_id: u64, tp: *mut Timespec) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  sysinfo handler (179)
-// ---------------------------------------------------------------
 
 pub fn sysinfo_handler(info: *mut Sysinfo) -> u64 {
 	if info.is_null() {
@@ -114,9 +104,7 @@ pub fn sysinfo_handler(info: *mut Sysinfo) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  getrusage handler (165)
-// ---------------------------------------------------------------
 
 pub fn getrusage_handler(usage: *mut Rusage) -> u64 {
 	if !usage.is_null() {
@@ -125,9 +113,7 @@ pub fn getrusage_handler(usage: *mut Rusage) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  getcpu handler (168)
-// ---------------------------------------------------------------
 
 pub fn getcpu_handler(cpu: *mut u32, node: *mut u32) -> u64 {
 	if !cpu.is_null() {
@@ -139,9 +125,7 @@ pub fn getcpu_handler(cpu: *mut u32, node: *mut u32) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  times handler (153)
-// ---------------------------------------------------------------
 
 pub fn times_handler(buf: *mut Tms) -> u64 {
 	if buf.is_null() {
@@ -151,9 +135,7 @@ pub fn times_handler(buf: *mut Tms) -> u64 {
 	0
 }
 
-// ---------------------------------------------------------------
 //  prlimit64 handler (261)
-// ---------------------------------------------------------------
 
 const RLIM_INFINITY: u64 = 0xFFFF_FFFF;
 const RLIMIT_NOFILE: u64 = 7;

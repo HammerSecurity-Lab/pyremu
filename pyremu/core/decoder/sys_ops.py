@@ -8,6 +8,8 @@ funct3 为 0 时按 funct12 分发 ECALL / EBREAK / MRET / SRET / SFENCE.VMA 等
 """
 
 from pyremu.core.hart import HartGroup
+from pyremu.core.priv_defs import MSTATUS_TVM, RiscvMode
+from pyremu.core.trap_def import TrapType
 
 
 class SysInstrOps:
@@ -17,8 +19,8 @@ class SysInstrOps:
         """SFENCE.VMA 的刷新, 广播到全部 hart.
 
         本 hart 也参与刷新; vpn 为 None 时刷新全部条目, 否则为 VA>>12 的页号;
-        all_harts 为全部 hart 的弱引用视图, 由调用方传入以避免每 hart 持有重复引用.
-        本次刷新另计入 TLB 刷新计数, 使加速执行引擎内既有的条目作废.
+        all_harts 为全部 hart 的弱引用视图, 由调用方传入以避免每 hart 持有重复
+        引用. 本次刷新另计入 TLB 刷新计数, 使加速执行引擎内既有的条目作废.
         """
         self.note_tlb_flush()
         if vpn is None:
@@ -62,8 +64,11 @@ class SysInstrOps:
         """SFENCE.VMA: rs1=x0 时刷新全部 TLB, 否则仅刷新该虚地址对应的条目.
 
         刷新同步到全部 hart. RISC-V 只要求刷新本 hart, 扩大范围不影响正确性,
-        且省去核间中断.
+        且省去核间中断. S 模式在 mstatus.TVM=1 时触发 IllInstr.
         """
+        if self.mode == RiscvMode.S and self.mstatus_val & MSTATUS_TVM:
+            self.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
+            return
         rs1 = self._f.rs1
         vpn = None if rs1 == 0 else self.gprs[rs1] >> 12
         self._flush_tlbs(vpn, self._all_harts)
@@ -104,7 +109,11 @@ class SysInstrOps:
         getattr(self, op)(instr)
 
     def _sys_csr(self, f, spec: tuple) -> None:
-        """执行 CSR 指令; spec 给出新值算法与写入条件."""
+        """执行 CSR 指令; spec 给出新值算法与写入条件.
+
+        CSRRS 与 CSRRC 只改写源操作数中置位的位, 故把源操作数作为写入掩码交给
+        write_csr; CSRRW 改写全部位, 掩码取 None.
+        """
         calc, is_conditional = spec
         csr_addr = f.func12
         is_imm = (f.func3 & 0b100) != 0
@@ -115,7 +124,8 @@ class SysInstrOps:
         if f.rd != 0:
             self.gprs[f.rd] = old
         if is_write:
-            self.write_csr(csr_addr, calc(old, src))
+            write_mask = src if is_conditional else None
+            self.write_csr(csr_addr, calc(old, src), write_mask=write_mask)
 
     def exec_sys(self, f, instr: int) -> int:
         """执行系统指令 (特权指令或 CSR 访问).

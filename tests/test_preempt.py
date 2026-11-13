@@ -19,7 +19,10 @@ def _make_kernel_emu(*procs: str):
 
     kernel = parse_firmware(str(examed_elf_dir("kernel.elf")))
     assert kernel is not None, "KERNEL_ELF 解析失败"
-    emu = make_test_emu(num_harts=configs_gen.NUM_HARTS, ram_size=configs_gen.RAM_SIZE)
+    emu = make_test_emu(
+        num_harts=configs_gen.NUM_HARTS,
+        ram_size=configs_gen.RAM_SIZE,
+    )
     emu.load_firmware(kernel)
     # 内核在全部进程终止后执行停机序列, 随后转入 stop_machine_idle 的 WFI 自旋.
     # 内联服务打开时引擎在停机序列处停止; 关闭时该序列按普通断点投递后进入自旋.
@@ -38,7 +41,9 @@ class TestPreemptInterleave:
         _, loader = _make_kernel_emu("u_prog_a_entry", "u_prog_b_entry")
         out = loader.run()
         seq = "".join(c for c in out if c in "AB")
-        transitions = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
+        transitions = sum(
+            1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1]
+        )
         assert transitions > 1, f"未交错, transitions={transitions}"
 
     def test_both_produce_output(self):
@@ -51,20 +56,27 @@ class TestPreemptInterleave:
 class TestPreemptPurePython:
     """回归: 关闭 native 加速后, 纯 Python 路径下抢占交错仍成立.
 
-    ``_make_kernel_emu`` 构造 Emulator 时调用 ``_init_for_speedup_lib``, 后者调用公开的
-    ``native_available()`` 判断加速执行是否可用, 该函数在装配阶段读取全局标志.
-    patch ``native_available()`` 返回 False, 使 ``_speedup_hart_states`` 保持
-    None, 故 ``run()`` 走纯 Python ``step()`` 路径 — 无需触及私有库加载状态.
+    ``_make_kernel_emu`` 构造 Emulator 时调用 ``_init_for_speedup_lib``,
+    后者调用公开的 ``native_available()`` 判断加速执行是否可用, 该函数在装配
+    阶段读取全局标志. patch ``native_available()`` 返回 False, 使
+    ``_speedup_hart_states`` 保持 None, 故 ``run()`` 走纯 Python ``step()``
+    路径 — 无需触及私有库加载状态.
     """
 
     def test_interleaved_pure_python(self):
-        with mock.patch("pyremu.emu.setup.native_available", return_value=False):
+        with mock.patch(
+            "pyremu.emu.setup.native_available", return_value=False
+        ):
             emu, loader = _make_kernel_emu("u_prog_a_entry", "u_prog_b_entry")
             assert emu._speedup_hart_states is None, "应走纯 Python 路径"
             out = loader.run()
         seq = "".join(c for c in out if c in "AB")
-        transitions = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
-        assert transitions > 1, f"纯 Python 路径未交错, transitions={transitions}"
+        transitions = sum(
+            1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1]
+        )
+        assert transitions > 1, (
+            f"纯 Python 路径未交错, transitions={transitions}"
+        )
 
 
 class TestPreemptCorrectness:

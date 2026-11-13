@@ -69,11 +69,17 @@ class LexerOps:
                     num_s = match.group(1)
                     tok_val = int(
                         num_s,
-                        16 if num_s.startswith(("0x", "0X")) else 8 if num_s[0] == "0" else 10,
+                        16
+                        if num_s.startswith(("0x", "0X"))
+                        else 8
+                        if num_s[0] == "0"
+                        else 10,
                     )
 
             elif self._lexer_state is LEXER_EXPECT_PROPNODENAME:
-                match = propnodename_re.match(self._file_contents, self._tok_end_i)
+                match = propnodename_re.match(
+                    self._file_contents, self._tok_end_i
+                )
                 if match:
                     tok_id = TokenId.PROPNODENAME
                     tok_val = match.group(1)
@@ -166,15 +172,25 @@ class LexerOps:
 
     def _parse_error(self, s):
         # 'rfind()' returns -1 for the first line of the file too
-        column = self._tok_i - self._file_contents.rfind("\n", 0, self._tok_i + 1)
-        err(f"{self.filename}:{self._lineno} (column {column}): parse error: {s}")
+        column = self._tok_i - self._file_contents.rfind(
+            "\n", 0, self._tok_i + 1
+        )
+        err(
+            f"{self.filename}:{self._lineno} (column {column}): "
+            f"parse error: {s}"
+        )
 
     def _enter_file(self, filename):
         # Enters the /include/d file 'filename', remembering the position in
         # the /include/ing file for later
 
         self._filestack.append(
-            FileStackElt(self.filename, self._lineno, self._file_contents, self._tok_end_i)
+            FileStackElt(
+                self.filename,
+                self._lineno,
+                self._file_contents,
+                self._tok_end_i,
+            )
         )
 
         # Handle escapes in filenames, just for completeness
@@ -196,7 +212,10 @@ class LexerOps:
                 self._parse_error(
                     "recursive /include/:\n"
                     + " ->\n".join(
-                        [f"{parent[0]}:{parent[1]}" for parent in self._filestack[i:]]
+                        [
+                            f"{parent[0]}:{parent[1]}"
+                            for parent in self._filestack[i:]
+                        ]
                         + [filename]
                     )
                 )
@@ -217,9 +236,9 @@ class LexerOps:
     #
 
     def _unescape(self, b):
-        # Replaces backslash escapes in the 'bytes' array 'b'. We can't do this at
-        # the string level, because the result might not be valid UTF-8 when
-        # octal/hex escapes are involved.
+        # Replaces backslash escapes in the 'bytes' array 'b'.
+        # We can't do this at the string level, because the result might
+        # not be valid UTF-8 when octal/hex escapes are involved.
 
         def sub(match):  # noqa: PLR0911
             esc = match.group(1)

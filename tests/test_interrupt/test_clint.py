@@ -38,7 +38,9 @@ class TestCLINTRegisters:
 
     def test_write_msip_triggers_ipi(self):
         """写 MSIP 应设置软件中断挂起."""
-        self.clint.write(MSIP_OFFSET + 4, b"\x01\x00\x00\x00")  # hart 1 msip = 1
+        self.clint.write(
+            MSIP_OFFSET + 4, b"\x01\x00\x00\x00"
+        )  # hart 1 msip = 1
         has_pending, mip, src = self.clint.check_interrupt(1)
         assert has_pending
         assert mip & INT_SOURCE_MIP_MASK[IntSource.MSI]
@@ -247,10 +249,14 @@ class TestCLINTMmioPath:
         h.exec_instr(self.SW_INSTR)
 
         # 验证 CLINT _msip 已置位
-        assert clint._msip[0] == 1, f"MMIO store 应置位 _msip[0], 实际={clint._msip[0]}"
+        assert clint._msip[0] == 1, (
+            f"MMIO store 应置位 _msip[0], 实际={clint._msip[0]}"
+        )
         has_pending, mip, src = clint.check_interrupt(0)
         assert has_pending, "check_interrupt 应返回 pending"
-        assert src is not None and src.name == "MSI", f"中断源应为 MSI, 实际={src}"
+        assert src is not None and src.name == "MSI", (
+            f"中断源应为 MSI, 实际={src}"
+        )
 
     def test_store_zero_to_msip_clears_hardware_bit(self):
         """Store 指令写 0 到 CLINT MSIP 使 _msip[hart_id] 清零."""
@@ -268,7 +274,9 @@ class TestCLINTMmioPath:
         bus.write(0x80000000, self.SW_INSTR.to_bytes(4, "little"))
         h.exec_instr(self.SW_INSTR)
 
-        assert clint._msip[0] == 0, f"MMIO store 写 0 应清零 _msip[0], 实际={clint._msip[0]}"
+        assert clint._msip[0] == 0, (
+            f"MMIO store 写 0 应清零 _msip[0], 实际={clint._msip[0]}"
+        )
         has_pending, _, _ = clint.check_interrupt(0)
         assert not has_pending, "check_interrupt 应返回 no pending"
 
@@ -325,5 +333,7 @@ class TestCLINTMmioPath:
         # Step 4: 重新同步 mip CSR 后 MSIP 必须为 0
         has_pending, mip_bits, _ = clint.check_interrupt(0)
         h.update_hw_mip(mip_bits)
-        assert not (h.mip_val & (1 << 3)), f"清零后 mip.MSIP 必须为 0, 实际 mip={h.mip_val:#x}"
+        assert not (h.mip_val & (1 << 3)), (
+            f"清零后 mip.MSIP 必须为 0, 实际 mip={h.mip_val:#x}"
+        )
         assert not has_pending, "check_interrupt 应返回 no pending"

@@ -81,12 +81,18 @@ def _install_tables(
     hart.satp_val = (SATP_MODE_SV39 << 60) | (root_pa >> 12)
 
 
-def _identity_leaves(page_count: int, flags: int = RWX) -> dict[int, tuple[int, int]]:
+def _identity_leaves(
+    page_count: int, flags: int = RWX
+) -> dict[int, tuple[int, int]]:
     """从 DATA_VA 起 identity 映射 *page_count* 个 4 KiB 页."""
-    return {DATA_VPN0 + i: (DATA_VA + i * 0x1000, flags) for i in range(page_count)}
+    return {
+        DATA_VPN0 + i: (DATA_VA + i * 0x1000, flags) for i in range(page_count)
+    }
 
 
-def _make_hart(bus: Bus, mode: RiscvMode = RiscvMode.S, pmpcfg: int = PMP_ALLOW_ALL):
+def _make_hart(
+    bus: Bus, mode: RiscvMode = RiscvMode.S, pmpcfg: int = PMP_ALLOW_ALL
+):
     hart = HartWithRegs(id=0)
     hart.mem_read_phy = bus.read
     hart.mem_write_phy = bus.write
@@ -115,11 +121,13 @@ def hart(bus: Bus) -> HartWithRegs:
 
 
 class TestCounterEnable:
-    def test_high_half_counter_uses_low_half_bit(self, hart):
-        """0xC80-0xC9F 的高半计数器与低半共用 counteren 的同一位."""
+    def test_counter_high_half_illegal_on_rv64(self, hart):
+        """0xC80-0xC9F 的高半计数器在 RV64 上不存在, 访问触发 IllInstr."""
         hart.mode = RiscvMode.S
         hart.csrs["mcounteren"].val = 1
-        hart.validate_csr(0xC80)
+        with pytest.raises(CsrAccessError):
+            hart.validate_csr(0xC80)
+        hart.validate_csr(0xC00)
 
     def test_mmode_counter_read_ignores_counteren(self, hart):
         """M 模式读取计数器不受 mcounteren 约束."""
@@ -237,6 +245,48 @@ class TestPageWalkDenied:
         assert not ok and pa == 0
         assert hart.mcause_val == 1
         assert hart.mtval_val == DATA_VA
+
+    def test_accessed_write_denied_reports_load_access_fault(self, bus):
+        """页表读取获准而 A 位置位写入被拒绝时, 按原访问类型投递访问故障.
+
+        只读 PMP 条目放行页表页的读取, 拒绝遍历期间对页表页的写入; 根页表项
+        尚未置位 A 位, 置位动作被拒绝后读取访问按 LdAccessFault 终止.
+        """
+        hart = _make_hart(bus, pmpcfg=PMP_READ_ONLY)
+        _install_tables(hart, _identity_leaves(1))
+        with pytest.raises(AccessFaultError):
+            hart.mem_read(DATA_VA, 8)
+        assert hart.mcause_val == 5
+        assert hart.mtval_val == DATA_VA
+
+
+class TestAccessedDirtyBits:
+    """hart 级访存后页表项的 A 位与 D 位."""
+
+    def test_load_sets_accessed_on_pointer_levels(self, bus, hart):
+        """一次读取访问使根页表与二级页表项带上 A 位."""
+        _install_tables(hart, _identity_leaves(1))
+        root_pte = RAM_BASE + 0x1000 + ((DATA_VA >> 30) & 0x1FF) * 8
+        before = int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
+        assert not before & PTE_A
+
+        hart.mem_read(DATA_VA, 8)
+
+        after = int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
+        assert after & PTE_A, "页表遍历后根页表项应置位 A 位"
+
+    def test_store_sets_dirty_on_leaf(self, bus, hart):
+        """写访问在叶子页表项上置位 D 位."""
+        leaves = _identity_leaves(1)
+        _install_tables(hart, leaves)
+        leaf_pa = RAM_BASE + 0x3000 + DATA_VPN0 * 8
+        raw = int.from_bytes(hart.mem_read_phy(leaf_pa, 8), "little")
+        hart.mem_write_phy(leaf_pa, (raw & ~PTE_D).to_bytes(8, "little"))
+
+        hart.mem_write(DATA_VA, bytes(8))
+
+        after = int.from_bytes(hart.mem_read_phy(leaf_pa, 8), "little")
+        assert after & PTE_D, "写访问后叶子页表项应置位 D 位"
 
 
 # ============================================================
@@ -376,11 +426,16 @@ class TestSstcCsrExistence:
             hart.validate_csr(STIMECMPH, is_write=False)
 
     def test_stimecmp_accessible_with_sstc(self, bus):
-        """平台声明 sstc 时 stimecmp 与 stimecmph 均可访问."""
+        """平台声明 sstc 时 stimecmp 可读可写."""
         hart = _make_hart(bus)
         hart.validate_csr(STIMECMP, is_write=False)
         hart.validate_csr(STIMECMP, is_write=True)
-        hart.validate_csr(STIMECMPH, is_write=False)
+
+    def test_stimecmph_illegal_on_rv64(self, bus):
+        """stimecmph 仅在 RV32 上存在, RV64 上访问触发 IllInstr."""
+        hart = _make_hart(bus)
+        with pytest.raises(CsrAccessError):
+            hart.validate_csr(STIMECMPH, is_write=False)
 
     def test_other_scsr_unaffected_without_sstc(self, bus):
         """未被 sstc 门控的 S 模式 CSR 仍可读写."""

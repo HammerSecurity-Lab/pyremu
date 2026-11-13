@@ -109,7 +109,11 @@ class BreakpointOps(SharedAttrs):
         if target is None:
             return True
         f = decode_fields(instr)
-        return f.opcode == 0x73 and f.func12 == target or self._prev_instr_csr_addr == target
+        return (
+            f.opcode == 0x73
+            and f.func12 == target
+            or self._prev_instr_csr_addr == target
+        )
 
     # ----------------------------------------------------------
     #  条件评估
@@ -213,7 +217,9 @@ class BreakpointOps(SharedAttrs):
 
     def _add_bp_and_report(self, addr: int, name: str) -> None:
         """Append an address breakpoint and print the confirmation line."""
-        bp = Breakpoint(kind="addr", value=addr, desc=f"{name} ({hex_addr(addr)})")
+        bp = Breakpoint(
+            kind="addr", value=addr, desc=f"{name} ({hex_addr(addr)})"
+        )
         self._breakpoints.append(bp)
         self._refresh_bp_cache()
         asm_info = self._fetch_and_disasm(addr)
@@ -278,7 +284,8 @@ class BreakpointOps(SharedAttrs):
             parsed = _parse_bp_condition(parts[2])
             if parsed is None:
                 self._err(
-                    f"无法解析条件: '{parts[2]}' (用法: reg/csr <name> [==|!=|<|>|<=|>=] <值>)"
+                    f"无法解析条件: '{parts[2]}' "
+                    "(用法: reg/csr <name> [==|!=|<|>|<=|>=] <值>)"
                 )
                 return
             cond_type, cond_reg, cond_op, cond_val = parsed
@@ -295,13 +302,15 @@ class BreakpointOps(SharedAttrs):
             self._breakpoints[
                 -1
             ].desc += f" if {cond_type} {cond_reg} {cond_op} 0x{cond_val:x}"
-            self._console.print(f"    条件: {cond_type} {cond_reg} {cond_op} 0x{cond_val:x}")
+            self._console.print(
+                f"    条件: {cond_type} {cond_reg} {cond_op} 0x{cond_val:x}"
+            )
             return
 
         # 2) 地址 (pc / 寄存器名 / 十六进制)
         addr = self._resolve_addr(rest)
-        # 判定用 None 比较: 地址 0 是合法入参 (入口点为 0x0 的固件, 或取值为 0 的
-        # 寄存器), 用真值判定会把这一取值当作解析失败.
+        # 判定用 None 比较: 地址 0 是合法入参 (入口点为 0x0 的固件, 或取值为
+        # 0 的寄存器), 用真值判定会把这一取值当作解析失败.
         if addr is not None:
             if not check_rv64_addr(addr):
                 return
@@ -344,7 +353,9 @@ class BreakpointOps(SharedAttrs):
         bp = Breakpoint(kind="instr", value=INSTR_BP_NAMES[name], desc=name)
         self._breakpoints.append(bp)
         self._refresh_bp_cache()
-        self._console.print(f"  [green]断点 {len(self._breakpoints)}[/]  [yellow]{name}[/]")
+        self._console.print(
+            f"  [green]断点 {len(self._breakpoints)}[/]  [yellow]{name}[/]"
+        )
 
     @seize_val_err("opcode 需为十六进制整数 (支持 0x 前缀)")
     def cmd_bp_opcode(self, arg: str) -> None:
@@ -355,13 +366,16 @@ class BreakpointOps(SharedAttrs):
             self._err(f"opcode 0x{raw:x} 超出 7-bit 范围 [0, 127]")
             return
         if val not in KNOWN_OPCODES:
-            self._err(f"opcode 0x{val:02x} 不是已知的 RV64 opcode, 拒绝设置断点")
+            self._err(
+                f"opcode 0x{val:02x} 不是已知的 RV64 opcode, 拒绝设置断点"
+            )
             return
         bp = Breakpoint(kind="opcode", value=val, desc=f"opcode 0x{val:02x}")
         self._breakpoints.append(bp)
         self._refresh_bp_cache()
         self._console.print(
-            f"  [green]断点 {len(self._breakpoints)}[/]  [yellow]opcode 0x{val:02x}[/]"
+            f"  [green]断点 {len(self._breakpoints)}[/]  "
+            f"[yellow]opcode 0x{val:02x}[/]"
         )
 
     def cmd_bp_list(self) -> None:
@@ -382,7 +396,10 @@ class BreakpointOps(SharedAttrs):
         """删除断点: bp delete <n> (1-based)."""
         idx = int(idx_str, 0) - 1
         if idx < 0 or idx >= len(self._breakpoints):
-            self._err(f"断点编号超出范围: {idx_str} (当前 {len(self._breakpoints)} 个)")
+            self._err(
+                f"断点编号超出范围: {idx_str} "
+                f"(当前 {len(self._breakpoints)} 个)"
+            )
             return
         removed = self._breakpoints.pop(idx)
         self._refresh_bp_cache()
@@ -442,7 +459,8 @@ class BreakpointOps(SharedAttrs):
             self._breakpoints.append(bp)
             self._refresh_bp_cache()
             self._console.print(
-                f"  [green]条件断点 {len(self._breakpoints)}[/]  [yellow]{desc}[/]"
+                f"  [green]条件断点 {len(self._breakpoints)}[/]  "
+                f"[yellow]{desc}[/]"
             )
         elif sub == "opcode":
             if len(rest) < 2:

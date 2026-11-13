@@ -73,7 +73,11 @@ def _chip_dts_cpus(num_cpus: int = 1, pmp_entries: int | list[int] = 64) -> str:
 
     *pmp_entries* 为单个整数时全部节点取同一值, 为列表时按节点顺序取用.
     """
-    values = [pmp_entries] * num_cpus if isinstance(pmp_entries, int) else pmp_entries
+    values = (
+        [pmp_entries] * num_cpus
+        if isinstance(pmp_entries, int)
+        else pmp_entries
+    )
     nodes = "".join(_CPU_NODE % (i, i, values[i]) for i in range(num_cpus))
     return (
         "{\n"
@@ -91,7 +95,9 @@ def _chip_dts_isa(*nodes: str) -> str:
     body = []
     for hid, props in enumerate(nodes):
         lines = "".join(
-            f"\t\t\t{line.strip()}\n" for line in props.splitlines() if line.strip()
+            f"\t\t\t{line.strip()}\n"
+            for line in props.splitlines()
+            if line.strip()
         )
         body.append(
             f"\t\tcpu@{hid} {{\n"
@@ -108,7 +114,9 @@ def _chip_dts_isa(*nodes: str) -> str:
         "\tcpus {\n"
         "\t\t#address-cells = <1>;\n"
         "\t\t#size-cells = <0>;\n"
-        "\t\ttimebase-frequency = <1000000>;\n" + "\n".join(body) + "\n\t};\n};\n"
+        "\t\ttimebase-frequency = <1000000>;\n"
+        + "\n".join(body)
+        + "\n\t};\n};\n"
     )
 
 
@@ -279,7 +287,9 @@ class TestBuildArgParser:
         assert ns.fdt is None
 
     def test_fdt_file_keeps_path_and_address(self):
-        ns = cli._build_arg_parser().parse_args(["fw.bin", "--fdt-file", "/tmp/a.dtb:0x40"])
+        ns = cli._build_arg_parser().parse_args(
+            ["fw.bin", "--fdt-file", "/tmp/a.dtb:0x40"]
+        )
         assert ns.fdt_file == "/tmp/a.dtb:0x40"
 
     def test_boolean_and_text_options(self):
@@ -323,7 +333,9 @@ class TestBuildArgParser:
 
     def test_unknown_log_level_is_rejected(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
-            cli._build_arg_parser().parse_args(["fw.bin", "--log-level", "VERBOSE"])
+            cli._build_arg_parser().parse_args(
+                ["fw.bin", "--log-level", "VERBOSE"]
+            )
         assert exc_info.value.code == 2
         assert "VERBOSE" in capsys.readouterr().err
 
@@ -380,7 +392,9 @@ class TestLoadFirmwareImage:
         path = _raw_firmware(tmp_path)
         image = FirmwareImage(
             entry_point=RAM_BASE + 0x1000,
-            segments=[FirmwareSegment(vaddr=RAM_BASE + 0x1000, data=b"\x13", memsz=4)],
+            segments=[
+                FirmwareSegment(vaddr=RAM_BASE + 0x1000, data=b"\x13", memsz=4)
+            ],
             format="elf",
         )
         monkeypatch.setattr(cli, "parse_firmware", lambda *a, **k: image)
@@ -433,7 +447,9 @@ class TestDefaultFdtAddr:
         ids=["no_rom", "rom"],
     )
     def test_addr_follows_boot_path(self, is_rom_boot, expected):
-        addr = cli._default_fdt_addr(RAM_BASE, RAM_SIZE, self.ROM_BASE, is_rom_boot)
+        addr = cli._default_fdt_addr(
+            RAM_BASE, RAM_SIZE, self.ROM_BASE, is_rom_boot
+        )
         assert addr == expected
 
 
@@ -501,7 +517,9 @@ def chip_dtb_calls(monkeypatch) -> list[cli.dev_tree.DeliveredTree]:
 
 def _chip(virtio_blk=None) -> types.SimpleNamespace:
     """芯片设备树替身: 交付内容只取决于树中是否声明了块设备节点."""
-    return types.SimpleNamespace(periph=types.SimpleNamespace(virtio_blk=virtio_blk))
+    return types.SimpleNamespace(
+        periph=types.SimpleNamespace(virtio_blk=virtio_blk)
+    )
 
 
 class TestLoadChipFdt:
@@ -549,7 +567,9 @@ class TestSupplementDevices:
         devices = cli._supplement_devices(_FakeEmu().config, _chip())
         assert len(devices) == 1
         assert devices[0].compatible == "virtio,mmio"
-        assert devices[0].region == cli.dev_tree.DtRegion(0x1000_1000, VIRTIO_MMIO_SIZE)
+        assert devices[0].region == cli.dev_tree.DtRegion(
+            0x1000_1000, VIRTIO_MMIO_SIZE
+        )
         assert devices[0].irq == 1
 
     def test_declared_node_is_kept(self):
@@ -569,10 +589,15 @@ class TestSupplementDevices:
 
 class TestResolveDiskImage:
     def test_without_chip_tree_only_disk_option_applies(self):
-        assert cli._resolve_disk_image(_ns(disk="/tmp/a.img"), None) == "/tmp/a.img"
+        assert (
+            cli._resolve_disk_image(_ns(disk="/tmp/a.img"), None)
+            == "/tmp/a.img"
+        )
         assert cli._resolve_disk_image(_ns(disk=None), None) is None
 
-    def test_chip_tree_without_disk_takes_default_image(self, tmp_path, monkeypatch):
+    def test_chip_tree_without_disk_takes_default_image(
+        self, tmp_path, monkeypatch
+    ):
         default = tmp_path / "riscv-sd.ext4"
         default.write_bytes(b"\x00")
         monkeypatch.setattr(cli, "DEFAULT_DISK_IMAGE", default)
@@ -584,7 +609,9 @@ class TestResolveDiskImage:
         monkeypatch.setattr(cli, "DEFAULT_DISK_IMAGE", default)
         explicit = tmp_path / "other.img"
         explicit.write_bytes(b"\x00")
-        assert cli._resolve_disk_image(_ns(disk=str(explicit)), _chip()) == str(explicit)
+        assert cli._resolve_disk_image(_ns(disk=str(explicit)), _chip()) == str(
+            explicit
+        )
 
     def test_missing_default_image_terminates(self, tmp_path, monkeypatch):
         missing = tmp_path / "absent.ext4"
@@ -710,7 +737,9 @@ class TestPerHartDifference:
 
     def test_identical_pmp_entries_are_accepted(self):
         value = configs_gen.PMP_ENTRIES
-        chip = cli.dev_tree.parse_chip_dts_text(_chip_dts_cpus(2, [value, value]))
+        chip = cli.dev_tree.parse_chip_dts_text(
+            _chip_dts_cpus(2, [value, value])
+        )
         assert chip.differing_attrs() == {}
         platform = cli._resolve_platform(_ns(), chip)
         assert platform.pmp_entries == configs_gen.PMP_ENTRIES
@@ -770,7 +799,8 @@ class TestPlatformIsa:
     def test_both_declarations_merged(self):
         chip = cli.dev_tree.parse_chip_dts_text(
             _chip_dts_isa(
-                'riscv,isa = "rv64imac";\nriscv,isa-extensions = "zicsr", "zifencei", "sstc";'
+                'riscv,isa = "rv64imac";\n'
+                'riscv,isa-extensions = "zicsr", "zifencei", "sstc";'
             )
         )
         platform = cli._resolve_platform(_ns(), chip)
@@ -820,14 +850,18 @@ class TestSetupPreload:
         assert entry == default & ~0xF
         assert size == len(code)
         assert emu.bus.try_read(entry, len(code)) == code
-        assert emu.harts[0].csrs["misa"].val == (2 << 62) | (1 << 18) | (1 << 20)
+        assert emu.harts[0].csrs["misa"].val == (
+            (2 << 62) | (1 << 18) | (1 << 20)
+        )
 
     def test_explicit_address_is_used(self, tmp_path):
         emu = make_test_emu(ram_size=RAM_SIZE, uart_base=0)
         src = tmp_path / "crt0.bin"
         src.write_bytes(b"\x13\x00\x00\x00")
         addr = RAM_BASE + 0x1000
-        entry, _ = cli._setup_preload(emu, _ns(preload=str(src), preload_addr=addr))
+        entry, _ = cli._setup_preload(
+            emu, _ns(preload=str(src), preload_addr=addr)
+        )
         assert entry == addr
         assert emu.bus.try_read(addr, 4) == b"\x13\x00\x00\x00"
 
@@ -962,7 +996,9 @@ def repl_capture(monkeypatch):
 class TestDebuggerEntry:
     def test_raw_firmware_starts_at_entry(self, tmp_path, repl_capture):
         fw = _raw_firmware(tmp_path)
-        cli.debugger([fw, "--ram", "4M", "--no-fdt", "--base-addr", hex(RAM_BASE)])
+        cli.debugger(
+            [fw, "--ram", "4M", "--no-fdt", "--base-addr", hex(RAM_BASE)]
+        )
         dbg = repl_capture["dbg"]
         assert dbg._emu.num_harts == 1
         assert dbg.hart.pc == RAM_BASE
@@ -1011,7 +1047,9 @@ class TestDebuggerEntry:
         assert dbg._fdt_addr == RAM_BASE + RAM_SIZE - 0x10000
         assert dbg._emu.harts[0].gprs[11] == dbg._fdt_addr
 
-    def test_preload_takes_precedence_over_entry_symbol(self, tmp_path, repl_capture):
+    def test_preload_takes_precedence_over_entry_symbol(
+        self, tmp_path, repl_capture
+    ):
         fw = _raw_firmware(tmp_path)
         src = tmp_path / "crt0.bin"
         src.write_bytes(b"\x13\x00\x00\x00")
@@ -1035,15 +1073,21 @@ class TestDebuggerEntry:
         assert dbg._bins_images[ImageKind.PRELOAD].path == str(src)
 
     def test_virtio_net_instances_off_by_default(self, tmp_path, repl_capture):
-        """网卡基址取自 PeripheralConfig 的默认值 0, 未给 --chip-dts 时不注册."""
+        """网卡基址取自 PeripheralConfig 的默认值 0,
+        未给 --chip-dts 时不注册.
+        """
         fw = _raw_firmware(tmp_path)
-        cli.debugger([fw, "--ram", "4M", "--no-fdt", "--base-addr", hex(RAM_BASE)])
+        cli.debugger(
+            [fw, "--ram", "4M", "--no-fdt", "--base-addr", hex(RAM_BASE)]
+        )
         emu = repl_capture["dbg"]._emu
         assert emu.virtio_net_s is None
         assert emu.virtio_net_m is None
         assert emu.virtio_blk is None
 
-    def test_disk_enables_block_device_and_default_bootargs(self, tmp_path, repl_capture):
+    def test_disk_enables_block_device_and_default_bootargs(
+        self, tmp_path, repl_capture
+    ):
         fw = _raw_firmware(tmp_path)
         disk = tmp_path / "root.img"
         disk.write_bytes(b"\x00" * 512)
@@ -1103,7 +1147,9 @@ class TestDebuggerEntry:
         assert uart._hart_log_dir == str(log_dir)
         assert log_dir.is_dir()
 
-    def test_kernel_default_address_uses_reserved_size(self, tmp_path, repl_capture):
+    def test_kernel_default_address_uses_reserved_size(
+        self, tmp_path, repl_capture
+    ):
         fw = _raw_firmware(tmp_path)
         kernel = tmp_path / "Image"
         kernel.write_bytes(b"KERNEL")
@@ -1122,7 +1168,9 @@ class TestDebuggerEntry:
         dbg = repl_capture["dbg"]
         kernel_image = dbg._bins_images[ImageKind.KERNEL]
         assert kernel_image.path == str(kernel)
-        assert kernel_image.start == RAM_BASE + cli.configs_gen.FW_RESERVED_MEM_SIZE
+        assert kernel_image.start == (
+            RAM_BASE + cli.configs_gen.FW_RESERVED_MEM_SIZE
+        )
 
     def test_kernel_explicit_address(self, tmp_path, repl_capture):
         fw = _raw_firmware(tmp_path)
@@ -1163,13 +1211,19 @@ class TestDebuggerEntry:
             )
         assert exc_info.value.code == 1
 
-    def test_entry_symbol_sets_pc_and_a0(self, tmp_path, monkeypatch, repl_capture):
+    def test_entry_symbol_sets_pc_and_a0(
+        self, tmp_path, monkeypatch, repl_capture
+    ):
         """给出入口符号时 hart 从该符号起跑, 并告警未设置 sp/gp."""
         fw = _raw_firmware(tmp_path)
         target = RAM_BASE + 0x40
         image = FirmwareImage(
             entry_point=RAM_BASE,
-            segments=[FirmwareSegment(vaddr=RAM_BASE, data=b"\x13\x00\x00\x00", memsz=4)],
+            segments=[
+                FirmwareSegment(
+                    vaddr=RAM_BASE, data=b"\x13\x00\x00\x00", memsz=4
+                )
+            ],
             format="raw",
             symbols={"main": target},
         )
@@ -1192,7 +1246,9 @@ class TestDebuggerEntry:
 
     def test_missing_firmware_exits(self, tmp_path, repl_capture):
         with pytest.raises(SystemExit) as exc_info:
-            cli.debugger([str(tmp_path / "none.bin"), "--ram", "4M", "--no-fdt"])
+            cli.debugger(
+                [str(tmp_path / "none.bin"), "--ram", "4M", "--no-fdt"]
+            )
         assert exc_info.value.code == 1
 
     def test_sym_dir_sets_candidate_directory(self, tmp_path, repl_capture):
@@ -1215,7 +1271,9 @@ class TestDebuggerEntry:
         assert dbg._sym_mod_dir == str(symbols)
         assert dbg._sym_symbols == {}
 
-    def test_sym_dir_relative_path_is_resolved(self, tmp_path, monkeypatch, repl_capture):
+    def test_sym_dir_relative_path_is_resolved(
+        self, tmp_path, monkeypatch, repl_capture
+    ):
         """启动时给的相对路径按当时的工作目录换算为绝对路径."""
         fw = _raw_firmware(tmp_path)
         work = tmp_path / "work"
@@ -1233,7 +1291,9 @@ class TestDebuggerEntry:
                 "symbols",
             ]
         )
-        assert repl_capture["dbg"]._sym_mod_dir == str((work / "symbols").resolve())
+        assert repl_capture["dbg"]._sym_mod_dir == str(
+            (work / "symbols").resolve()
+        )
 
     def test_initrd_is_loaded_before_device_tree(self, tmp_path, repl_capture):
         """initramfs 的范围要写入设备树, 故必须先生成 DTB 之前加载."""

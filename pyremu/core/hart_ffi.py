@@ -52,7 +52,9 @@ def _merge_eip(
     if before is None:
         return list(engine_words)
     before_words = struct.unpack(_IMSIC_PACK_FORMAT, before)
-    return [e | (c & ~p) for e, c, p in zip(engine_words, current, before_words)]
+    return [
+        e | (c & ~p) for e, c, p in zip(engine_words, current, before_words)
+    ]
 
 
 # 加速执行的退出原因, 取值必须与 Rust 侧一致
@@ -62,8 +64,8 @@ EXIT_MMIO = 2
 EXIT_ECALL = 3
 EXIT_EBREAK = 4
 EXIT_WFI_WAIT = 5
-# 取指的目标物理地址不属于主存: 引擎只从主存读取指令字节, 本轮退出后由 Python 取指;
-# 目标属于设备窗口时读取设备的存储, 属于空洞时投递访问故障
+# 取指的目标物理地址不属于主存: 引擎只从主存读取指令字节, 本轮退出后由 Python
+# 取指; 目标属于设备窗口时读取设备的存储, 属于空洞时投递访问故障
 EXIT_NOT_MAINRAM = 6
 EXIT_BREAKPOINT = 7
 EXIT_TIMEOUT = 8
@@ -93,7 +95,10 @@ class HartFfiOps:
         state.stval = self.stval_val
         state.satp = self.satp_val
         state.mie = self.mie_val
-        state.mip = self.mip_val
+        # mip 的存储值只含硬件驱动的位; 软件位 SEIP 单独编组, 由引擎在读出时
+        # 取或.
+        state.mip = self.mip_raw_val
+        state.software_seip = self._software_seip
         state.medeleg = self.csrs["medeleg"].val
         state.mideleg = self.csrs["mideleg"].val
 
@@ -116,8 +121,12 @@ class HartFfiOps:
         state.sscratch = self.csrs["sscratch"].val
         state.mhartid = self.csrs["mhartid"].val
         state.mcounteren = self.csrs["mcounteren"].val
-        state.scounteren = self.csrs["scounteren"].val if "scounteren" in self.csrs else 0
-        state.stimecmp = self.csrs["stimecmp"].val if "stimecmp" in self.csrs else 0
+        state.scounteren = (
+            self.csrs["scounteren"].val if "scounteren" in self.csrs else 0
+        )
+        state.stimecmp = (
+            self.csrs["stimecmp"].val if "stimecmp" in self.csrs else 0
+        )
 
         # 直接拷贝, 不经写入路径重算: 引擎的写入路径已在写入时刻固定截止点,
         # 经写入路径重算会把它置 0
@@ -126,7 +135,7 @@ class HartFfiOps:
 
         state.total_instrs = self._total_instrs
 
-        state.fprs[:] = self._fpr_bits
+        state.fprs[:] = self.fpr_bits
         state.fcsr = self.csrs["fcsr"].val & 0xFF
 
         self._marshal_imsic(state)
@@ -144,12 +153,13 @@ class HartFfiOps:
         self.scause_val = state.scause
         self.mtval_val = state.mtval
         self.stval_val = state.stval
-        # satp 取值与 Python 侧一致时保持指令 TLB 与数据 TLB 的既有条目; 取值不同时
-        # 经 satp_val 写回, 该属性写入时刷新两个 TLB.
+        # satp 取值与 Python 侧一致时保持指令 TLB 与数据 TLB 的既有条目;
+        # 取值不同时经 satp_val 写回, 该属性写入时刷新两个 TLB.
         if state.satp != self.csrs["satp"].val:
             self.satp_val = state.satp
         self._csr_write_raw("mie", state.mie)
         self._csr_write_raw("mip", state.mip)
+        self._software_seip = state.software_seip & 1
         self.csrs["medeleg"].val = state.medeleg
         self.csrs["mideleg"].val = state.mideleg
 
@@ -188,7 +198,7 @@ class HartFfiOps:
 
         self._total_instrs = state.total_instrs
 
-        self._fpr_bits[:] = state.fprs[:]
+        self.fpr_bits[:] = state.fprs[:]
         self.csrs["fcsr"].val = state.fcsr & 0xFF
         self.csrs["frm"].val = (state.fcsr >> 5) & 0x7
         self.csrs["fflags"].val = state.fcsr & 0x1F
@@ -199,7 +209,8 @@ class HartFfiOps:
     def marshal_isa_exts(self, state: HartState) -> None:
         """把本 hart 的扩展开关写入 ``HartState`` 的 ``IsaExtsC``.
 
-        扩展开关是平台的静态属性, 只在状态数组分配时写入一次; 逐轮编组不重复写入.
+        扩展开关是平台的静态属性, 只在状态数组分配时写入一次; 逐轮编组不重复
+        写入.
         """
         for field, val in self.ratified_hart_attrs.isa_ext_switches.items():
             setattr(state.isa_exts, field, val)
@@ -208,9 +219,9 @@ class HartFfiOps:
         """把本 hart 的 IMSIC 状态写入 ``HartState`` 的 IMSIC 字段."""
         imsic = self._imsic
         if imsic is None or self.id >= imsic.num_harts:
-            # 该 hart 未接 IMSIC 时清 present, 使引擎的 MEIP/SEIP 清理不产生作用;
-            # ImsicFile::empty() 默认 present=1, 不清除时该步骤会在每条指令上执行,
-            # 外部中断无法排空, 守护线程置位的 eip 位会反复触发中断
+            # 该 hart 未接 IMSIC 时清 present, 使引擎的 MEIP/SEIP 清理不产生
+            # 作用; ImsicFile::empty() 默认 present=1, 不清除时该步骤会在每条
+            # 指令上执行, 外部中断无法排空, 守护线程置位的 eip 位会反复触发中断
             state.imsic_m.present = 0
             state.imsic_s.present = 0
             self._imsic_pre_m_eip = None
@@ -250,16 +261,16 @@ class HartFfiOps:
     def _unmarshal_imsic(self, state: HartState) -> None:
         """把 ``HartState`` 的 IMSIC 字段写回本 hart 的 IMSIC.
 
-        加速期间由接收线程置位的 eip 位保留: 这些位由 UART 接收经 APLIC 进入 IMSIC,
-        引擎并不知道, 直接以引擎的取值覆盖会丢失.
+        加速期间由接收线程置位的 eip 位保留: 这些位由 UART 接收经 APLIC 进入
+        IMSIC, 引擎并不知道, 直接以引擎的取值覆盖会丢失.
         """
         imsic = self._imsic
         if imsic is None or self.id >= imsic.num_harts:
             self._imsic_select_m = state.imsic_m.select
             self._imsic_select_s = state.imsic_s.select
             return
-        # 持锁: 写回 eip/eie 与接收线程的置位互斥; 不持锁时接收线程在编组到写回之间
-        # 置位的位会被引擎写回的旧值覆盖, 或在计算时读到只改了一半的状态
+        # 持锁: 写回 eip/eie 与接收线程的置位互斥; 不持锁时接收线程在编组到写回
+        # 之间置位的位会被引擎写回的旧值覆盖, 或在计算时读到只改了一半的状态
         with imsic._lock:
             mf, sf = imsic._files[self.id]
             mf.eip[:] = _merge_eip(
@@ -272,8 +283,12 @@ class HartFfiOps:
                 self._imsic_pre_s_eip,
                 sf.eip,
             )
-            mf.eie[:] = struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_m.eie)
-            sf.eie[:] = struct.unpack_from(_IMSIC_PACK_FORMAT, state.imsic_s.eie)
+            mf.eie[:] = struct.unpack_from(
+                _IMSIC_PACK_FORMAT, state.imsic_m.eie
+            )
+            sf.eie[:] = struct.unpack_from(
+                _IMSIC_PACK_FORMAT, state.imsic_s.eie
+            )
             mf.eidelivery = state.imsic_m.eidelivery
             mf.eithreshold = state.imsic_m.eithreshold
             sf.eidelivery = state.imsic_s.eidelivery

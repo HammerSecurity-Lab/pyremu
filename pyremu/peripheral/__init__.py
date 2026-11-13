@@ -16,12 +16,14 @@
 - GPIO  : 双向通用 I/O 控制器
 - VirtIOBlock : virtio-blk 块设备
 - VirtIONet   : virtio-net 网络设备
+- PowerCtrl   : 关机与复位请求设备
 """
 
 from pyremu.peripheral.boot_addr import BootAddrReg
 from pyremu.peripheral.crng import CRNG
 from pyremu.peripheral.gpio import GPIO
 from pyremu.peripheral.i2c import I2C
+from pyremu.peripheral.power_ctrl import PowerCtrl, PowerRequest
 from pyremu.peripheral.spi import SPI
 from pyremu.peripheral.termio import TerminalIO
 from pyremu.peripheral.uart import UART
@@ -38,4 +40,6 @@ __all__ = [
     "VirtIONet",
     "CRNG",
     "BootAddrReg",
+    "PowerCtrl",
+    "PowerRequest",
 ]

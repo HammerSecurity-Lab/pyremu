@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import select
 import signal
 import sys
@@ -25,6 +26,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
+from pyremu.configs_aux import cfg_str
 from pyremu.core.registers import (
     register_csr,
     register_fpr,
@@ -40,11 +42,7 @@ from pyremu.debug.types import (
     MemoryChange,
     StackFrame,
 )
-from pyremu.debug.utils import (
-    hex_addr,
-    history_file_path,
-    trim_history,
-)
+from pyremu.debug.utils import hex_addr
 from pyremu.emulator import Emulator
 from pyremu.utils.parse_bin import FirmwareImage
 
@@ -52,13 +50,45 @@ from pyremu.utils.parse_bin import FirmwareImage
 def init_sym_mod_dir() -> str | None:
     """符号候选目录的初始值: 进程的当前工作目录; 取不到时取当前用户的主目录.
 
-    工作目录已被删除时 ``os.getcwd`` 抛出 ``OSError``, 此时改用 ``HOME`` 环境变量;
+    工作目录已被删除时``os.getcwd``抛出OSError, 此时改用``HOME``环境变量
     该变量也没有时返回 ``None``, 即未设置候选目录.
     """
     try:
         return os.getcwd()
     except OSError:
         return os.environ.get("HOME") or None
+
+
+# 未配置路径时使用的文件名, 位于用户主目录下.
+HISTORY_FILE_NAME = ".pyremu_history"
+
+
+def history_file_path() -> Path:
+    """命令历史文件的路径.
+
+    取环境变量 PYREMU_HISTORY_FILE 或 configs_gen 中的同名配置; 两者都没有时取
+    用户主目录下的 HISTORY_FILE_NAME.
+    """
+    configured = cfg_str("PYREMU_HISTORY_FILE")
+    if len(configured) > 0:
+        return Path(configured).expanduser()
+    return Path.home() / HISTORY_FILE_NAME
+
+
+def trim_history(max_entries: int = 10000) -> None:
+    """若历史文件超过 *max_entries* 行, 仅保留最近一半."""
+    hist_path = history_file_path()
+    if not hist_path.is_file():
+        return
+    try:
+        text = hist_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) <= max_entries:
+            return
+        keep = max_entries // 2
+        hist_path.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # 文件被锁或权限不足时静默跳过
 
 
 class DebuggerBase(SharedAttrs):
@@ -68,7 +98,13 @@ class DebuggerBase(SharedAttrs):
     以确保 ``__init__`` 优先初始化所有属性.
     """
 
-    _MODE_COLORS = {"M": "red", "S": "cyan", "U": "green", "H": "yellow", "D": "magenta"}
+    _MODE_COLORS = {
+        "M": "red",
+        "S": "cyan",
+        "U": "green",
+        "H": "yellow",
+        "D": "magenta",
+    }
 
     def __init__(
         self,
@@ -80,7 +116,7 @@ class DebuggerBase(SharedAttrs):
         self._hart_id: int = hart_id
         self._image: FirmwareImage | None = image
         self._load_offset: int = 0
-        # 命令行装入的映像: 角色 -> 路径、物理起始地址与字节数
+        # 命令行装入的映像，组织为 镜像类型 -> {路径、物理起始地址与字节数}
         self._bins_images: dict[ImageKind, LoadedImage] = {}
 
         # 外部调试符号
@@ -207,15 +243,17 @@ class DebuggerBase(SharedAttrs):
     def _enter_run_mode(self) -> None:
         """切换到运行模式: Ctrl+Q 暂停, cbreak stdin 下 ISIG 关闭, Ctrl+C 透传.
 
-        ── TX: 固件写 TXDATA, 随后经 Rust inline handler 调用 libc::write(1, &byte, 1).
+        ── TX: 固件写 TXDATA, 随后经 Rust inline handler 调用
+        libc::write(1, &byte, 1).
         每字节即时输出, _console_echo=False 抑制 Python重复输出.
 
         ── RX: stdin daemon 独立于处理器执行循环持续读取.
         处理器仅看到 PLIC 外部中断信号, 由 wake_hart_from_wfi() 唤醒.
         """
-        # 终端 ISIG 关闭后键盘 Ctrl+C (0x03) 作为普通字节透传给受调试程序, 不经信号
-        # 路径; Ctrl+Q 停止由 termio 的 notify_emu_stop 直连置位 stop_flag, 同样
-        # 不经信号. 此 SIGINT handler 仅覆盖 stdin 未转发的场景 (终端仍生成 SIGINT).
+        # 终端 ISIG 关闭后键盘 Ctrl+C (0x03) 作为普通字节透传给受调试程序,
+        # 不经信号路径; Ctrl+Q 停止由 termio 的 notify_emu_stop 直连置位
+        # stop_flag, 同样不经信号. 此 SIGINT handler 仅覆盖 stdin 未转发的
+        # 场景 (终端仍生成 SIGINT).
         signal.signal(signal.SIGINT, self._sigint_run)
 
         if not self._stdin_forward:
@@ -234,7 +272,8 @@ class DebuggerBase(SharedAttrs):
         if os.isatty(self._stdin_fd):
             self._saved_term_attrs = termios.tcgetattr(self._stdin_fd)
             attrs = termios.tcgetattr(self._stdin_fd)
-            # iflag: 清除输入转换; ICRNL 保留 (受调试程序控制台可能未初始化 \r->\n)
+            # iflag: 清除输入转换; ICRNL 保留 (受调试程序控制台可能未初始化
+            # \r 到 \n 的转换)
             attrs[0] = (
                 attrs[0]
                 & ~(
@@ -248,7 +287,11 @@ class DebuggerBase(SharedAttrs):
                 )
             ) | termios.ICRNL
             attrs[3] &= ~(
-                termios.ECHO | termios.ECHONL | termios.ICANON | termios.IEXTEN | termios.ISIG
+                termios.ECHO
+                | termios.ECHONL
+                | termios.ICANON
+                | termios.IEXTEN
+                | termios.ISIG
             )
             # cflag: 8-bit 字符
             attrs[2] = (attrs[2] & ~termios.CSIZE) | termios.CS8
@@ -269,7 +312,9 @@ class DebuggerBase(SharedAttrs):
         """恢复 _enter_run_mode 保存的终端属性."""
         try:
             if self._saved_term_attrs:
-                termios.tcsetattr(self._stdin_fd, termios.TCSANOW, self._saved_term_attrs)
+                termios.tcsetattr(
+                    self._stdin_fd, termios.TCSANOW, self._saved_term_attrs
+                )
                 self._saved_term_attrs = None
         except OSError, termios.error:
             pass
@@ -351,7 +396,8 @@ class DebuggerBase(SharedAttrs):
         # 守护线程读出后 select 返回空, 此时不进行任何操作
 
         if self._emu._termio and self._emu._termio.native_active:
-            # 从 RX 环形缓冲区读出并写入 UART FIFO, 内部处理 _rx_notify 的 TOCTOU 清零.
+            # 从 RX 环形缓冲区读出并写入 UART FIFO, 内部处理 _rx_notify 的
+            # TOCTOU 清零.
             had_input = self._emu._termio.drain_rx_feed_uart()
             self._flush_uart_if_present()
             return had_input
@@ -368,7 +414,8 @@ class DebuggerBase(SharedAttrs):
 
         had_input = self._feed_pending_uart(uart)
         if self._stdin_pending and not had_input:
-            # 接收缓冲区拒绝待转发数据: 数据留在 _stdin_pending, 本轮不再读取 stdin
+            # 接收缓冲区拒绝待转发数据: 数据留在 _stdin_pending,
+            # 本轮不再读取 stdin
             return False
         if had_input and self._stdin_pending:
             return True
@@ -444,7 +491,8 @@ class DebuggerBase(SharedAttrs):
         """WFI 空闲轮询回调, 用于 Rust termio 线程模式.
 
         termio 线程已接管 stdin 读取和 TX 到 stdout 的写入; 此处把 RX 环形
-        缓冲区的字节读出并写入 UART 模型, 并刷新行缓冲确保部分行及时进入 hart 日志文件。
+        缓冲区的字节读出并写入 UART 模型, 并刷新行缓冲确保部分行及时进入
+        hart 日志文件.
 
         Returns:
             返回 True 仅当有 stdin 数据被 preload, 此时中断 WFI 睡眠, 立即同步

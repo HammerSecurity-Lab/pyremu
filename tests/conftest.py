@@ -74,11 +74,15 @@ def make_test_ram(
     size: int = 2 * 1024 * 1024,
     *,
     has_bounds_check: bool = False,
-) -> tuple[bytearray, Callable[[int, int], bytes], Callable[[int, bytes], None]]:
+) -> tuple[
+    bytearray,
+    Callable[[int, int], bytes],
+    Callable[[int, bytes], None],
+]:
     """构造模拟物理内存, 返回 (内存, 读函数, 写函数).
 
-    读写函数以内存数组内的偏移为地址. has_bounds_check 为真时越界读返回同样长度的
-    零字节, 越界写被丢弃; 为假时读按切片截短, 越界写抛出 IndexError.
+    读写函数以内存数组内的偏移为地址. has_bounds_check 为真时越界读返回同样
+    长度的零字节, 越界写被丢弃; 为假时读按切片截短, 越界写抛出 IndexError.
     """
     ram = bytearray(size)
 
@@ -129,8 +133,8 @@ def make_test_dbg(
 ) -> Debugger:
     """按测试平台配置构造 Emulator 与 Debugger.
 
-    is_code_loaded 为真时在 prog_cnt 处写入一条 NOP 指令.
-    periph_fields 按 PeripheralConfig 的字段名传入, 用于启用默认配置未注册的外设.
+    is_code_loaded 为真时在 prog_cnt 处写入一条 NOP 指令. periph_fields 按
+    PeripheralConfig 的字段名传入, 用于启用默认配置未注册的外设.
     """
     emu = make_test_emu(
         num_harts=num_harts,
@@ -169,8 +173,8 @@ def hart() -> Hart:
 @pytest.fixture(autouse=True)
 def _mock_stdin_fileno(monkeypatch):
     """
-    因为 pytest 的 DontReadFromInput
-    的 fileno() 抛 UnsupportedOperation, 而 Debugger.__init__ 需要它来捕获 stdin fd.
+    因为 pytest 的 DontReadFromInput 的 fileno() 抛 UnsupportedOperation,
+    而 Debugger.__init__ 需要它来捕获 stdin fd.
     """
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
 

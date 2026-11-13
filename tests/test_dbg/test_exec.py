@@ -8,7 +8,16 @@ from pyremu.core.hart import RiscvMode
 from pyremu.debug.exec import ExecutionOps
 from pyremu.debug.types import MemoryChange
 from pyremu.emulator import Emulator
+from pyremu.peripheral.power_ctrl import PowerRequest
 from tests.conftest import DbgTestBase
+
+POWER_BASE = 0x0010_0000
+
+
+def _request_shutdown(emu: Emulator) -> None:
+    """经总线写入关机请求."""
+    emu.bus.write(POWER_BASE, PowerRequest.SHUTDOWN.to_bytes(4, "little"))
+
 
 # ============================================================
 #  Mini 测试类
@@ -206,6 +215,16 @@ class TestStepOne:
         assert edbg._snapshot is not None
         assert edbg._snapshot.pc == 0x8000_0000
 
+    def test_step_one_after_shutdown_skips(self):
+        """关机请求置位后单步不执行指令."""
+        edbg = _make_edbg()
+        _request_shutdown(edbg._emu)
+        edbg.hart.pc = 0x8000_0000
+        edbg.step_one()
+        assert edbg.hart.pc == 0x8000_0000
+        assert edbg._instr_count == 0
+        assert edbg._snapshot is None
+
     def test_step_one_instr_page_fault(self):
         """不可读的地址应触发 InstrPageFault."""
         edbg = _make_edbg()
@@ -263,6 +282,21 @@ class TestCmdRestart:
         edbg.cmd_restart()
         assert emu.bus.try_read(addr, 4) == b"TREE"
         assert emu.dtb_addr == addr
+
+    def test_restart_clears_power_request(self):
+        """重启撤销关机请求, 之后可以继续执行."""
+        edbg = _make_edbg()
+        emu = edbg._emu
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        _request_shutdown(emu)
+        assert emu.power_request is PowerRequest.SHUTDOWN
+        edbg.cmd_restart()
+        assert emu.power_request is None
+        pc_before = edbg.hart.pc
+        assert emu.step() == 1
+        assert edbg.hart.pc == pc_before + 4
 
     def test_restart_without_dtb_writes_nothing(self):
         """未装载设备树的重启不写入设备树, 地址仍为 None."""

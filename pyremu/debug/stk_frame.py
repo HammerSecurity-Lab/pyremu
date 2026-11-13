@@ -66,10 +66,15 @@ class StackWalkOps(SharedAttrs):
           - 地址落在 64-bit 空间最高 64 KiB 内, 即 > 0xFFFF_FFFF_FFFF_0000.
             内核/用户代码的实际映射地址都远低于此边界.
         """
-        return ra not in {0, 0xFFFF_FFFF_FFFF_FFFF} and 4 <= ra <= 0xFFFF_FFFF_FFFF_0000
+        return (
+            ra not in {0, 0xFFFF_FFFF_FFFF_FFFF}
+            and 4 <= ra <= 0xFFFF_FFFF_FFFF_0000
+        )
 
     def _check_return_addr(self, ra: int) -> bool:
-        return ra != 0 and self._is_plausible_ra(ra) and self._is_valid_code_va(ra)
+        return (
+            ra != 0 and self._is_plausible_ra(ra) and self._is_valid_code_va(ra)
+        )
 
     def _call_site_pc(self, ra: int) -> int:
         """从返回地址推断调用指令的 PC.
@@ -142,10 +147,13 @@ class StackWalkOps(SharedAttrs):
             pos += 2
             if not is_compressed:
                 choice = decode_sd_sp
-                half = int.from_bytes(raw[pos - 2 : pos + 2], "little", signed=False)
+                half = int.from_bytes(
+                    raw[pos - 2 : pos + 2], "little", signed=False
+                )
                 pos += 2
-            # 判定用 None 比较: 保存偏移 0 合法 (sd x1, 0(sp)), 而该函数的失败返回值
-            # 是 None. 用真值判定会把偏移 0 当作未匹配, 并在后续指令上被覆写.
+            # 判定用 None 比较: 保存偏移 0 合法 (sd x1, 0(sp)), 而该函数的失败
+            # 返回值是 None. 用真值判定会把偏移 0 当作未匹配, 并在后续指令上
+            # 被覆写.
             if ra_off is None:
                 ra_off = self._try_match_save(half, 1, choice)
             if fp_off is None:
@@ -166,7 +174,11 @@ class StackWalkOps(SharedAttrs):
     #  边界帧解析
     # ----------------------------------------------------------
 
-    def _resolve_boundary_frame(self, trapped_pc: int, prev_name: str) -> tuple[str, str]:
+    def _resolve_boundary_frame(
+        self,
+        trapped_pc: int,
+        prev_name: str,
+    ) -> tuple[str, str]:
         """解析跨特权级边界帧的 privilege mode."""
         if prev_name == "U" and trapped_pc >= (1 << 63):
             return ("S", "")
@@ -222,7 +234,11 @@ class StackWalkOps(SharedAttrs):
             or saved_ra == 0
         )
 
-    def _append_live_ra_frame(self, frames: list[StackFrame], saved_ra: int) -> None:
+    def _append_live_ra_frame(
+        self,
+        frames: list[StackFrame],
+        saved_ra: int,
+    ) -> None:
         """当前函数没有自己的帧时, 用寄存器 x1 补出调用者帧.
 
         fp 指向调用者的帧, [fp-8] 保存的是调用者自己的返回地址; 当前函数的
@@ -303,7 +319,11 @@ class StackWalkOps(SharedAttrs):
 
             call_site = self._call_site_pc(saved_ra)
             ra_corrupted = not self._check_return_addr(saved_ra)
-            note = "RA 可能已被当前函数覆盖 (非合法代码地址)" if ra_corrupted else ""
+            note = (
+                "RA 可能已被当前函数覆盖 (非合法代码地址)"
+                if ra_corrupted
+                else ""
+            )
 
             if not _seen_lower_mode:
                 fmode = self._resolve_frame_mode(call_site, cur_mode)
@@ -340,7 +360,11 @@ class StackWalkOps(SharedAttrs):
         if context is None:
             return
         entry, s_trapped_pc, s_prev_mode = context
-        if entry.trapped_pc == 0 or entry.prev_mode.value >= h.mode.value or entry.tvec == 0:
+        if (
+            entry.trapped_pc == 0
+            or entry.prev_mode.value >= h.mode.value
+            or entry.tvec == 0
+        ):
             return
 
         # 若 trapped_pc 已与现有序号帧的 PC 重合 (含 ±4),
@@ -369,7 +393,9 @@ class StackWalkOps(SharedAttrs):
             self._add_prev_mode_frame_fallback(frames, entry, visited, boundary)
             return
         payload = self._boundary_payload(boundary[1], is_nested)
-        frames.append(self._pc_frame(frames, entry.trapped_pc, boundary[0], payload))
+        frames.append(
+            self._pc_frame(frames, entry.trapped_pc, boundary[0], payload)
+        )
         if is_nested:
             nested_entry = TrapEntry(h.stvec_val, s_trapped_pc, s_prev_mode)
             self._add_prev_mode_frame(frames, nested_entry, visited, offsets)
@@ -395,8 +421,8 @@ class StackWalkOps(SharedAttrs):
         prev_mode = h.spp
         if prev_mode == RiscvMode.U and trapped_pc >= (1 << 63):
             prev_mode = RiscvMode.S
-        # 检测残留 sepc: 从 M 模式经 mret 进入 S 模式后 SPP=U 且 sepc 为残留 RAM 地址,
-        # 或 Sv39 启用时 sepc 落在 RAM 物理地址范围, 即非规范虚拟地址.
+        # 检测残留 sepc: 从 M 模式经 mret 进入 S 模式后 SPP=U 且 sepc 为残留
+        # RAM 地址, 或 Sv39 启用时 sepc 落在 RAM 物理地址范围, 即非规范虚拟地址.
         # 仅当 Sv39 启用或 trapped_pc 高于 RAM 窗口时才认为无效,
         # Bare 翻译下 U 模式的虚拟地址即 RAM 物理地址, 属合法 trap 现场.
         # 直接从 satp CSR 读 MODE 字段, 避免依赖缓存 _mmu_mode.
@@ -419,9 +445,16 @@ class StackWalkOps(SharedAttrs):
         return "trap 入口寄存器保存布局无法解析 (仅 PC)"
 
     @staticmethod
-    def _pc_frame(frames: list[StackFrame], pc: int, mode: str, note: str) -> StackFrame:
+    def _pc_frame(
+        frames: list[StackFrame],
+        pc: int,
+        mode: str,
+        note: str,
+    ) -> StackFrame:
         """构造只含 PC 的边界帧."""
-        return StackFrame(idx=len(frames), fp=0, sp=0, ra=0, pc=pc, note=note, mode=mode)
+        return StackFrame(
+            idx=len(frames), fp=0, sp=0, ra=0, pc=pc, note=note, mode=mode
+        )
 
     def _add_prev_mode_frame(
         self,
@@ -438,21 +471,29 @@ class StackWalkOps(SharedAttrs):
         if trapped_pc == 0 or tvec == 0:
             return
         prev_name = entry.prev_mode.name
-        boundary_mode, boundary_note = self._resolve_boundary_frame(trapped_pc, prev_name)
+        boundary_mode, boundary_note = self._resolve_boundary_frame(
+            trapped_pc, prev_name
+        )
         if offsets is None:
             offsets = self._parse_trap_save_offsets(tvec)
         if offsets is None:
             note = boundary_note or "trap 入口寄存器保存布局无法解析 (仅 PC)"
-            frames.append(self._pc_frame(frames, trapped_pc, boundary_mode, note))
+            frames.append(
+                self._pc_frame(frames, trapped_pc, boundary_mode, note)
+            )
             return
         search_base = self._frame_search_base(frames)
         if search_base == 0:
             note = "仅获知trap现场PC，缺少栈帧回溯参考"
-            frames.append(self._pc_frame(frames, trapped_pc, boundary_mode, note))
+            frames.append(
+                self._pc_frame(frames, trapped_pc, boundary_mode, note)
+            )
             return
         ra_off, fp_off = offsets
         trap_sp = self._find_trap_sp(search_base, trapped_pc, ra_off)
-        saved_ra, saved_fp, saved_sp = self._load_trap_saved_regs(trap_sp, ra_off, fp_off)
+        saved_ra, saved_fp, saved_sp = self._load_trap_saved_regs(
+            trap_sp, ra_off, fp_off
+        )
         note = boundary_note
         if saved_fp is None and saved_sp is None and saved_ra is None:
             note = "仅 trap PC"
@@ -478,7 +519,12 @@ class StackWalkOps(SharedAttrs):
         last_sp = frames[-1].sp if frames else 0
         return min(last_fp or last_sp, last_sp or last_fp) & ~0x7
 
-    def _find_trap_sp(self, search_base: int, trapped_pc: int, ra_off: int) -> int | None:
+    def _find_trap_sp(
+        self,
+        search_base: int,
+        trapped_pc: int,
+        ra_off: int,
+    ) -> int | None:
         """在 search_base 起的 4096 字节内寻找保存了 trapped_pc 的 trap 帧."""
         raw = self._emu.bus.try_read(search_base, 4096)
         if raw is None:
@@ -585,7 +631,9 @@ class StackWalkOps(SharedAttrs):
             return
         # 全部 fallback 失败: 添加仅 PC 帧
         note = boundary[1] or "trap 入口寄存器保存布局无法解析 (仅 PC)"
-        frames.append(self._pc_frame(frames, entry.trapped_pc, boundary[0], note))
+        frames.append(
+            self._pc_frame(frames, entry.trapped_pc, boundary[0], note)
+        )
 
     # ----------------------------------------------------------
     #  帧标注
@@ -620,7 +668,9 @@ class StackWalkOps(SharedAttrs):
         if arg:
             n = int(arg, 0)
             if not (0 <= n < len(self._stack_frames)):
-                self._err(f"帧号 {n} 超出范围 [0, {len(self._stack_frames) - 1}]")
+                self._err(
+                    f"帧号 {n} 超出范围 [0, {len(self._stack_frames) - 1}]"
+                )
                 return
             self._current_frame_idx = n
 
@@ -668,11 +718,13 @@ class StackWalkOps(SharedAttrs):
         stack_data = self._try_read_va(cur.sp, 64)
         if stack_data is None:
             self._console.print(
-                f"[dim]帧 #{self._current_frame_idx + 1:02d} sp={hex_addr(cur.sp)} — "
+                f"[dim]帧 #{self._current_frame_idx + 1:02d} "
+                f"sp={hex_addr(cur.sp)} — "
                 "栈内存不可读 (翻译失败或 PA 读失败)[/]"
             )
             return
         self._console.print(
             f"[dim]帧 #{self._current_frame_idx + 1:02d} "
-            f"sp={hex_addr(cur.sp)} 栈内存:[/]\n" + dye_hexdump(stack_data, cur.sp)
+            f"sp={hex_addr(cur.sp)} 栈内存:[/]\n"
+            + dye_hexdump(stack_data, cur.sp)
         )

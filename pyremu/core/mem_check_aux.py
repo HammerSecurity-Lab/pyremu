@@ -13,7 +13,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from pyremu.core.priv_defs import MSTATUS_MXR, MSTATUS_SUM, RiscvMode
+from pyremu.core.priv_defs import (
+    MSTATUS_MXR,
+    MSTATUS_SUM,
+    MSTATUS_TVM,
+    RiscvMode,
+)
 from pyremu.core.registers import check_csr_access, CsrAccessError
 from pyremu.core.trap_def import TrapType
 from pyremu.core.trap_handler import TrapOps
@@ -49,12 +54,6 @@ class MemoryAccessError(Exception):
     pass
 
 
-class AlignmentError(MemoryAccessError):
-    """非对齐访存 (LdAddrMisaligned / StAddrMisaligned)."""
-
-    pass
-
-
 class PageFaultError(MemoryAccessError):
     """页表翻译失败 (LdPageFault / StPageFault)."""
 
@@ -73,9 +72,7 @@ class _PageWalkDeniedError(Exception):
     """
 
 
-# ============================================================
 #  PMP CSR 地址范围验证
-# ============================================================
 
 
 def _pmp_csr_valid(csr_addr: int, max_entries: int) -> bool:
@@ -91,9 +88,7 @@ def _pmp_csr_valid(csr_addr: int, max_entries: int) -> bool:
     return True  # 非 PMP CSR
 
 
-# ============================================================
 #  CSR 访问校验
-# ============================================================
 
 
 _COUNTER_LOW_BASE, _COUNTER_LOW_LAST = 0xC00, 0xC1F
@@ -113,9 +108,7 @@ def _counter_enable_mask(csr_addr: int) -> int | None:
     return None
 
 
-# ============================================================
 #  地址翻译 (VA -> PA, 经 TLB 缓存)
-# ============================================================
 
 
 def _check_pte_perm(
@@ -182,7 +175,8 @@ class MemoryAccessOps(TrapOps):
             allowed = bool(self.csrs["mcounteren"].val & bit)
         elif self.mode is RiscvMode.U:
             allowed = bool(
-                (self.csrs["mcounteren"].val & bit) and (self.csrs["scounteren"].val & bit)
+                (self.csrs["mcounteren"].val & bit)
+                and (self.csrs["scounteren"].val & bit)
             )
         else:
             return
@@ -217,6 +211,14 @@ class MemoryAccessOps(TrapOps):
         if (csr_addr & 0xFFF) in _SSTC_CSR_ADDRS and not has_sstc:
             raise CsrAccessError(csr_addr, "sstc not declared")
 
+        # mstatus.TVM=1 时 S 模式访问 satp 触发非法指令
+        if (
+            (csr_addr & 0xFFF) == 0x180
+            and self.mode == RiscvMode.S
+            and self.mstatus_val & MSTATUS_TVM
+        ):
+            raise CsrAccessError(csr_addr, "tvm")
+
         # 特权级与只读检查
         check_csr_access(csr_addr, self.mode.value, is_write)
 
@@ -247,8 +249,8 @@ class MemoryAccessOps(TrapOps):
         """构造页表遍历使用的物理读回调, 每次读取先经 PMP 检查.
 
         hart 隐式读取页表页与显式访存受同一组 PMP 条目约束, 权限一律按读取判定,
-        特权级与 mstatus 取本次遍历发生时的取值. 被拒绝时抛出 _PageWalkDeniedError,
-        由调用方按原访问的类型投递访问故障.
+        特权级与 mstatus 取本次遍历发生时的取值. 被拒绝时抛出
+        _PageWalkDeniedError, 由调用方按原访问的类型投递访问故障.
         """
 
         def read(pa: int, size: int) -> bytes:
@@ -267,6 +269,31 @@ class MemoryAccessOps(TrapOps):
 
         return read
 
+    def _page_walk_writer(self) -> Callable[[int, bytes], None]:
+        """构造页表遍历置位 A 位与 D 位使用的物理写回调, 每次写入先经 PMP 检查.
+
+        置位 A 位与 D 位是 hart 在遍历期间对页表页发起的物理写入, 与遍历读取受同
+        一组 PMP 条目约束, 权限按写入判定. 被拒绝时抛出 _PageWalkDeniedError,
+        由调用方按原访问的类型投递访问故障.
+        """
+
+        def write(pa: int, data: bytes) -> None:
+            if not self._pmp.check(
+                PmpAccessInfo(
+                    pa=mask64(pa),
+                    size=len(data),
+                    mode_val=self.mode.value,
+                    mstatus_val=self.mstatus_val,
+                    is_write=True,
+                    pmpsplit=self.pmpsplit_val,
+                    mdid=self.mdid_val,
+                )
+            ):
+                raise _PageWalkDeniedError
+            self.mem_write_phy(pa, data)
+
+        return write
+
     def _deliver_page_walk_fault(
         self,
         va: int,
@@ -276,8 +303,8 @@ class MemoryAccessOps(TrapOps):
     ) -> None:
         """按原访问的类型投递访问故障, tval 取原访问的虚拟地址.
 
-        页表遍历被 PMP 拒绝时, 规范规定故障的类型与 tval 取自原访问, 而不是被拒绝的
-        页表页的物理地址: 取指为 InstrAccessFault, 读取为 LdAccessFault,
+        页表遍历被 PMP 拒绝时, 规范规定故障的类型与 tval 取自原访问, 而不是
+        被拒绝的页表页的物理地址: 取指为 InstrAccessFault, 读取为 LdAccessFault,
         写入为 StAccessFault.
         """
         if is_execute:
@@ -306,7 +333,11 @@ class MemoryAccessOps(TrapOps):
         if not hit:
             return None
         if not _check_pte_perm(
-            eff_mode, perm, self.mstatus_val, is_write=is_write, is_execute=is_execute
+            eff_mode,
+            perm,
+            self.mstatus_val,
+            is_write=is_write,
+            is_execute=is_execute,
         ):
             return False, 0
         offset = va & (PAGE_SIZE - 1)
@@ -322,20 +353,32 @@ class MemoryAccessOps(TrapOps):
     ) -> tuple[bool, int]:
         """dtlb 未命中时遍历页表, 并按翻译结果决定是否插入 TLB.
 
-        页表页被 PMP 拒绝时按原访问的类型投递访问故障, 并抛出 AccessFaultError 供调用方
-        结束本次访存.
+        页表页被 PMP 拒绝时按原访问的类型投递访问故障, 并抛出 AccessFaultError
+        供调用方结束本次访存.
         """
         eff_mode = self._effective_mode()
         if eff_mode is None:
             return False, 0
 
         try:
-            ok, pa, perm = translate_va(va, self.satp_val, reader)
+            ok, pa, perm = translate_va(
+                va,
+                self.satp_val,
+                reader,
+                self._page_walk_writer(),
+                is_write=is_write,
+            )
         except _PageWalkDeniedError:
-            self._deliver_page_walk_fault(va, is_write=is_write, is_execute=is_execute)
+            self._deliver_page_walk_fault(
+                va, is_write=is_write, is_execute=is_execute
+            )
             raise AccessFaultError
         if not ok or not _check_pte_perm(
-            eff_mode, perm, self.mstatus_val, is_write=is_write, is_execute=is_execute
+            eff_mode,
+            perm,
+            self.mstatus_val,
+            is_write=is_write,
+            is_execute=is_execute,
         ):
             return False, 0
 
@@ -344,8 +387,8 @@ class MemoryAccessOps(TrapOps):
         if self._is_device_addr(pa):
             return True, pa
 
-        # 将翻译结果插入 TLB 缓存 (存真实 PTE 权限, 命中路径方可复用 _check_pte_perm;
-        # 标记当前 hart 的 mdid, 供 mfence.did 按域刷新)
+        # 将翻译结果插入 TLB 缓存, 存真实 PTE 权限, 命中路径方可复用
+        # _check_pte_perm; 标记当前 hart 的 mdid, 供 mfence.did 按域刷新
         tlb: TLB = self.dtlb
         tlb.insert(
             va >> 12,
@@ -373,11 +416,13 @@ class MemoryAccessOps(TrapOps):
         MMIO 设备地址 (经 Bus.is_device_addr 判断) 不会插入 TLB,
         因为设备寄存器读写可能有副作用, 不能被缓存.
 
-        参数 is_hart_access 为假时表示调用方是调试器的只读查询: 此时只做地址换算,
-        遍历的隐式读取不做 PMP 检查, 不投递陷阱, 不查 TLB, 也不判定页权限位.
+        参数 is_hart_access 为假时表示调用方是调试器的只读查询: 此时只做地址
+        换算, 遍历的隐式读取不做 PMP 检查, 不投递陷阱, 不查 TLB, 也不判定页权限
+        位.
 
         Returns:
-            (success, pa) — success=False 表示翻译失败或权限检查失败 (调用方投递 trap).
+            (success, pa) — success=False 表示翻译失败或权限检查失败
+            (调用方投递 trap).
         """
         if self.mmu_mode == SATP_MODE_BARE:
             return True, mask64(va)
@@ -399,7 +444,10 @@ class MemoryAccessOps(TrapOps):
             return hit_result
 
         return self._translate_page_walk(
-            va, self._page_walk_reader(), is_write=is_write, is_execute=is_execute
+            va,
+            self._page_walk_reader(),
+            is_write=is_write,
+            is_execute=is_execute,
         )
 
     def _translate_for_debug(
@@ -413,7 +461,8 @@ class MemoryAccessOps(TrapOps):
         换算得出物理地址.
 
         Returns:
-            (success, pa) — success=False 表示页表项无效或未挂载物理内存读取回调.
+            (success, pa) — success=False 表示页表项无效或未挂载物理内存
+            读取回调.
         """
         if self.mem_read_phy is None:
             return False, 0
@@ -422,9 +471,7 @@ class MemoryAccessOps(TrapOps):
             return False, 0
         return True, mask64(pa)
 
-    # ============================================================
     #  虚拟内存读写
-    # ============================================================
 
     def _is_device_addr(
         self,
@@ -436,14 +483,16 @@ class MemoryAccessOps(TrapOps):
     def _is_bus_access_denied(
         self,
         pa: int,
+        size: int,
         is_write: bool,
     ) -> bool:
-        """总线拒绝该物理地址: 不属于任何窗口, 或写入引导只读存储器.
+        """总线拒绝该物理地址: 区间越过窗口边界, 或写入引导只读存储器.
 
         引导只读存储器接受读取, 拒绝写入.
         """
         return self._bus is not None and (
-            not self._bus.is_valid_addr(pa) or (is_write and self._bus.is_rom_addr(pa))
+            not self._bus.pma_check(pa, size)
+            or (is_write and self._bus.is_rom_addr(pa))
         )
 
     def _translate_cross_page(
@@ -456,21 +505,29 @@ class MemoryAccessOps(TrapOps):
         """跨页访问: 将 [addr, addr+size) 拆为两页并逐页翻译 + PMP + PMA 检查.
 
         供 mem_read / mem_write 共用 (二者仅 is_write 与陷态类型不同)。
-        任一页翻译失败投递 Ld/StPageFault, PMP/PMA 拒绝投递 Ld/StAccessFault 并抛异常。
+        任一页翻译失败投递 Ld/StPageFault, PMP/PMA 拒绝投递 Ld/StAccessFault 并
+        抛异常。
 
         Returns:
             [(pa1, size1), (pa2, size2)] 供调用方拼接读取或分段写入.
         """
         page_fault = TrapType.StPageFault if is_write else TrapType.LdPageFault
-        access_fault = TrapType.StAccessFault if is_write else TrapType.LdAccessFault
+        access_fault = (
+            TrapType.StAccessFault if is_write else TrapType.LdAccessFault
+        )
 
         page_end = (addr & ~0xFFF) + 0x1000
         first_size = page_end - addr
         second_size = size - first_size
 
         chunks: list[tuple[int, int]] = []
-        for va, chunk_size in ((addr, first_size), (addr + first_size, second_size)):
-            ok, pa = self.translate_addr(va, is_write=is_write, is_execute=False)
+        for va, chunk_size in (
+            (addr, first_size),
+            (addr + first_size, second_size),
+        ):
+            ok, pa = self.translate_addr(
+                va, is_write=is_write, is_execute=False
+            )
             if not ok:
                 self.deliver_trap(page_fault, tval=va, is_interrupt=False)
                 raise PageFaultError
@@ -487,7 +544,7 @@ class MemoryAccessOps(TrapOps):
             ):
                 self.deliver_trap(access_fault, tval=addr, is_interrupt=False)
                 raise AccessFaultError
-            if self._is_bus_access_denied(pa, is_write):
+            if self._is_bus_access_denied(pa, chunk_size, is_write):
                 self.deliver_trap(access_fault, tval=addr, is_interrupt=False)
                 raise AccessFaultError
             chunks.append((pa, chunk_size))
@@ -500,39 +557,40 @@ class MemoryAccessOps(TrapOps):
     ) -> bytes:
         """从虚拟地址 *addr* 读取 *size* 字节.
 
-        经过路径: 对齐检查 -> VA->PA (TLB/页表) -> PMP -> PMA -> 物理内存后端.
+        经过路径: VA->PA (TLB/页表) -> PMP -> PMA -> 物理内存后端.
+        未对齐的访问由物理内存后端按字节访问完成, 不投递陷态.
 
         可能触发的陷态:
-        - LdAddrMisaligned: 地址未对齐
         - LdPageFault: 页表翻译失败
         - LdAccessFault: PMP 拒绝 或 PMA 违例
         """
         if self.mem_read_phy is None:
             raise NotImplementedError(
-                f"Memory read @ {addr:#018x} ({size} B): no memory backend attached"
+                f"Memory read @ {addr:#018x} ({size} B): "
+                f"no memory backend attached"
             )
-
-        # 对齐检查 (RISC-V Privileged Spec §3.6.1)
-        if size > 1 and (addr & (size - 1)) != 0:
-            self.deliver_trap(TrapType.LdAddrMisaligned, tval=addr, is_interrupt=False)
-            raise AlignmentError
 
         # 跨页边界检查: M/D 模式与 Bare 模式下 VA==PA, 无需拆分.
         # 仅 S/U 模式且 MMU 使能时 VA->PA 映射可能不连续.
         _mmu_active = (
-            self.mode not in (RiscvMode.M, RiscvMode.D) and self.mmu_mode != SATP_MODE_BARE
+            self.mode not in (RiscvMode.M, RiscvMode.D)
+            and self.mmu_mode != SATP_MODE_BARE
         )
         page_end = (addr & ~0xFFF) + 0x1000
         if _mmu_active and size > 1 and addr + size > page_end:
             (pa1, first_size), (pa2, second_size) = self._translate_cross_page(
                 addr, size, is_write=False
             )
-            return self.mem_read_phy(pa1, first_size) + self.mem_read_phy(pa2, second_size)
+            return self.mem_read_phy(pa1, first_size) + self.mem_read_phy(
+                pa2, second_size
+            )
 
         # 单页快速路径
         ok, pa = self.translate_addr(addr, is_write=False, is_execute=False)
         if not ok:
-            self.deliver_trap(TrapType.LdPageFault, tval=addr, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.LdPageFault, tval=addr, is_interrupt=False
+            )
             raise PageFaultError
 
         # PMP 检查 — 物理内存保护 (对 M 模式且 MPRV=0 自动放行)
@@ -547,12 +605,16 @@ class MemoryAccessOps(TrapOps):
                 mdid=self.mdid_val,
             )
         ):
-            self.deliver_trap(TrapType.LdAccessFault, tval=addr, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.LdAccessFault, tval=addr, is_interrupt=False
+            )
             raise AccessFaultError
 
         # PMA 检查 — 物理地址必须落在有效区域 (RAM 或已注册设备)
-        if self._is_bus_access_denied(pa, is_write=False):
-            self.deliver_trap(TrapType.LdAccessFault, tval=addr, is_interrupt=False)
+        if self._is_bus_access_denied(pa, size, is_write=False):
+            self.deliver_trap(
+                TrapType.LdAccessFault, tval=addr, is_interrupt=False
+            )
             raise AccessFaultError
 
         return self.mem_read_phy(pa, size)
@@ -564,28 +626,25 @@ class MemoryAccessOps(TrapOps):
     ) -> None:
         """向虚拟地址 *addr* 写入 *data*.
 
-        经过路径: 对齐检查 -> VA->PA (TLB/页表) -> PMP -> PMA -> 物理内存后端.
+        经过路径: VA->PA (TLB/页表) -> PMP -> PMA -> 物理内存后端.
+        未对齐的访问由物理内存后端按字节访问完成, 不投递陷态.
 
         可能触发的陷态:
-        - StAddrMisaligned: 地址未对齐
         - StPageFault: 页表翻译失败
         - StAccessFault: PMP 拒绝 或 PMA 违例
         """
         if self.mem_write_phy is None:
             raise NotImplementedError(
-                f"Memory write @ {addr:#018x} ({len(data)} B): no memory backend attached"
+                f"Memory write @ {addr:#018x} ({len(data)} B): "
+                f"no memory backend attached"
             )
 
         size = len(data)
 
-        # 对齐检查
-        if size > 1 and (addr & (size - 1)) != 0:
-            self.deliver_trap(TrapType.StAddrMisaligned, tval=addr, is_interrupt=False)
-            raise AlignmentError
-
         # 跨页边界检查: M/D 模式与 Bare 模式下无需拆分.
         _mmu_active = (
-            self.mode not in (RiscvMode.M, RiscvMode.D) and self.mmu_mode != SATP_MODE_BARE
+            self.mode not in (RiscvMode.M, RiscvMode.D)
+            and self.mmu_mode != SATP_MODE_BARE
         )
         page_end = (addr & ~0xFFF) + 0x1000
         if _mmu_active and size > 1 and addr + size > page_end:
@@ -600,7 +659,9 @@ class MemoryAccessOps(TrapOps):
         # 单页快速路径
         ok, pa = self.translate_addr(addr, is_write=True, is_execute=False)
         if not ok:
-            self.deliver_trap(TrapType.StPageFault, tval=addr, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.StPageFault, tval=addr, is_interrupt=False
+            )
             raise PageFaultError
 
         # PMP 检查
@@ -615,24 +676,26 @@ class MemoryAccessOps(TrapOps):
                 mdid=self.mdid_val,
             )
         ):
-            self.deliver_trap(TrapType.StAccessFault, tval=addr, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.StAccessFault, tval=addr, is_interrupt=False
+            )
             raise AccessFaultError
 
         # PMA 检查
-        if self._is_bus_access_denied(pa, is_write=True):
-            self.deliver_trap(TrapType.StAccessFault, tval=addr, is_interrupt=False)
+        if self._is_bus_access_denied(pa, size, is_write=True):
+            self.deliver_trap(
+                TrapType.StAccessFault, tval=addr, is_interrupt=False
+            )
             raise AccessFaultError
 
-        # RISC-V spec §8.2: any store by any hart invalidates all LR reservations
-        # on that hart.  Without this, an LR in Python mode followed by a store
-        # (to any address) would leave the reservation intact, allowing a subsequent
-        # SC to succeed when it should fail.
+        # RISC-V spec §8.2: any store by any hart invalidates all LR
+        # reservations on that hart.  Without this, an LR in Python mode
+        # followed by a store (to any address) would leave the reservation
+        # intact, allowing a subsequent SC to succeed when it should fail.
         self.clear_reservation()
         self.mem_write_phy(pa, data)
 
-    # ============================================================
     #  取指地址翻译 (VA -> PA via itlb -> page walk)
-    # ============================================================
 
     def _translate_instruction_addr(
         self,
@@ -649,7 +712,11 @@ class MemoryAccessOps(TrapOps):
             (ok, pa, perm) — perm 供调用方做 SUM 权限检查.
         """
         vpn = va >> 12
-        _asid = mask16(self.satp_val >> 44) if self.mmu_mode != SATP_MODE_BARE else 0
+        _asid = (
+            mask16(self.satp_val >> 44)
+            if self.mmu_mode != SATP_MODE_BARE
+            else 0
+        )
         hit, ppn, perm = tlb.lookup(vpn, asid=_asid)
         if hit:
             offset = va & (PAGE_SIZE - 1)
@@ -658,17 +725,23 @@ class MemoryAccessOps(TrapOps):
 
         # itlb miss — 执行页表遍历
         if self.mem_read_phy is None:
-            self.deliver_trap(TrapType.InstrPageFault, tval=va, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.InstrPageFault, tval=va, is_interrupt=False
+            )
             return False, 0, 0
 
         satp = self.satp_val
         try:
-            ok, pa, perm = translate_va(va, satp, self._page_walk_reader())
+            ok, pa, perm = translate_va(
+                va, satp, self._page_walk_reader(), self._page_walk_writer()
+            )
         except _PageWalkDeniedError:
             self._deliver_page_walk_fault(va, is_write=False, is_execute=True)
             return False, 0, 0
         if not ok:
-            self.deliver_trap(TrapType.InstrPageFault, tval=va, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.InstrPageFault, tval=va, is_interrupt=False
+            )
             return False, 0, 0
 
         # 将翻译结果插入 itlb (标记当前 mdid, 供 mfence.did 按域刷新)
@@ -676,12 +749,17 @@ class MemoryAccessOps(TrapOps):
         new_ppn = pa >> 12
         # 跳过 MMIO 地址的缓存 (与 dtlb 策略一致)
         if not self._is_device_addr(pa):
-            tlb.insert(new_vpn, new_ppn, perm=perm, level=0, mdid=self.mdid_val, asid=_asid)
+            tlb.insert(
+                new_vpn,
+                new_ppn,
+                perm=perm,
+                level=0,
+                mdid=self.mdid_val,
+                asid=_asid,
+            )
         return True, pa, perm
 
-    # ============================================================
     #  取指校验 (VA -> PA via itlb -> PMP execute check)
-    # ============================================================
 
     def check_instruction_fetch(
         self,
@@ -689,7 +767,8 @@ class MemoryAccessOps(TrapOps):
     ) -> tuple[bool, int]:
         """校验从虚拟地址 *va* 取指的合法性, 返回 (ok, pa).
 
-        路径: VA -> PA (itlb 或页表遍历) -> PTE X/U 权限检查 -> PMP (is_execute=True).
+        路径: VA -> PA (itlb 或页表遍历) -> PTE X/U 权限检查 -> PMP
+        (is_execute=True).
 
         可能触发的陷态:
         - InstrPageFault: 页表翻译失败, 或 PTE.X=0, 或 S 模式取指于 U 页
@@ -698,7 +777,8 @@ class MemoryAccessOps(TrapOps):
         调用方在 ok=True 时使用返回的 pa 读取指令字节.
         """
         mode = self.mmu_mode
-        # RISC-V 规范: M 模式取指始终走物理地址 (MPRV 不影响取指); D 模式同 M 绕过 MMU.
+        # RISC-V 规范: M 模式取指始终走物理地址 (MPRV 不影响取指); D 模式同 M
+        # 绕过 MMU.
         if mode == SATP_MODE_BARE or self.mode in (RiscvMode.M, RiscvMode.D):
             pa = mask64(va)
         else:
@@ -706,17 +786,25 @@ class MemoryAccessOps(TrapOps):
             if not ok:
                 return False, 0
             # PTE 权限: 取指要求 X=1; S 模式不得从 U=1 页取指
-            # (RISC-V §4.3.2 基础规则, 与 SUM 无关 — 见 _check_pte_perm 的 is_execute 分支).
+            # RISC-V §4.3.2 基础规则, 与 SUM 无关 — 见 _check_pte_perm 的
+            # is_execute 分支.
             if not _check_pte_perm(
-                self.mode.value, perm, self.mstatus_val, is_write=False, is_execute=True
+                self.mode.value,
+                perm,
+                self.mstatus_val,
+                is_write=False,
+                is_execute=True,
             ):
-                self.deliver_trap(TrapType.InstrPageFault, tval=va, is_interrupt=False)
+                self.deliver_trap(
+                    TrapType.InstrPageFault, tval=va, is_interrupt=False
+                )
                 return False, 0
 
         # PMP 检查 — 所有模式均需通过, is_execute=True
         # RISC-V spec §3.1.6.3: 取指无视 MPRV, 始终用当前特权级.
         # 清除 MPRV 位确保 M 模式取指绕过 PMP (无需关心 MPP).
-        _fetch_mstatus = self.mstatus_val & ~(1 << 17)  # MPRV=0 for instruction fetch
+        # MPRV=0 for instruction fetch
+        _fetch_mstatus = self.mstatus_val & ~(1 << 17)
         if not self._pmp.check(
             PmpAccessInfo(
                 pa=pa,
@@ -728,12 +816,16 @@ class MemoryAccessOps(TrapOps):
                 mdid=self.mdid_val,
             )
         ):
-            self.deliver_trap(TrapType.InstrAccessFault, tval=va, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.InstrAccessFault, tval=va, is_interrupt=False
+            )
             return False, 0
 
-        # PMA 检查
-        if self._is_bus_access_denied(pa, is_write=False):
-            self.deliver_trap(TrapType.InstrAccessFault, tval=va, is_interrupt=False)
+        # PMA 检查 — 取指按 32 位指令的宽度要求整个区间落在同一窗口内
+        if self._is_bus_access_denied(pa, 4, is_write=False):
+            self.deliver_trap(
+                TrapType.InstrAccessFault, tval=va, is_interrupt=False
+            )
             return False, 0
 
         return True, pa

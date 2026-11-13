@@ -22,9 +22,8 @@ from pyremu._native import (
 )
 from pyremu.utils.mask import mask64
 
-# ============================================================
 #  地址翻译模式
-# ============================================================
+
 
 MemAccessMode = Enum(
     "MemAccessMode",
@@ -40,9 +39,8 @@ PAGE_SHIFT = 12
 PAGE_SIZE = 1 << PAGE_SHIFT  # 4 KiB
 
 
-# ============================================================
 #  PTE — 页表项 (64-bit)
-# ============================================================
+
 # Sv39/Sv48 PTE 布局 (bits):
 #   [0]     V    — 有效位
 #   [1]     R    — 可读
@@ -224,7 +222,9 @@ class PTE:
 
     # -- 权限检查辅助 --
 
-    def check_perm(self, want_r: bool, want_w: bool, want_x: bool, is_user: bool) -> bool:
+    def check_perm(
+        self, want_r: bool, want_w: bool, want_x: bool, is_user: bool
+    ) -> bool:
         """检查 PTE 是否满足所需的访问权限.
 
         规则:
@@ -248,9 +248,8 @@ class PTE:
         return True
 
 
-# ============================================================
 #  VPN 分解 (Sv39 / Sv48)
-# ============================================================
+
 # Sv39: VA[38:12] 共 27 位, 依次给出 vpn[2]、vpn[1]、vpn[0], 各 9 位,
 #       分别取自 VA[38:30]、VA[29:21]、VA[20:12].
 # Sv48: VA[47:12] 共 36 位, 依次给出 vpn[3] 至 vpn[0], 各 9 位,
@@ -283,9 +282,8 @@ def _sv48_vpn(va: int) -> tuple:
     return vpn3, vpn2, vpn1, vpn0
 
 
-# ============================================================
 #  Sv39 页表遍历
-# ============================================================
+
 # 根页表物理基址 = satp.PPN << PAGE_SHIFT (4 KiB 对齐)
 # 每一级页表有 512 个 8 字节 PTE
 # 索引 = 对应级的 VPN, PTE 地址 = base + vpn * 8
@@ -296,13 +294,44 @@ def _read_pte(pa: int, mem_read_phy: Callable[[int, int], bytes]) -> int:
     return int.from_bytes(mem_read_phy(pa, 8), "little", signed=False)
 
 
-def sv39_walk(root_ppn: int, va: int, mem_read_phy: Callable[[int, int], bytes]) -> tuple:
+def _mark_accessed(
+    mem_write_phy: Callable[[int, bytes], None] | None,
+    pte_addr: int,
+    raw: int,
+    *,
+    is_write: bool = False,
+) -> int:
+    """置位页表项的 A 位, 写访问另置位 D 位, 返回更新后的页表项.
+
+    mem_write_phy 为 None 时只读取不写入, 供调试器的只读查询使用.
+    """
+    if mem_write_phy is None or not (raw & PTE_V):
+        return raw
+    new_raw = raw | PTE_A
+    if is_write:
+        new_raw |= PTE_D
+    if new_raw == raw:
+        return raw
+    mem_write_phy(pte_addr, new_raw.to_bytes(8, "little"))
+    return new_raw
+
+
+def sv39_walk(
+    root_ppn: int,
+    va: int,
+    mem_read_phy: Callable[[int, int], bytes],
+    mem_write_phy: Callable[[int, bytes], None] | None = None,
+    *,
+    is_write: bool = False,
+) -> tuple:
     """Sv39 三级页表遍历.
 
     Args:
         root_ppn: satp.PPN 字段 (根页表物理页号).
         va: 39 位虚拟地址.
         mem_read_phy: 物理内存读取回调, 签名 (addr: int, size: int) -> bytes.
+        mem_write_phy: 物理内存写入回调, 用于置位 A 位与 D 位; 取 None 时不写入.
+        is_write: 本次访问是否为写访问. 为真时在叶子页表项上置位 D 位.
 
     Returns:
         (success: bool, ppn: int, perm_flags: int, page_size: int)
@@ -311,28 +340,53 @@ def sv39_walk(root_ppn: int, va: int, mem_read_phy: Callable[[int, int], bytes])
 
     # 一级页表: 基址 = root_ppn << PAGE_SHIFT, 索引 vpn[2]
     table_addr = mask64(root_ppn << PAGE_SHIFT)
-    raw = _read_pte(table_addr + vpn[0] * 8, mem_read_phy)
+    pte_addr = table_addr + vpn[0] * 8
+    raw = _read_pte(pte_addr, mem_read_phy)
+    leaf = _level1_leaf(raw, va)
+    if leaf is not None:
+        _mark_accessed(mem_write_phy, pte_addr, raw, is_write=is_write)
+        return True, leaf[0], leaf[1], 1 << 30
     l1_ppn = _level1_next_ppn(raw)
     if l1_ppn is None:
         return False, 0, 0, 0
+    _mark_accessed(mem_write_phy, pte_addr, raw)
 
     # 二级页表
     table_addr = mask64(l1_ppn << PAGE_SHIFT)
-    raw = _read_pte(table_addr + vpn[1] * 8, mem_read_phy)
+    pte_addr = table_addr + vpn[1] * 8
+    raw = _read_pte(pte_addr, mem_read_phy)
     leaf = _level2_leaf(raw, va)
     if leaf is not None:
+        _mark_accessed(mem_write_phy, pte_addr, raw, is_write=is_write)
         return True, leaf[0], leaf[1], 2 * 1024 * 1024
     l2_ppn = _level2_next_ppn(raw)
     if l2_ppn is None:
         return False, 0, 0, 0
+    _mark_accessed(mem_write_phy, pte_addr, raw)
 
     # 三级页表 (4 KiB 普通页)
     table_addr = mask64(l2_ppn << PAGE_SHIFT)
-    raw = _read_pte(table_addr + vpn[2] * 8, mem_read_phy)
+    pte_addr = table_addr + vpn[2] * 8
+    raw = _read_pte(pte_addr, mem_read_phy)
     leaf = _level3_leaf(raw)
     if leaf is None:
         return False, 0, 0, 0
+    _mark_accessed(mem_write_phy, pte_addr, raw, is_write=is_write)
     return True, leaf[0], leaf[1], PAGE_SIZE
+
+
+def _level1_leaf(raw: int, va: int) -> tuple[int, int] | None:
+    """返回根页表中 1 GiB 叶子项的 (PPN, 权限位); 该项不是叶子项时返回 None."""
+    if _NATIVE_MMU:
+        l1 = pte_parse(raw)
+        if not (l1.v and l1.is_leaf):
+            return None
+        return pte_assemble_pa(l1.ppn, va, level=2) >> 12, l1.perm
+    pte = PTE.from_int(raw)
+    if not (pte.v and (pte.r or pte.x)):
+        return None
+    ppn = (pte.ppn & 0xFFFF_FFFF_FFFC_0000) | ((va >> 12) & 0x3FFFF)
+    return ppn, _pte_perm_flags(pte)
 
 
 def _level1_next_ppn(raw: int) -> int | None:
@@ -345,7 +399,9 @@ def _level1_next_ppn(raw: int) -> int | None:
 
 
 def _level2_leaf(raw: int, va: int) -> tuple[int, int] | None:
-    """返回二级页表中 2 MiB 叶子项的 (PPN, 权限位); 该项不是叶子项时返回 None."""
+    """返回二级页表中 2 MiB 叶子项的 (PPN, 权限位); 该项不是叶子项时
+    返回 None.
+    """
     if _NATIVE_MMU:
         l2 = pte_parse(raw)
         if not (l2.v and l2.is_leaf):
@@ -367,7 +423,9 @@ def _level2_next_ppn(raw: int) -> int | None:
 
 
 def _level3_leaf(raw: int) -> tuple[int, int] | None:
-    """返回三级页表中 4 KiB 叶子项的 (PPN, 权限位); 该项不是叶子项时返回 None."""
+    """返回三级页表中 4 KiB 叶子项的 (PPN, 权限位); 该项不是叶子项时
+    返回 None.
+    """
     if _NATIVE_MMU:
         l3 = pte_parse(raw)
         if not (l3.v and l3.is_leaf):
@@ -384,12 +442,17 @@ def _pte_perm_flags(pte: PTE) -> int:
     return pte.raw & (PTE_R | PTE_W | PTE_X | PTE_U)
 
 
-# ============================================================
 #  通用地址翻译入口
-# ============================================================
 
 
-def translate_va(va: int, satp_val: int, mem_read_phy: Callable[[int, int], bytes]) -> tuple:
+def translate_va(
+    va: int,
+    satp_val: int,
+    mem_read_phy: Callable[[int, int], bytes],
+    mem_write_phy: Callable[[int, bytes], None] | None = None,
+    *,
+    is_write: bool = False,
+) -> tuple:
     """根据 satp 配置把虚拟地址翻译为物理地址.
 
     当前仅支持 Bare (直接等同物理地址) 和 Sv39.
@@ -398,6 +461,9 @@ def translate_va(va: int, satp_val: int, mem_read_phy: Callable[[int, int], byte
         va: 虚拟地址.
         satp_val: satp CSR 的原始值.
         mem_read_phy: 物理内存读取回调.
+        mem_write_phy: 物理内存写入回调, 用于置位页表项的 A 位与 D 位;
+            取 None 时不写入.
+        is_write: 本次访问是否为写访问. 为真时在叶子页表项上置位 D 位.
 
     Returns:
         (success: bool, pa: int, perm: int)
@@ -411,7 +477,9 @@ def translate_va(va: int, satp_val: int, mem_read_phy: Callable[[int, int], byte
 
     if mode == SATP_MODE_SV39:
         root_ppn = satp_val & ((1 << 44) - 1)
-        ok, ppn, perm, _ = sv39_walk(root_ppn, va, mem_read_phy)
+        ok, ppn, perm, _ = sv39_walk(
+            root_ppn, va, mem_read_phy, mem_write_phy, is_write=is_write
+        )
         if not ok:
             return False, 0, 0
         # 页号左移 12 位后与页内偏移 VA[11:0] 拼接
@@ -423,9 +491,8 @@ def translate_va(va: int, satp_val: int, mem_read_phy: Callable[[int, int], byte
     return False, 0, 0
 
 
-# ============================================================
 #  PTE 标志位转换为可读字符串
-# ============================================================
+
 
 # Sv39 PTE 标志位掩码
 PTE_V = 1 << 0
@@ -481,9 +548,7 @@ def sv39_decompose_va(va: int) -> tuple[int, int, int, int]:
     return vpn2, vpn1, vpn0, offset
 
 
-# ============================================================
 #  satp / VA 辅助
-# ============================================================
 
 
 def satp_root_ppn(satp_val: int) -> int:

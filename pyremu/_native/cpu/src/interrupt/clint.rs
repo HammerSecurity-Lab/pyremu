@@ -48,9 +48,9 @@ pub(crate) fn write_stimecmp(state: &mut HartState, now_mtime: u64, val: u64, ti
 /// ``hart_states`` 未初始化时跳过设定, MTIP 退化为共享 mtime 比较。
 #[inline]
 pub(crate) fn write_mtimecmp_for_target(clint: &ConcurrentClintCtx, target: usize, val: u64) {
-	let now = unsafe { &*clint.mtime }.load(Ordering::Acquire);
+	let now = (unsafe { &*clint.mtime }).load(Ordering::Acquire);
 	let hart_states = clint.hart_states.get();
-	if !hart_states.is_null() && target < clint.num_harts as usize {
+	if !hart_states.is_null() && target < (clint.num_harts as usize) {
 		let ts = unsafe { &mut *(hart_states.add(target) as *mut HartState) };
 		write_mtimecmp(ts, now, val, clint.timebase_hz);
 	}
@@ -61,7 +61,7 @@ pub(crate) fn write_mtimecmp_for_target(clint: &ConcurrentClintCtx, target: usiz
 /// 位已置位时 ``fetch_or`` 不改变任何值, 故跳过与执行等价
 #[inline]
 fn set_mip_bit(state: &mut HartState, bit: u64) {
-	if state.mip.load(Ordering::Acquire) & bit == 0 {
+	if (state.mip.load(Ordering::Acquire) & bit) == 0 {
 		state.mip.fetch_or(bit, Ordering::AcqRel);
 	}
 }
@@ -69,7 +69,7 @@ fn set_mip_bit(state: &mut HartState, bit: u64) {
 /// 清除 ``mip`` 的一位; 该位已清零时不改变任何值。
 #[inline]
 fn clear_mip_bit(state: &mut HartState, bit: u64) {
-	if state.mip.load(Ordering::Acquire) & bit != 0 {
+	if (state.mip.load(Ordering::Acquire) & bit) != 0 {
 		state.mip.fetch_and(!bit, Ordering::AcqRel);
 	}
 }
@@ -84,7 +84,7 @@ fn sync_timer_bit_shared(state: &mut HartState, clint: &ConcurrentClintCtx, bit:
 		clear_mip_bit(state, bit);
 		return;
 	}
-	if unsafe { &*clint.mtime }.load(Ordering::Acquire) >= cmp {
+	if (unsafe { &*clint.mtime }).load(Ordering::Acquire) >= cmp {
 		set_mip_bit(state, bit);
 	} else {
 		clear_mip_bit(state, bit);
@@ -109,7 +109,7 @@ fn confirm_timer_deadline(
 	cmp: u64,
 	deadline: u64,
 ) -> u64 {
-	let now = unsafe { &*clint.mtime }.load(Ordering::Acquire);
+	let now = (unsafe { &*clint.mtime }).load(Ordering::Acquire);
 	if cmp != 0 && now >= cmp {
 		set_mip_bit(state, bit);
 		return deadline;
@@ -124,17 +124,16 @@ fn confirm_timer_deadline(
 /// mtimecmp 的比较结果在此期间可能已经变化。
 #[inline]
 fn needs_timer_confirm(state: &HartState, bit: u64, deadline: u64) -> bool {
-	state.total_instrs >= deadline || state.mip.load(Ordering::Acquire) & bit != 0
+	state.total_instrs >= deadline || (state.mip.load(Ordering::Acquire) & bit) != 0
 }
 
 pub(crate) fn sync_mtip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 	let hart_id = state.mhartid as usize;
-	let cmp = unsafe { &*clint.mtimecmp.add(hart_id) }.load(Ordering::Acquire);
+	let cmp = (unsafe { &*clint.mtimecmp.add(hart_id) }).load(Ordering::Acquire);
 	let sstc_cmp = state.stimecmp;
 
-	// ============================================================
 	//  MTIP (bit 7): CLINT mtimecmp
-	//  ============================================================
+
 	if state.waiting != 0 {
 		// 等待中的 hart 按共享 mtime 比较。其他 hart 的进度推进共享 mtime 后本 hart
 		// 随之醒来; 受调试程序的 rdtime 读取共享 mtime, 定时器到期即在共享时间中越过
@@ -152,9 +151,8 @@ pub(crate) fn sync_mtip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 		sync_timer_bit_shared(state, clint, 1 << 7, cmp);
 	}
 
-	// ============================================================
 	//  STIP (bit 5): SSTC stimecmp
-	//  ============================================================
+
 	//
 	// stimecmp 为 0 表示本 hart 未使用 sstc 定时器, 例如设备树未声明 sstc 时固件以
 	// mtimecmp 承担 S 模式定时器. 此时 STIP 由 M 模式软件经 ``csrw mip`` 写入, 本
@@ -177,8 +175,8 @@ pub(crate) fn sync_mtip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 
 /// 由跨线程的 ``msip_pending`` 原子通道和 CLINT 电平位同步 ``mip.MSIP``。全部模式下
 /// 都读取 ``msip_pending``, 非零时把读到的位并入 ``mip``; 旧有 PLIC 模式, 即
-/// ``present == 0`` 或 ``eidelivery == 0`` 时, 另采样 CLINT 电平位, 电平为 1 即置位
-/// ``mip.MSIP``, 此处从不清除。AIA 模式下本次未读到边沿、CLINT 电平位为 0 且 IMSIC
+/// ``present == 0`` 或 ``eidelivery == 0`` 时, ``mip.MSIP`` 跟随 CLINT 电平位的当前
+/// 取值, 电平为 0 时清除该位。AIA 模式下本次未读到边沿、CLINT 电平位为 0 且 IMSIC
 /// 没有挂起的 IPI 时, 清除残留的 ``mip.MSIP``, 否则 MEI 先于 MSI 投递而
 /// ``deliver_trap`` 只清 MEIP, 残留位使 MTOPI 循环反复分发同一 IPI。
 #[inline]
@@ -210,64 +208,62 @@ pub(crate) fn sync_msip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 	// ``mip.MSIP``; IMSIC eip 中仍有挂起的 IPI 时不清除, 此时 MEIP 优先级更高,
 	// 先于 MSIP 投递。
 	if in_aia_active {
-		if had_edge || hid >= clint.num_harts as usize {
+		if had_edge || hid >= (clint.num_harts as usize) {
 			return;
 		}
-		let raw = unsafe { &*clint.msip.add(hid) }.load(Ordering::Acquire);
-		let no_imsic_ipi = state.imsic_m.present == 0 || state.imsic_m.eidelivery == 0 || {
-			let eip0 = state.imsic_m.eip[0].load(Ordering::Acquire);
-			(eip0 & ((1u32 << 3) | (1u32 << 1))) == 0
-		};
+		let raw = (unsafe { &*clint.msip.add(hid) }).load(Ordering::Acquire);
+		let no_imsic_ipi = state.imsic_m.present == 0
+			|| state.imsic_m.eidelivery == 0
+			|| ({
+				let eip0 = state.imsic_m.eip[0].load(Ordering::Acquire);
+				(eip0 & ((1u32 << 3) | (1u32 << 1))) == 0
+			});
 		if (raw & 1) == 0 && no_imsic_ipi {
 			clear_mip_bit(state, 1 << 3);
 		}
 		return;
 	}
 
-	// 旧有 PLIC 模式: CLINT MSIP 为电平触发, 同步到 mip.MSIP
-	if hid >= clint.num_harts as usize {
+	// 旧有 PLIC 模式: CLINT MSIP 为电平触发, ``mip.MSIP`` 跟随电平位的当前取值。
+	// 电平位本身只由软件经 CLINT MMIO 写入, 此处不改变它。
+	if hid >= (clint.num_harts as usize) {
 		return;
 	}
-	// 旧有 PLIC 模式下 mip.MSIP 直接跟随 CLINT 电平位。此处只读, 不清除电平位:
-	let raw = unsafe { &*clint.msip.add(hid) }.load(Ordering::Acquire);
-	let level_set = (raw & 1) != 0;
-
-	if level_set {
-		state.mip.fetch_or(1 << 3, Ordering::AcqRel);
+	let raw = (unsafe { &*clint.msip.add(hid) }).load(Ordering::Acquire);
+	if (raw & 1) != 0 {
+		set_mip_bit(state, 1 << 3);
+	} else {
+		clear_mip_bit(state, 1 << 3);
 	}
 }
 
-// ============================================================
-
 pub(crate) fn clint_write_msip_concurrent(clint: &ConcurrentClintCtx, target: usize, val: u8) {
-	if target >= clint.num_harts as usize {
+	if target >= (clint.num_harts as usize) {
 		return;
 	}
 	let p = unsafe { &*clint.msip.add(target) };
-	if val & 1 != 0 {
+	if (val & 1) != 0 {
 		// 设置 CLINT 电平位, 并经 ``msip_pending`` 通道原子通知目标 hart。
 		// 这样避免对 ``(*states).mip`` 做非原子读改写, 进而与目标 hart 的
 		// ``sync_mtip``、``sync_msip`` 形成并发访问。
 		p.fetch_or(1, Ordering::Release);
 		let pending = clint.msip_pending_slot(target);
 		if !pending.is_null() {
-			unsafe { &*pending }.fetch_or(1 << 3, Ordering::Release);
+			(unsafe { &*pending }).fetch_or(1 << 3, Ordering::Release);
 		}
 		// 唤醒目标 hart 的线程, 它可能正在 ``wfi_spin`` 中经 ``park_timeout`` 睡眠。
 		// 在 ``park()`` 之前调用 ``unpark()`` 是安全的, 下一次 ``park()`` 立即返回。
 		let threads = clint.hart_threads.get();
-		if !threads.is_null() && target < clint.num_harts as usize {
-			unsafe { &*threads.add(target) }.unpark();
+		if !threads.is_null() && target < (clint.num_harts as usize) {
+			(unsafe { &*threads.add(target) }).unpark();
 		}
 	} else {
-		// 清除 CLINT 电平位, 并清除目标 hart 的 ``mip.MSIP``。
-		//
-		// ``deliver_trap_mmode`` 只为 MSI (cause 3) 清除 ``mip.MSIP``, 不为 MEI 清除。
-		// AIA 模式下同一 IPI 事件中优先级更高的 MEI 先投递, ``mip.MSIP`` 保持置位;
-		// ``sbi_ipi_raw_clear`` 在此写入 0 之后必须一并清除该位, 否则
-		// ``sbi_trap_aia_irq()`` 的 MTOPI 循环不会终止。
-		p.fetch_and(0xFE, Ordering::Release);
-		// 发送方已设置 ``msip_pending``, 下一次 ``sync_msip`` 会将其读出并重新置位 ``mip.MSIP``。
+		// 清除 CLINT 电平位, 该 hart 的 ``mip.MSIP`` 由下一次 ``sync_msip`` 按电平
+		// 清除。此处一并清除, 使已退出旧有 PLIC 模式或尚无 ``sync_msip`` 调用机会的
+		// hart 不会保留该位。
+		p.fetch_and(0xfe, Ordering::Release);
+		// 发送方已设置 ``msip_pending``, 下一次 ``sync_msip`` 读到边沿后仍需按 CLINT
+		// 电平位复核, 电平已为 0 时 ``mip.MSIP`` 不再置位。
 		let hart_states = clint.hart_states.get();
 		if !hart_states.is_null() {
 			// 共享引用, mip 为 AtomicU64, 可安全并发访问。
@@ -318,20 +314,20 @@ pub(crate) fn try_handle_clint_concurrent(
 	if offset < 0x4000 {
 		// MSIP 区域
 		let target = (offset / 4) as usize;
-		if target >= clint.num_harts as usize {
+		if target >= (clint.num_harts as usize) {
 			return Some(0);
 		}
 		if !is_write {
-			let val = unsafe { &*clint.msip.add(target) }.load(Ordering::Relaxed) as u64 & 1;
+			let val = ((unsafe { &*clint.msip.add(target) }).load(Ordering::Relaxed) as u64) & 1;
 			return Some(val);
 		}
 		clint_write_msip_concurrent(clint, target, (write_data & 1) as u8);
 		return Some(0);
-	} else if offset < 0xBFF8 {
+	} else if offset < 0xbff8 {
 		// MTIMECMP 区域
 		let reg_offset = offset - 0x4000;
 		let target = (reg_offset / 8) as usize;
-		if target >= clint.num_harts as usize {
+		if target >= (clint.num_harts as usize) {
 			return Some(0);
 		}
 		let lane = reg_offset % 8;
@@ -349,14 +345,14 @@ pub(crate) fn try_handle_clint_concurrent(
 		} else {
 			Some(extract_lane(reg.load(Ordering::Relaxed), lane, size))
 		}
-	} else if offset < 0xC000 {
+	} else if offset < 0xc000 {
 		// MTIME 区域
 		if is_write {
 			None // 应交由 Python 侧处理
 		} else {
-			let lane = offset - 0xBFF8;
+			let lane = offset - 0xbff8;
 			Some(extract_lane(
-				unsafe { &*clint.mtime }.load(Ordering::Relaxed),
+				(unsafe { &*clint.mtime }).load(Ordering::Relaxed),
 				lane,
 				size,
 			))
@@ -398,7 +394,7 @@ pub struct ClintCtx {
 /// 为目标 hart 写 MSIP 并更新其 mip, 在目标为另一个 hart 时设置跨 hart 让出标志。
 #[inline]
 pub(crate) fn clint_write_msip(clint: &ClintCtx, target: usize, current: usize, val: u8) {
-	if target >= clint.num_harts as usize {
+	if target >= (clint.num_harts as usize) {
 		return;
 	}
 	if clint.states.is_null() {
@@ -441,11 +437,11 @@ pub(crate) fn try_handle_clint(
 
 	if offset < 0x4000 {
 		let hart_id = (offset / 4) as usize;
-		if hart_id >= clint.num_harts as usize {
+		if hart_id >= (clint.num_harts as usize) {
 			return Some(0);
 		}
 		if is_write == 0 {
-			let val = unsafe { *clint.msip.add(hart_id) } as u64 & 1;
+			let val = ((unsafe { *clint.msip.add(hart_id) }) as u64) & 1;
 			return Some(val);
 		}
 		clint_write_msip(
@@ -455,9 +451,9 @@ pub(crate) fn try_handle_clint(
 			(write_data & 1) as u8,
 		);
 		return Some(0);
-	} else if offset < 0xBFF8 {
+	} else if offset < 0xbff8 {
 		let hart_id = usize::try_from((offset - 0x4000) / 8).unwrap_or(usize::MAX);
-		if hart_id >= clint.num_harts as usize {
+		if hart_id >= (clint.num_harts as usize) {
 			return Some(0);
 		}
 		if is_write == 0 {
@@ -466,13 +462,13 @@ pub(crate) fn try_handle_clint(
 		unsafe {
 			*clint.mtimecmp.add(hart_id) = write_data;
 		}
-		if hart_id < clint.num_harts as usize && !clint.states.is_null() {
+		if hart_id < (clint.num_harts as usize) && !clint.states.is_null() {
 			let t = unsafe { &mut *clint.states.add(hart_id) };
 			// 写入后为目标 hart 的 MTIP 设定 deadline。
 			write_mtimecmp(t, unsafe { *clint.mtime }, write_data, clint.timebase_hz);
 		}
 		return Some(0);
-	} else if offset < 0xC000 && is_write == 0 {
+	} else if offset < 0xc000 && is_write == 0 {
 		return Some(unsafe { *clint.mtime });
 	}
 	None
@@ -586,12 +582,10 @@ mod tests {
 	}
 
 	#[test]
-	fn sync_msip_preserves_mip_when_level_zero() {
-		// CLINT 电平为 0 时 sync_msip 不得清除 mip.MSIP, 清除由
-		// ``deliver_trap_mmode`` 与 ``deliver_trap_smode`` 负责
-		// 若在此清除, WFI 唤醒路径会丢失该中断: ``wfi_sync_and_check`` 调用
-		// ``sync_msip`` 时读到电平 0 并清除 ``mip.MSIP``, 随后的
-		// ``check_and_deliver_interrupt_concurrent`` 不分发陷态处理逻辑而形成死锁。
+	fn sync_msip_clears_mip_when_level_zero() {
+		// CLINT 电平为 0 时 sync_msip 必须清除 mip.MSIP. 陷态投递不再代为清除中断
+		// 源, 由 M 模式处理函数向 CLINT MSIP 写 0; 若此处不清除, 该位保持置位,
+		// hart 返回后立即再次进入陷态, 形成不终止的 M 模式循环.
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		state.mhartid = 0;
 		state.mip.store(1 << 3, Ordering::Release);
@@ -616,8 +610,52 @@ mod tests {
 
 		assert_eq!(
 			state.mip.load(Ordering::Acquire) & (1 << 3),
-			1 << 3,
-			"sync_msip must NOT clear mip.MSIP when CLINT level=0 (trap delivery handles clearing)"
+			0,
+			"sync_msip must clear mip.MSIP when CLINT level=0"
+		);
+	}
+
+	#[test]
+	fn sync_msip_edge_with_level_zero_does_not_leave_msip_set() {
+		// 处理函数在读取 ``ipi_type`` 期间到达的第二次 IPI 会留下边沿位, 而处理函数
+		// 随后向 CLINT MSIP 写 0 已清除电平. 此时 mip.MSIP 不得由边沿通道单独置位,
+		// 否则该位没有对应的中断源, 陷态反复投递.
+		let slots: Vec<AtomicU64> = (0..MSIP_PENDING_STRIDE)
+			.map(|_| AtomicU64::new(0))
+			.collect();
+		let mut state: HartState = unsafe { std::mem::zeroed() };
+		state.mhartid = 0;
+
+		let msip_byte = std::sync::atomic::AtomicU8::new(1);
+		let mtime = std::sync::atomic::AtomicU64::new(0);
+		let mtimecmp = std::sync::atomic::AtomicU64::new(0);
+
+		let clint = ConcurrentClintCtx {
+			base: 0x2000000,
+			mtime: &mtime as *const AtomicU64,
+			mtimecmp: &mtimecmp as *const AtomicU64,
+			msip: &msip_byte as *const AtomicU8,
+			num_harts: 1,
+			msip_pending: Cell::new(slots.as_ptr()),
+			hart_threads: Cell::new(std::ptr::null()),
+			hart_states: Cell::new(std::ptr::null()),
+			timebase_hz: 0, // 单元测试不推进时钟源
+		};
+
+		clint_write_msip_concurrent(&clint, 0, 1);
+		msip_byte.store(0, Ordering::Release);
+
+		sync_msip(&mut state, &clint);
+
+		assert_eq!(
+			state.mip.load(Ordering::Acquire) & (1 << 3),
+			0,
+			"CLINT 电平为 0 时边沿通道不得单独置位 mip.MSIP"
+		);
+		assert_eq!(
+			(unsafe { &*clint.msip_pending_slot(0) }).load(Ordering::Acquire),
+			0,
+			"边沿位在本次同步中已被取走"
 		);
 	}
 
@@ -753,7 +791,7 @@ mod tests {
 		// hart A 写 hart B 的 mtimecmp=7200: 距当前共享 mtime=7000 还有 200 ticks, 换算为
 		// 1000 条指令. 与真实 CLINT MMIO 写路径一致: 先存 mtimecmp 值, 该值是共享比较的
 		// 读取源, 再设定截止时刻. 旧实现读到 mtimecmp=7200 后, 在 mtime=7300 时会提前置位.
-		unsafe { &*clint.mtimecmp.add(1) }.store(7200, Ordering::Release);
+		(unsafe { &*clint.mtimecmp.add(1) }).store(7200, Ordering::Release);
 		write_mtimecmp_for_target(&clint, 1, 7200);
 		let b = &mut states[1];
 		assert_eq!(
@@ -996,7 +1034,7 @@ mod tests {
 	fn mtimecmp_partial_write_keeps_untouched_bytes() {
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		let mtime = AtomicU64::new(5000);
-		let mtimecmp = AtomicU64::new(0x0000_0000_CFF1_5000);
+		let mtimecmp = AtomicU64::new(0x0000_0000_cff1_5000);
 		let msip = AtomicU8::new(0);
 		let clint = clint_10mhz(&mtime, &mtimecmp, &msip);
 
@@ -1004,14 +1042,14 @@ mod tests {
 		try_handle_clint_concurrent(
 			clint.base + 0x4004,
 			true,
-			0xFFFF_FFFF_0000_0007,
+			0xffff_ffff_0000_0007,
 			4,
 			&mut state,
 			&clint,
 		);
 		assert_eq!(
 			mtimecmp.load(Ordering::Acquire),
-			0x0000_0007_CFF1_5000,
+			0x0000_0007_cff1_5000,
 			"高字写入不得改动低字"
 		);
 
@@ -1019,14 +1057,14 @@ mod tests {
 		try_handle_clint_concurrent(
 			clint.base + 0x4000,
 			true,
-			0xFFFF_FFFF_DEAD_BEEF,
+			0xffff_ffff_dead_beef,
 			4,
 			&mut state,
 			&clint,
 		);
 		assert_eq!(
 			mtimecmp.load(Ordering::Acquire),
-			0x0000_0007_DEAD_BEEF,
+			0x0000_0007_dead_beef,
 			"低字写入不得改动高字"
 		);
 	}
@@ -1036,13 +1074,13 @@ mod tests {
 	fn mtimecmp_partial_read_returns_addressed_bytes() {
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		let mtime = AtomicU64::new(5000);
-		let mtimecmp = AtomicU64::new(0x1234_5678_9ABC_DEF0);
+		let mtimecmp = AtomicU64::new(0x1234_5678_9abc_def0);
 		let msip = AtomicU8::new(0);
 		let clint = clint_10mhz(&mtime, &mtimecmp, &msip);
 
 		assert_eq!(
 			try_handle_clint_concurrent(clint.base + 0x4000, false, 0, 4, &mut state, &clint),
-			Some(0x9ABC_DEF0),
+			Some(0x9abc_def0),
 			"低字读出第 0 至 31 位"
 		);
 		assert_eq!(
@@ -1052,7 +1090,7 @@ mod tests {
 		);
 		assert_eq!(
 			try_handle_clint_concurrent(clint.base + 0x4002, false, 0, 2, &mut state, &clint),
-			Some(0x9ABC),
+			Some(0x9abc),
 			"偏移 2 起读出 2 字节"
 		);
 	}

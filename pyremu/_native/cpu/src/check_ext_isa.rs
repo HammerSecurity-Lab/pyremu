@@ -1,6 +1,6 @@
 //! 按平台声明的扩展判定一条指令能否被解码执行。
 //!
-//! 每条指令先由编码得到所属扩展的开关, 再取该 hart 的扩展开关。基础整数指令与
+//! 每条指令先由编码得到所属扩展, 再取该 hart 的扩展开关。基础整数指令与
 //! 特权指令不属于可选扩展, 不受扩展声明约束。
 //!
 //! 同一份编码到扩展的对应关系在 ``pyremu/core/decoder/check_ext_isa.py`` 中另有
@@ -18,7 +18,7 @@ fn is_csr_func3(func3: u8) -> bool {
 	matches!(func3, 1 | 2 | 3 | 5 | 6 | 7)
 }
 
-/// OP (0x33) 指令所属扩展的开关; 属于基础整数指令时返回 true。
+/// OP (0x33) 指令所属扩展; 属于基础整数指令时返回 true。
 fn check_op_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	if func7 == FUNCT7_M {
 		return exts.is_m;
@@ -33,7 +33,7 @@ fn check_op_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	}
 }
 
-/// OP-IMM (0x13) 指令所属扩展的开关; 属于基础整数指令时返回 true。
+/// OP-IMM (0x13) 指令所属扩展; 属于基础整数指令时返回 true。
 fn check_op_imm_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	// funct6 为 funct7 右移一位的结果, 移位量取 6 位时 funct7 的最低位一并归入
 	let funct6 = func7 >> 1;
@@ -46,7 +46,7 @@ fn check_op_imm_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	}
 }
 
-/// OP-IMM-32 (0x1B) 指令所属扩展的开关; 属于基础整数指令时返回 true。
+/// OP-IMM-32 (0x1B) 指令所属扩展; 属于基础整数指令时返回 true。
 fn check_op_imm32_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	match (func3, func7) {
 		(0b001, 0x04) | (0b001, 0x05) => exts.is_zba,
@@ -55,7 +55,7 @@ fn check_op_imm32_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	}
 }
 
-/// OP-32 (0x3B) 指令所属扩展的开关; 属于基础整数指令时返回 true。
+/// OP-32 (0x3B) 指令所属扩展; 属于基础整数指令时返回 true。
 fn check_op32_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	if func7 == FUNCT7_M {
 		return exts.is_m;
@@ -67,7 +67,7 @@ fn check_op32_isa(exts: &IsaExts, func3: u8, func7: u8) -> bool {
 	}
 }
 
-/// 判定该指令所属扩展的开关是否打开。
+/// 判定该指令所属扩展是否打开。
 ///
 /// 压缩指令只看 ``is_c``; 其余指令按 opcode 取出所属扩展。未列入可选扩展的
 /// 编码一律返回 true, 由各处理器自行判定编码是否合法。

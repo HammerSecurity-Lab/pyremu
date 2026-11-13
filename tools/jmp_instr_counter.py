@@ -10,7 +10,8 @@
 
 终结指令按控制流语义分五类:
   条件分支  beq/bne/blt/bge/bltu/bgeu/c.beqz/c.bnez —— 条件成立时跳转, 可顺延
-  过程调用  jal ra, ... / jalr ra, ... / c.jalr —— 写 x1 (ra), 在函数之间转移控制
+  过程调用  jal ra, ... / jalr ra, ... / c.jalr —— 写 x1 (ra),
+  在函数之间转移控制
   跳转      jal x0, ... / jalr x0, off(rs1) / c.j / c.jr rs≠ra —— 函数内跳转
   返回      jalr x0, 0(ra) / c.jr ra
   陷入      ecall / ebreak / c.ebreak / mret / sret
@@ -23,8 +24,9 @@
   直接跳转    条件分支 / jal / c.j —— 目标是当前 pc 加立即数
   陷入        ecall / ebreak / c.ebreak / mret / sret
 
-报告同时给出来源与类别的对应条数: 寄存器跳转中的过程调用即经函数指针发起的调用,
-其中的返回与跳转分别是函数返回与跳转表分派; 直接跳转中的条件分支即循环与条件语句。
+报告同时给出来源与类别的对应条数: 寄存器跳转中的过程调用即经函数指针发起的
+调用, 其中的返回与跳转分别是函数返回与跳转表分派; 直接跳转中的条件分支即
+循环与条件语句。
 
 输入文件的容器格式自动判定, 不作特例:
   - ELF (经 LIEF 解析): 逐个扫描带 SHF_EXECINSTR 属性的节, 并排除节内属于数据的
@@ -40,7 +42,8 @@
 
     uv run python tools/jmp_instr_counter.py <二进制> [<二进制> ...]
     uv run python tools/jmp_instr_counter.py --list <二进制>       # 附各节明细
-    uv run python tools/jmp_instr_counter.py --json <二进制>       # 机器可读输出
+    uv run python tools/jmp_instr_counter.py --json <二进制>
+        # 机器可读输出
     uv run python tools/jmp_instr_counter.py --no-data-filter <二进制>
     uv run python tools/jmp_instr_counter.py --exclude-trap <二进制>
 """
@@ -90,7 +93,9 @@ MECH_DIRECT = "直接跳转"
 MECH_TRAP = "陷入"
 _MECH_ORDER = (MECH_INDIRECT, MECH_DIRECT, MECH_TRAP)
 
-_COND_MNEMONICS = frozenset(("beq", "bne", "blt", "bge", "bltu", "bgeu", "c.beqz", "c.bnez"))
+_COND_MNEMONICS = frozenset(
+    ("beq", "bne", "blt", "bge", "bltu", "bgeu", "c.beqz", "c.bnez")
+)
 _TRAP_MNEMONICS = frozenset(("ecall", "ebreak", "c.ebreak", "mret", "sret"))
 # 调用约定中的返回地址寄存器 x1 (ra) 与零寄存器 x0; 两种写法都接受.
 _RA_NAMES = frozenset(("x1", "ra"))
@@ -176,7 +181,9 @@ def pe_header_size(content: bytes) -> int:
     opt_offset = pe_offset + 4 + _COFF_HEADER_SIZE
     if opt_offset + _PE_SIZEOFHEADERS_OFF + 4 > len(content):
         return 0
-    size = struct.unpack_from("<I", content, opt_offset + _PE_SIZEOFHEADERS_OFF)[0]
+    size = struct.unpack_from(
+        "<I", content, opt_offset + _PE_SIZEOFHEADERS_OFF
+    )[0]
     return min(size, len(content))
 
 
@@ -281,13 +288,19 @@ def elf_exec_sections(path: Path) -> object | None:
     return binary
 
 
-def count_file(path: Path, raw_offset: int, include_trap: bool, filter_data: bool) -> dict:
+def count_file(
+    path: Path,
+    raw_offset: int,
+    include_trap: bool,
+    filter_data: bool,
+) -> dict:
     """统计单个文件的基本块终结指令条数."""
     data = path.read_bytes()
     binary = elf_exec_sections(path)
     if binary is None:
         print(
-            f"[warn] {path}: 不是可解析的 ELF, 按裸二进制从偏移 0x{raw_offset:x} 扫描",
+            f"[warn] {path}: 不是可解析的 ELF, 按裸二进制从偏移 "
+            f"0x{raw_offset:x} 扫描",
             file=sys.stderr,
         )
         sections = [(f"<raw @0x{raw_offset:x}>", 0, data[raw_offset:], [])]
@@ -321,8 +334,8 @@ def count_file(path: Path, raw_offset: int, include_trap: bool, filter_data: boo
         for start, length in spans:
             excluded[start : start + length] = b"\x01" * length
             excluded_bytes += length
-        section_kinds, section_mnemonics, section_pairs, section_instrs = scan_code(
-            content, vaddr, excluded
+        section_kinds, section_mnemonics, section_pairs, section_instrs = (
+            scan_code(content, vaddr, excluded)
         )
         kinds.update(section_kinds)
         mnemonics.update(section_mnemonics)
@@ -359,7 +372,8 @@ def count_file(path: Path, raw_offset: int, include_trap: bool, filter_data: boo
         "by_kind": {kind: kinds[kind] for kind in _KIND_ORDER},
         "by_mechanism": {mech: mechanisms[mech] for mech in _MECH_ORDER},
         "by_mechanism_kind": {
-            mech: {kind: pairs[(mech, kind)] for kind in _KIND_ORDER} for mech in _MECH_ORDER
+            mech: {kind: pairs[(mech, kind)] for kind in _KIND_ORDER}
+            for mech in _MECH_ORDER
         },
         "by_mnemonic": dict(mnemonics),
         "sections": per_section,
@@ -370,14 +384,19 @@ def print_report(result: dict, show_sections: bool) -> None:
     """打印单个文件的统计报告."""
     print(f"{result['file']}")
     print(
-        f"  指令总数 {result['instructions']}, 基本块终结指令 {result['terminators']} 条, "
+        f"  指令总数 {result['instructions']}, 基本块终结指令 "
+        f"{result['terminators']} 条, "
         f"占比 {result['terminator_ratio'] * 100:.3f}%"
     )
-    print(f"  其中函数内转移控制流 (条件分支 + 跳转 + 返回) {result['intra_terminators']} 条")
+    print(
+        f"  其中函数内转移控制流 (条件分支 + 跳转 + 返回) "
+        f"{result['intra_terminators']} 条"
+    )
     if result["excluded_bytes"]:
         print(
             f"  已排除可执行节内的数据区间 {result['excluded_bytes']} 字节; "
-            f"若把这些字节当指令, 会多算 {result['phantom_instructions']} 条指令"
+            f"若把这些字节当指令, 会多算 "
+            f"{result['phantom_instructions']} 条指令"
             f"与 {result['phantom_terminators']} 条终结指令"
         )
     print("  按类别:")
@@ -402,12 +421,15 @@ def print_report(result: dict, show_sections: bool) -> None:
         for section in result["sections"]:
             print(
                 f"    {section['name']:<20} {section['bytes']:>10} 字节  "
-                f"排除 {section['excluded_bytes']:>6}  终结指令 {section['terminators']:>8}"
+                f"排除 {section['excluded_bytes']:>6}  终结指令 "
+                f"{section['terminators']:>8}"
             )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="统计二进制文件中基本块终结指令的静态条数")
+    parser = argparse.ArgumentParser(
+        description="统计二进制文件中基本块终结指令的静态条数"
+    )
     parser.add_argument("binaries", nargs="+", help="待统计的二进制文件")
     parser.add_argument(
         "--raw-offset",
@@ -454,4 +476,6 @@ if __name__ == "__main__":
         print_report(result, args.list)
 
     if len(results) > 1:
-        print(f"\n合计终结指令条数: {sum(int(r['terminators']) for r in results)}")
+        print(
+            f"\n合计终结指令条数: {sum(int(r['terminators']) for r in results)}"
+        )

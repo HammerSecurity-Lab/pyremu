@@ -7,8 +7,6 @@ use std::sync::{
 	Arc, Mutex,
 };
 
-// ============================================================
-// ============================================================
 //
 use crate::hart_sched::*;
 
@@ -18,9 +16,7 @@ use crate::ffi::{
 };
 use crate::state::{exit_reason, HartState};
 
-// ============================================================
 //  FFI 裸指针的 Send 与 Sync 包装类型
-// ============================================================
 //
 // Python 在整个 FFI 调用期间占有对内存的使用权，例如 bytearray, ctypes 数组.
 // 这些包装类型断言 Send 与 Sync, 使其可以安全地跨线程边界传递.
@@ -66,9 +62,7 @@ pub(crate) struct SharedDevCtx {
 unsafe impl Send for SharedDevCtx {}
 unsafe impl Sync for SharedDevCtx {}
 
-// ============================================================
 //  并发安全的 CLINT 上下文结构
-// ============================================================
 
 /// 可供各 hart 线程并发访问的 CLINT 状态.
 ///
@@ -147,9 +141,6 @@ impl ConcurrentClintCtx {
 		unsafe { base.add(hart_id * MSIP_PENDING_STRIDE) }
 	}
 }
-
-// ============================================================
-// ============================================================
 
 /// hart 置位全局停止标志的原因.
 #[derive(Clone, Copy)]
@@ -294,9 +285,7 @@ impl ModuleState {
 	}
 }
 
-// ============================================================
 //  FFI 入口辅助函数
-// ============================================================
 
 #[inline]
 unsafe fn init_instr_group(instr_group: *mut InstrToBeExec) {
@@ -606,9 +595,7 @@ pub(crate) fn timer_deadline_own(
 	own_total_instrs.wrapping_add(offset)
 }
 
-// ============================================================
 //  FFI 入口
-// ============================================================
 
 #[no_mangle]
 #[allow(dead_code)]
@@ -750,9 +737,7 @@ pub unsafe extern "C" fn run_parallel(
 	}
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -1708,8 +1693,8 @@ mod tests {
 	/// 跨 hart 的 MSI 投递用例.
 	///
 	/// hart 0 经 CLINT MMIO 向 hart 1 发送 MSI, 随后进入 WFI.
-	/// hart 1 从 WFI 开始, 应被 MSI 唤醒, 陷入 M 模式处理函数, 该函数执行 MRET,
-	/// 随后执行 WFI 之后的标记指令. hart 1 的 t0 必须为 0x42, 以证明 MSI 已投递,
+	/// hart 1 使能 MSIE 并从 WFI 开始, 应被 MSI 唤醒, 陷入 M 模式处理函数, 该函数执行
+	/// MRET, 随后执行 WFI 之后的标记指令. hart 1 的 t0 必须为 0x42, 以证明 MSI 已投递,
 	/// 处理函数已执行, 且执行从 WFI 之后继续. 两个 hart 随后都空闲, 以 WFI_WAIT
 	/// 退出, 没有指令配额.
 	#[test]
@@ -1776,7 +1761,7 @@ mod tests {
 		// --- hart 1 的状态 ---
 		let mut s1 = make_state(0x100, 1);
 		s1.mode = riscv_mode::M;
-		s1.mie = 0; // 初始不使能任何中断
+		s1.mie = 1 << 3; // 使能 MSIE: WFI 只在中断已使能且挂起时退出等待
 		s1.mip.store(0, Ordering::Release); // 初始没有挂起中断
 		s1.mtvec = 0x300; // 0x300 处的 M 模式处理函数, 先清除 MSIP 再 MRET
 		s1.mstatus = (3 << 11) | (1 << 7) | (1 << 3); // MPP 为 M, MPIE 为 1, MIE 为 1

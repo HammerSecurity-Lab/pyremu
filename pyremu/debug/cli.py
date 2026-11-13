@@ -33,11 +33,12 @@ DEFAULT_DISK_IMAGE = (
 )
 
 # 芯片设备树缺少块设备时补充的节点: 节点名前缀, compatible 与 reg 的大小.
-VIRTIO_BLK_DEVICE = dev_tree.DtDeviceRequest("virtio", "virtio,mmio", VIRTIO_MMIO_SIZE)
+VIRTIO_BLK_DEVICE = dev_tree.DtDeviceRequest(
+    "virtio", "virtio,mmio", VIRTIO_MMIO_SIZE
+)
 
-# ============================================================
+
 #  Argument parser
-# ============================================================
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -149,7 +150,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=lambda x: int(x, 0),
         default=None,
         help=(
-            "预加载载荷的加载地址, 默认 ram_base + ram_size - RAM_PRELOAD_OFFSET; "
+            "预加载载荷的加载地址, 默认 "
+            "ram_base + ram_size - RAM_PRELOAD_OFFSET; "
             "落在引导只读存储器的范围内时加载该设备"
         ),
     )
@@ -218,9 +220,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-# ============================================================
 #  CLI 工具函数
-# ============================================================
 
 
 def _setup_logger(level: str) -> None:
@@ -335,10 +335,18 @@ def _resolve_platform(
         sys.exit(1)
     return PlatformParams(
         num_harts=requested_harts,
-        ram_base=_pick(ns.ram_base, tree_ram_base, default=configs_gen.RAM_BASE),
-        ram_size=_pick(cli_ram_size, tree_ram_size, default=configs_gen.RAM_SIZE),
-        rom_base=_pick(ns.rom_base, tree_rom_base, default=configs_gen.ROM_BASE),
-        rom_size=_pick(ns.rom_size, tree_rom_size, default=configs_gen.ROM_SIZE),
+        ram_base=_pick(
+            ns.ram_base, tree_ram_base, default=configs_gen.RAM_BASE
+        ),
+        ram_size=_pick(
+            cli_ram_size, tree_ram_size, default=configs_gen.RAM_SIZE
+        ),
+        rom_base=_pick(
+            ns.rom_base, tree_rom_base, default=configs_gen.ROM_BASE
+        ),
+        rom_size=_pick(
+            ns.rom_size, tree_rom_size, default=configs_gen.ROM_SIZE
+        ),
         timebase_freq=_pick(tree_timebase, default=configs_gen.TIMER_FREQ),
         pmp_entries=pmp_entries,
         isa=_pick(_chip_isa(chip), default=configs_gen.ISA),
@@ -370,7 +378,9 @@ def _reject_per_hart_difference(
     """
     differing = chip.differing_attrs()
     for name, values in differing.items():
-        detail = ", ".join(f"hart{hid}={val}" for hid, val in sorted(values.items()))
+        detail = ", ".join(
+            f"hart{hid}={val}" for hid, val in sorted(values.items())
+        )
         logger.error(f"芯片设备树为各 hart 声明了不同的 {name}: {detail}")
     if differing:
         logger.error("模拟器只支持各 hart 相同的配置, 无法装配该平台")
@@ -420,7 +430,8 @@ def _load_firmware_image(
         sys.exit(1)
 
     logger.info(
-        f"格式={image.format}, 入口=0x{image.entry_point:x}, 段数={len(image.segments)}"
+        f"格式={image.format}, 入口=0x{image.entry_point:x}, "
+        f"段数={len(image.segments)}"
     )
     max_name = max((len(seg.name) for seg in image.segments), default=6)
     max_name = max(max_name, 6)
@@ -459,9 +470,10 @@ def _default_fdt_addr(
 ) -> int:
     """设备树的默认加载地址.
 
-    从引导只读存储器启动时, 设备树随该存储器的镜像位于基址加 ROM_DTB_OFFSET, 与
-    零阶段引导程序按 _start + 0x10000 算出的地址一致. 其余情形由模拟器交付设备树,
-    取 ram_base + ram_size - RAM_DTB_OFFSET, 见 mk/memory.mk.
+    从引导只读存储器启动时, 设备树随该存储器的镜像位于基址加
+    ROM_DTB_OFFSET, 与零阶段引导程序按 _start + 0x10000 算出的地址一致.
+    其余情形由模拟器交付设备树, 取 ram_base + ram_size - RAM_DTB_OFFSET,
+    见 mk/memory.mk.
     """
     if is_rom_boot:
         return rom_base + configs_gen.ROM_DTB_OFFSET
@@ -563,7 +575,9 @@ def _setup_preload(
     preloader = Preloader(emu)
     preload_entry = preloader.inject_file(ns.preload, addr=ns.preload_addr)
     size = Path(ns.preload).stat().st_size
-    logger.info(f"预加载载荷: {ns.preload} -> 0x{preload_entry:x} ({fmt_size(size)})")
+    logger.info(
+        f"预加载载荷: {ns.preload} -> 0x{preload_entry:x} ({fmt_size(size)})"
+    )
     for h in emu.harts:
         h.csrs["misa"].val = (2 << 62) | (1 << 18) | (1 << 20)
     return preload_entry, size
@@ -593,10 +607,10 @@ def _initrd_default_addr(
 ) -> int:
     """未给出 --initrd-addr 时的装载地址.
 
-    取 RAM 窗口的上界减去 RAM_PRELOAD_OFFSET 字节为上界, 该位置低于设备树与预加载
-    载荷的默认位置; 设备树或预加载载荷的装载地址落在 RAM 窗口内且更低时, 改取其中
-    较低者, 使 initramfs 的区间范围与两者不重叠. 自该上界减去文件字节数, 再向下
-    对齐到 2 MiB, 得到区间范围的下界.
+    取 RAM 窗口的上界减去 RAM_PRELOAD_OFFSET 字节为上界, 该位置低于设备树与
+    预加载载荷的默认位置; 设备树或预加载载荷的装载地址落在 RAM 窗口内且更低
+    时, 改取其中较低者, 使 initramfs 的区间范围与两者不重叠. 自该上界减去
+    文件字节数, 再向下对齐到 2 MiB, 得到区间范围的下界.
     """
     top = platform.ram_base + platform.ram_size - configs_gen.RAM_PRELOAD_OFFSET
     for start in (fdt_addr, preload_addr):
@@ -656,7 +670,8 @@ def _load_boot_images(
     else:
         fdt_note = ", DTB=off" if ns.no_fdt else ""
     logger.info(
-        f"固件已写入物理内存, {platform.num_harts} hart(s) 就绪, PC=0x{prog_cnt:x}{fdt_note}"
+        f"固件已写入物理内存, {platform.num_harts} hart(s) 就绪, "
+        f"PC=0x{prog_cnt:x}{fdt_note}"
     )
     return fdt_addr, preload_info
 
@@ -680,16 +695,24 @@ def _record_loaded_images(
     """把各入参装入的映像登记到调试器, 供 bins-info 与 restart 使用."""
     emu = dbg._emu
     start, end = _firmware_span(image, dbg._load_offset)
-    dbg._bins_images[ImageKind.FIRMWARE] = LoadedImage(ns.firmware, start, end - start)
+    dbg._bins_images[ImageKind.FIRMWARE] = LoadedImage(
+        ns.firmware, start, end - start
+    )
     if preload_info is not None and ns.preload:
         entry, size = preload_info
-        dbg._bins_images[ImageKind.PRELOAD] = LoadedImage(ns.preload, entry, size)
+        dbg._bins_images[ImageKind.PRELOAD] = LoadedImage(
+            ns.preload, entry, size
+        )
     initrd = emu.initrd
     if initrd is not None and ns.initrd:
         dbg._bins_images[ImageKind.INITRD] = LoadedImage(
             ns.initrd, initrd.start, initrd.end - initrd.start
         )
-    if ns.fdt_file and dbg._fdt_addr is not None and emu.dtb_addr == dbg._fdt_addr:
+    if (
+        ns.fdt_file
+        and dbg._fdt_addr is not None
+        and emu.dtb_addr == dbg._fdt_addr
+    ):
         dbg._bins_images[ImageKind.FDT] = LoadedImage(
             ns.fdt_file.rsplit(":", 1)[0], dbg._fdt_addr, emu.dtb_size
         )
@@ -707,7 +730,9 @@ def _load_kernel_image(
     addr = kernel_addr if kernel_addr is not None else default_addr
     data = Path(kernel_path).read_bytes()
     emu.bus.write_ram_direct(addr, data)
-    logger.info(f"内核已预载: {kernel_path} -> PA 0x{addr:x} ({fmt_size(len(data))})")
+    logger.info(
+        f"内核已预载: {kernel_path} -> PA 0x{addr:x} ({fmt_size(len(data))})"
+    )
     return kernel_path, addr, len(data)
 
 
@@ -734,6 +759,8 @@ def _periph_from_chip(
         virtio_net_s_base=_tree_base(p.virtio_net_s),
         virtio_net_m_base=_tree_base(p.virtio_net_m),
         crng_base=_tree_base(p.crng),
+        # 芯片设备树没有关机与复位请求设备的节点, 该模式不注册该设备.
+        power_base=0,
         boot_addr_base=_tree_base(chip.boot_addr),
         boot_addr_size=boot_addr_size,
         watchdog_base=_tree_base(p.watchdog),
@@ -768,7 +795,9 @@ def _resolve_disk_image(
         return ns.disk
     path = Path(ns.disk) if ns.disk else DEFAULT_DISK_IMAGE
     if not path.is_file():
-        logger.error(f"磁盘镜像不存在: {path.resolve()}; 用 --disk 指定其他镜像")
+        logger.error(
+            f"磁盘镜像不存在: {path.resolve()}; 用 --disk 指定其他镜像"
+        )
         sys.exit(1)
     return str(path)
 
@@ -788,9 +817,13 @@ def _enable_chip_block_device(
     """
     if periph.virtio_blk_base:
         return
-    platform_regions = [(platform.ram_base, platform.ram_base + platform.ram_size)]
+    platform_regions = [
+        (platform.ram_base, platform.ram_base + platform.ram_size)
+    ]
     if platform.rom_base and platform.rom_size:
-        platform_regions.append((platform.rom_base, platform.rom_base + platform.rom_size))
+        platform_regions.append(
+            (platform.rom_base, platform.rom_base + platform.rom_size)
+        )
     device = chip.place_device(VIRTIO_BLK_DEVICE, reserved=platform_regions)
     periph.virtio_blk_base = device.region.base
     periph.virtio_blk_irq = device.irq
@@ -841,9 +874,7 @@ def _build_peripheral_config(
     return periph, bootargs, disk_image
 
 
-# ============================================================
 #  main
-# ============================================================
 
 
 def debugger(args: list[str] | None = None) -> None:
@@ -864,12 +895,14 @@ def debugger(args: list[str] | None = None) -> None:
     )
 
     effective_entry = image.entry_point + load_offset
-    # 判定用 None 比较: 入口地址 0 是合法入参 (sifive_u54 预设即取 0), 用真值判定
-    # 会把这一取值当作未给出而改用映像入口.
+    # 判定用 None 比较: 入口地址 0 是合法入参 (sifive_u54 预设即取 0), 用真值
+    # 判定会把这一取值当作未给出而改用映像入口.
     prog_cnt = ns.prog_cnt if ns.prog_cnt is not None else effective_entry
 
     try:
-        periph, bootargs, disk_image = _build_peripheral_config(ns, chip, platform)
+        periph, bootargs, disk_image = _build_peripheral_config(
+            ns, chip, platform
+        )
     except ValueError as e:
         logger.error(str(e))
         sys.exit(1)
@@ -895,7 +928,9 @@ def debugger(args: list[str] | None = None) -> None:
     for h in emu.harts:
         h.pc = prog_cnt
 
-    fdt_addr, preload_info = _load_boot_images(emu, ns, platform, chip, prog_cnt)
+    fdt_addr, preload_info = _load_boot_images(
+        emu, ns, platform, chip, prog_cnt
+    )
 
     target_entry = None
     if ns.entry_symbol:
@@ -924,7 +959,9 @@ def debugger(args: list[str] | None = None) -> None:
     )
     if kernel_info:
         kernel_path, kernel_addr, kernel_size = kernel_info
-        dbg._bins_images[ImageKind.KERNEL] = LoadedImage(kernel_path, kernel_addr, kernel_size)
+        dbg._bins_images[ImageKind.KERNEL] = LoadedImage(
+            kernel_path, kernel_addr, kernel_size
+        )
 
     if ns.sym_dir:
         dbg._sym_mod_dir = str(Path(ns.sym_dir).expanduser().resolve())

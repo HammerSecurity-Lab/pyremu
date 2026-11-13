@@ -35,14 +35,10 @@ def make_pte(perm: int = 0, ppn: int = 0) -> int:
 
 
 class StubImsic:
-    """只记录 IPI 清除调用的 IMSIC 替身."""
+    """只给出待处理中断位图的 IMSIC 替身."""
 
     def __init__(self, pending: int = 0) -> None:
         self.pending = pending
-        self.cleared: list[tuple[int, int]] = []
-
-    def clear_ipi_on_trap(self, hart_id: int, exc_code: int) -> None:
-        self.cleared.append((hart_id, exc_code))
 
     def get_pending_mip(self, hart_id: int) -> int:
         return self.pending

@@ -3,15 +3,27 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 #
 # 把 rootfs 目录打包为 gzip 压缩的 newc cpio, 供调试器以 --initrd 加载。
-#
-# 用法:
-#   tools/build_initramfs.sh <rootfs 目录> <输出文件>
-#
-# 输出文件取相对路径时按调用者的工作目录换算, 打包过程改换工作目录不影响结果;
-# 输出文件的上级目录不存在时创建。fakeroot 可用时经它打包, 使归档中的文件所有者
-# 与权限取 rootfs 目录当前的值; 不可用时直接打包并报告。
 
 set -euo pipefail
+
+usage() {
+	cat <<EOF
+用法: $0 <rootfs 目录> <输出文件>
+
+输出文件取相对路径时按调用者的工作目录换算, 打包过程改换工作目录不影响结果;
+输出文件的上级目录不存在时创建. fakeroot 可用时经它打包, 使归档中的文件所有者
+与权限取 rootfs 目录当前的值; 不可用时直接打包并报告.
+
+    -h, --help  显示本说明
+EOF
+}
+
+case "${1:-}" in
+	-h | --help)
+		usage
+		exit 0
+		;;
+esac
 
 rootfs_dir=${1:?缺少 rootfs 目录}
 out_file=${2:?缺少输出文件}

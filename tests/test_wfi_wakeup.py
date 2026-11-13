@@ -17,7 +17,11 @@ class TestWFIMsipWakeup:
 
     @pytest.fixture
     def emu_two_harts(self):
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=64 * 1024 * 1024,
+        )
         emu = Emulator(cfg, bootargs="")
         return emu
 
@@ -55,7 +59,9 @@ class TestWFIMsipWakeup:
             emu.step()
 
         # H1 应该已经执行了 WFI 进入 waiting
-        assert h1._waiting, f"H1 should be in WFI state, got waiting={h1._waiting}"
+        assert h1._waiting, (
+            f"H1 should be in WFI state, got waiting={h1._waiting}"
+        )
 
         # H0 写 CLINT MSIP[1] = 1
         msip1_pa = CLINT_BASE + 4
@@ -89,9 +95,12 @@ class TestWFIMsipWakeup:
         for _ in range(5):
             emu.step()
         assert h1._waiting, (
-            f"H1 should still be in WFI (no MSIP sent), got waiting={h1._waiting}"
+            f"H1 should still be in WFI (no MSIP sent), "
+            f"got waiting={h1._waiting}"
         )
-        assert h1.pc == 0x80000104, f"H1 PC should advance past WFI, got {h1.pc:#010x}"
+        assert h1.pc == 0x80000104, (
+            f"H1 PC should advance past WFI, got {h1.pc:#010x}"
+        )
 
 
 # 指令编码
@@ -99,6 +108,7 @@ LUI_X5_CLINT = 0x020002B7  # lui x5, 0x2000
 ADDI_X5_X5_4 = 0x00428293  # addi x5, x5, 4
 ADDI_X6_X0_1 = 0x00100313  # addi x6, x0, 1
 SW_X6_0_X5 = 0x0062A023  # sw x6, 0(x5)
+SW_X0_0_X5 = 0x0002A023  # sw x0, 0(x5)
 LUI_X7_RAM = 0x800003B7  # lui x7, 0x80000, 结果为符号扩展的 0xffffffff80000000
 SLLI_X7_X7_32 = 0x02039393  # slli x7, x7, 32
 SRLI_X7_X7_32 = 0x0203D393  # srli x7, x7, 32
@@ -123,7 +133,11 @@ class TestMsipStoreInNativeBatch:
 
     @pytest.fixture
     def emu_two_harts(self):
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=64 * 1024 * 1024,
+        )
         return Emulator(cfg, bootargs="")
 
     @staticmethod
@@ -133,7 +147,14 @@ class TestMsipStoreInNativeBatch:
             h.satp_val = 0
             mtvec = 0x8000_1000 + h.id * 0x100
             h.csrs["mtvec"].val = mtvec
-            emu.bus.write(mtvec, struct.pack("<I", MRET_INSTR))
+            # 陷态处理函数向本 hart 的 MSIP 写入 0 再返回: 进入陷态不清除挂起位,
+            # 中断源须由软件撤销, 否则 mret 后立即再次进入陷态
+            msip_addr = 4 * h.id
+            msip_imm = (msip_addr << 20) | (5 << 15) | (5 << 7) | 0x13
+            for index, instr in enumerate(
+                (LUI_X5_CLINT, msip_imm, SW_X0_0_X5, MRET_INSTR)
+            ):
+                emu.bus.write(mtvec + index * 4, struct.pack("<I", instr))
             h.csrs["mie"].val = 1 << 3  # MSIE
             h.csrs["mstatus"].val = 1 << 3  # MIE
 

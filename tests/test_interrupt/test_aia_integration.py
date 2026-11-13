@@ -18,7 +18,8 @@ from pyremu.platform import InterruptMode, PlatformConfig
 def _disable_aia_compile_override(monkeypatch):
     """Disable PYREMU_AIA compile-time override.
 
-    Tests use explicit configs: basic_machine() for legacy, basic_aia_machine() for AIA.
+    Tests use explicit configs: basic_machine() for legacy,
+    basic_aia_machine() for AIA.
     """
     monkeypatch.setattr(configs_gen, "PYREMU_AIA", False)
 
@@ -89,7 +90,8 @@ class TestAiaInterruptDelivery:
     """端到端中断投递: 外设 -> APLIC -> IMSIC -> hart mip."""
 
     def test_uart_irq_raises_seip(self, make_aia_emu):
-        """UART 写触发 APLIC set_irq, 中断进入 IMSIC S-file, get_pending_mip 返回 SEIP.
+        """UART 写触发 APLIC set_irq, 中断进入 IMSIC S-file,
+        get_pending_mip 返回 SEIP.
 
         Device interrupts route to S-mode (delegate=True) so the kernel's
         IMSIC driver handles them directly without M-mode forwarding.
@@ -99,16 +101,23 @@ class TestAiaInterruptDelivery:
         # 使能 IMSIC S-file eie for IID=20 (UART via APLIC)
         emu.imsic.csr_write(0, "S", 0x70, 1)  # eidelivery=1
         emu.imsic.csr_write(0, "S", 0xC0, 1 << 20)  # eie: enable identity 20
-        # 配置 APLIC source 10 映射到 hart 0 S-file IID 20, 该配置经 MMIO 写入以模拟内核流程
-        emu.aplic.write(0x3004 + (10 - 1) * 4, (20).to_bytes(4, "little"))  # target[10]
+        # 配置 APLIC source 10 映射到 hart 0 S-file IID 20,
+        # 该配置经 MMIO 写入以模拟内核流程
+        emu.aplic.write(
+            0x3004 + (10 - 1) * 4, (20).to_bytes(4, "little")
+        )  # target[10]
         emu.aplic.write(0x0004 + (10 - 1) * 4, (0x6).to_bytes(4, "little"))
-        emu.aplic.write(0x1EDC, (10).to_bytes(4, "little"))  # setienum source 10
+        emu.aplic.write(
+            0x1EDC, (10).to_bytes(4, "little")
+        )  # setienum source 10
 
         # 触发 UART 中断: 经 APLIC source 10 -> S-file IID=20
         emu.aplic.set_irq(10, True)
 
         mip = emu.imsic.get_pending_mip(0)
-        assert mip & (1 << 9), f"SEIP expected (S-mode routing), got mip={mip:#x}"
+        assert mip & (1 << 9), (
+            f"SEIP expected (S-mode routing), got mip={mip:#x}"
+        )
 
     def test_check_pending_interrupts_sees_imsic_meip(self, make_aia_emu):
         """check_pending_interrupts 在 IMSIC 有 pending 时检测到 MEI."""
@@ -159,7 +168,8 @@ class TestAiaWfiWakeup:
         imsic.csr_write(0, "M", 0x70, 1)
         imsic.csr_write(0, "M", 0xC0, 1 << 10)
         hart.mie = True  # 全局 MIE=1
-        hart.csrs["mie"].val = 1 << 11  # MEIE=1 (WFI requires source-level enable)
+        # MEIE=1 (WFI requires source-level enable)
+        hart.csrs["mie"].val = 1 << 11
         # WFI: 无 pending 中断, 进入等待
         hart._waiting = True
         # IMSIC 注入中断
@@ -349,7 +359,10 @@ class TestEnclaveNetRouting:
         assert (imsic.read_topei(0, "M") >> 16) == IID_EXT_MIN
         assert imsic.get_pending_mip(0) == 0, "认领后 pending 应清除"
 
-    def test_absent_nic_leaves_mmode_aplic_source_unbound(self, make_aia_config):
+    def test_absent_nic_leaves_mmode_aplic_source_unbound(
+        self,
+        make_aia_config,
+    ):
         """未注册飞地侧网卡时不占用该中断源.
 
         回归: M 域 APLIC 的中断源预置不判断网卡是否存在, 平台未提供该设备时

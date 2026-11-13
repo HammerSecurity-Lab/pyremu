@@ -1,0 +1,32 @@
+/* hello_payload.c - picolibc 飞地 payload 测试
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(
+	int argc,
+	char **argv
+) {
+	puts("[payload] Hello from picolibc enclave payload!");
+	printf("[payload] argc=%d\n", argc);
+	if (argv && argv[0]) {
+		printf("[payload] argv[0]=%s\n", argv[0]);
+	}
+
+	/* 测试 malloc in TEE */
+	char *buf = malloc(128);
+	if (buf) {
+		strcpy(buf, "malloc-works");
+		printf("[payload] malloc(128)='%s'\n", buf);
+		free(buf);
+	} else {
+		puts("[payload] malloc failed");
+	}
+
+	puts("[payload] done");
+	return 0;
+}

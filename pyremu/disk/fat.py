@@ -64,7 +64,9 @@ class FatSuperblock:
     def root_dir_sectors(self) -> int:
         """根目录区占用的扇区数, 仅 FAT12 与 FAT16 有该项."""
         entry_bytes = self.root_entry_count * 32
-        return (entry_bytes + self.bytes_per_sector - 1) // self.bytes_per_sector
+        return (entry_bytes + self.bytes_per_sector - 1) // (
+            self.bytes_per_sector
+        )
 
     @property
     def data_start_sector(self) -> int:
@@ -93,7 +95,8 @@ class FatSuperblock:
             DiskRegion(
                 "数据区",
                 self.data_start_sector * self.bytes_per_sector,
-                (self.total_sectors - self.data_start_sector) * self.bytes_per_sector,
+                (self.total_sectors - self.data_start_sector)
+                * self.bytes_per_sector,
             )
         )
 
@@ -137,7 +140,10 @@ def probe(path: str | Path) -> FatSuperblock | None:
         boot = fp.read(BOOT_SECTOR_SIZE)
         if len(boot) < BOOT_SECTOR_SIZE:
             return None
-        if boot[0] not in (0xEB, 0xE9) or boot[510:512] != EXTENDED_BOOT_SIGNATURE:
+        if (
+            boot[0] not in (0xEB, 0xE9)
+            or boot[510:512] != EXTENDED_BOOT_SIGNATURE
+        ):
             return None
         superblock = _parse_boot_sector(boot)
         if superblock is None:
@@ -183,9 +189,14 @@ def _parse_boot_sector(boot: bytes) -> FatSuperblock | None:
     if not is_plausible:
         return None
 
-    root_dir_sectors = (root_entry_count * 32 + bytes_per_sector - 1) // bytes_per_sector
+    root_dir_sectors = (root_entry_count * 32 + bytes_per_sector - 1) // (
+        bytes_per_sector
+    )
     data_sectors = (
-        total_sectors - reserved_sectors - fat_count * fat_sectors - root_dir_sectors
+        total_sectors
+        - reserved_sectors
+        - fat_count * fat_sectors
+        - root_dir_sectors
     )
     if data_sectors <= 0:
         return None
@@ -203,7 +214,9 @@ def _parse_boot_sector(boot: bytes) -> FatSuperblock | None:
             root_entry_count == 0
             and fat_sectors_16 == 0
             and fat_sectors_32 != 0
-            and ROOT_CLUSTER_MIN <= root_cluster < cluster_count + ROOT_CLUSTER_MIN
+            and ROOT_CLUSTER_MIN
+            <= root_cluster
+            < cluster_count + ROOT_CLUSTER_MIN
         )
         if not is_valid:
             return None

@@ -281,8 +281,9 @@ pub fn sbi_set_timer(stime_value: u64) {
 /// 设定下一次 S 模式时钟中断的截止时间。
 ///
 /// 平台提供 sstc 时直接写 stimecmp; 否则经 SBI TIME 调用交给 M 模式, 由机器模式的
-/// 定时器事件列表按最早的截止时间设定 mtimecmp。两条路径都清除 sip.STI: 该位描述
-/// 的是刚处理完的那次到期。
+/// 定时器事件列表按最早的截止时间设定 mtimecmp。挂起位不在本函数内清除: sip.STIP 对
+/// S 模式只读, 无 sstc 时由 M 模式在设定时清除, 有 sstc 时由硬件在写入未来的
+/// stimecmp 时清除。
 #[inline]
 pub fn set_smode_timer(deadline: u64) {
 	if platform::PlatformFeatures::load().has_sstc() {
@@ -290,5 +291,4 @@ pub fn set_smode_timer(deadline: u64) {
 	} else {
 		sbi_set_timer(deadline);
 	}
-	csr::clear_csr!(sip, csr::STI);
 }

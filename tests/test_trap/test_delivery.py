@@ -18,7 +18,6 @@ from pyremu.interrupt.clint import CLINT
 from pyremu.memory.bus import Bus
 from tests.test_trap.support import (
     MTVEC,
-    StubImsic,
     STVEC,
 )
 
@@ -59,7 +58,9 @@ class TestTakeTrap:
         hart.deliver_trap(TrapType.SmodeTimerInterrupt, is_interrupt=True)
         # SmodeTimerInterrupt code = 5
         expected_pc = 0xC0000000 + 4 * 5
-        assert hart.pc == expected_pc, f"向量模式应跳转到 BASE+4*5 = 0x{expected_pc:x}"
+        assert hart.pc == expected_pc, (
+            f"向量模式应跳转到 BASE+4*5 = 0x{expected_pc:x}"
+        )
 
     def test_take_trap_vectored_ignored_for_exception(self, hart):
         """向量模式对异常不生效, 仍使用直接模式."""
@@ -166,7 +167,9 @@ class TestTrapDelegation:
         """mideleg[5]=1: 定时器中断委派到 S 模式."""
         hart.csrs["mideleg"].val = 1 << 5
         hart.mode = RiscvMode.U
-        hart.deliver_trap(TrapType.SmodeTimerInterrupt, tval=0, is_interrupt=True)
+        hart.deliver_trap(
+            TrapType.SmodeTimerInterrupt, tval=0, is_interrupt=True
+        )
 
         assert hart.pc == 0x80004000
         assert hart.mode == RiscvMode.S
@@ -179,7 +182,9 @@ class TestTrapDelegation:
     def test_mideleg_not_set_goes_to_m(self, hart):
         """mideleg=0: 中断照旧进入 M 模式."""
         hart.mode = RiscvMode.U
-        hart.deliver_trap(TrapType.SmodeTimerInterrupt, tval=0, is_interrupt=True)
+        hart.deliver_trap(
+            TrapType.SmodeTimerInterrupt, tval=0, is_interrupt=True
+        )
 
         assert hart.pc == 0x80000000
         assert hart.mode == RiscvMode.M
@@ -345,7 +350,9 @@ class TestNestedDelivery:
     def test_interrupt_delegated_by_mideleg(self, hart):
         hart.mode = RiscvMode.U
         hart.csrs["mideleg"].val = 1 << 7
-        hart.deliver_trap_nested_enabled(TrapType.MmodeTimerInterrupt, is_interrupt=True)
+        hart.deliver_trap_nested_enabled(
+            TrapType.MmodeTimerInterrupt, is_interrupt=True
+        )
         assert hart.mode is RiscvMode.S
         assert hart.scause_val == (1 << 63) | 7
         assert hart.sepc_val == 0x8000_4000
@@ -371,20 +378,21 @@ class TestDeliveryBranches:
         hart.pc = 0x8000_4000
         return hart
 
-    def test_ssip_trap_clears_imsic_eip(self, hart):
+    def test_ssip_trap_preserves_pending_bit(self, hart):
+        """投递不改变 mip.SSIP: 该位由软件清除."""
         hart.mode = RiscvMode.U
-        imsic = StubImsic()
-        hart.imsic = imsic
         hart.csrs["mideleg"].val = 1 << 1
+        hart.update_hw_mip(1 << 1)
         hart.deliver_trap(TrapType.SmodeSoftInterrupt, is_interrupt=True)
-        assert imsic.cleared == [(0, 1)]
-        assert not (hart.mip_val & (1 << 1))
+        assert hart.mip_val & (1 << 1)
+        assert hart.scause_val == (1 << 63) | 1
 
-    def test_msip_trap_clears_imsic_eip(self, hart):
-        imsic = StubImsic()
-        hart.imsic = imsic
+    def test_msip_trap_preserves_pending_bit(self, hart):
+        """投递不改变 mip.MSIP: 该位反映 CLINT 的 msip 寄存器."""
+        hart.update_hw_mip(1 << 3)
         hart.deliver_trap(TrapType.MmodeSoftInterrupt, is_interrupt=True)
-        assert imsic.cleared == [(0, 3)]
+        assert hart.mip_val & (1 << 3)
+        assert hart.mcause_val == (1 << 63) | 3
 
     def test_hypervisor_ecall_traps_ill_instr(self, hart):
         hart.mode = RiscvMode.H
@@ -393,19 +401,16 @@ class TestDeliveryBranches:
         assert hart.mtval_val == 0x8000_4000
 
 
-class TestMsipClearingOnTrapDelivery:
-    """验证 MSIP 中断投递时 CLINT 硬件源 (_msip) 被正确清零.
+class TestMsipSurvivesTrapDelivery:
+    """mip.MSIP 反映 CLINT 的 msip 寄存器, 投递陷态不改变该位.
 
-    RISC-V 规范: mip.MSIP 是只读位, 反映 CLINT MSIP 寄存器.
-    若 M-mode (或委派到 S-mode) 响应 MSIP 后不清零硬件源,
-    mret/sret 后 mip.MSIP 持续为 1 -> 重复投递 -> 死循环 (MSIP 风暴).
-
-    回归: 多核 TLB shootdown 中 Hart 0 在 tlb_sync 自旋等待,
-    Hart 1 的 MSIP handler 若未清零 CLINT -> Hart 0 永不休眠 -> 饿死.
+    RISC-V 规范: mip 中由硬件源断言的位只随硬件源改变. 收到软件中断后, 受调试
+    程序的陷态处理函数须写入 CLINT 的 msip 撤销该中断; 未撤销时返回后再次投递,
+    与真实硬件一致.
     """
 
-    WFI_INSTR = 0x10500073
     NOP_INSTR = 0x00000013
+    MRET_INSTR = 0x30200073
 
     @staticmethod
     def _make_hart_with_clint(
@@ -437,44 +442,37 @@ class TestMsipClearingOnTrapDelivery:
 
         return h, clint, bus
 
-    def test_deliver_msip_to_mmode_clears_clint_msip(self):
-        """MSIP 投递到 M 模式后 CLINT _msip 必须为 0."""
+    def test_deliver_msip_to_mmode_keeps_clint_msip(self):
+        """投递到 M 模式后, CLINT 的 msip 与 mip.MSIP 保持置位."""
         h, clint, _ = self._make_hart_with_clint(hart_id=0, mode=RiscvMode.S)
 
-        # S 模式运行 (模拟 Linux kernel), MSIP 已置位
         clint.send_ipi(0)
         assert clint._msip[0] == 1, "前置: _msip 应为 1"
 
-        # 触发中断检查 -> deliver_trap(MmodeSoftInterrupt) -> _trap_deliver_mmode
         taken = h.check_pending_interrupts()
         assert taken, "MSIP 应被投递"
         assert h.mode == RiscvMode.M, "应切换到 M 模式"
-        assert h.mcause_val == 0x8000_0000_0000_0003, "mcause 应为 MSI, 实际={h.mcause_val:#x}"
-
-        # 关键断言: CLINT _msip 已被清零
-        assert clint._msip[0] == 0, (
-            f"投递 MSIP 到 M 模式后 _msip 必须清零, 实际={clint._msip[0]}"
+        assert h.mcause_val == 0x8000_0000_0000_0003, (
+            f"mcause 应为 MSI, 实际={h.mcause_val:#x}"
         )
-        # mip CSR 也应已清零 MSIP 位
-        assert not (h.mip_val & (1 << 3)), f"投递后 mip.MSIP 必须为 0, 实际 mip={h.mip_val:#x}"
 
-    def test_deliver_msip_delegated_to_smode_clears_clint_msip(self):
-        """MSIP 委派到 S 模式 (mideleg[3]=1) 后 CLINT _msip 必须为 0.
+        assert clint._msip[0] == 1, (
+            f"投递不改变硬件源, _msip 应仍为 1, 实际={clint._msip[0]}"
+        )
+        assert h.mip_val & (1 << 3), (
+            f"投递后 mip.MSIP 应保持置位, 实际 mip={h.mip_val:#x}"
+        )
 
-        回归: 若 MSIP 被 mideleg 委派到 S 模式, _trap_deliver_smode 必须
-        清理 CLINT 硬件源, 与 _trap_deliver_mmode 对称.
-        """
+    def test_deliver_msip_delegated_to_smode_keeps_clint_msip(self):
+        """MSIP 委派到 S 模式 (mideleg[3]=1) 时, 硬件源同样保持置位."""
         h, clint, _ = self._make_hart_with_clint(hart_id=0, mode=RiscvMode.S)
 
-        # 委派 MSIP 到 S 模式
-        h.csrs["mideleg"].val |= 1 << 3  # mideleg[3] = 1
+        h.csrs["mideleg"].val |= 1 << 3
         assert h.csrs["mideleg"].val & (1 << 3), "前置: mideleg[3] 必须置位"
 
-        # S 模式运行, MSIP 已置位
         clint.send_ipi(0)
         assert clint._msip[0] == 1, "前置: _msip 应为 1"
 
-        # 触发中断检查 -> deliver_trap -> 委派到 _trap_deliver_smode
         taken = h.check_pending_interrupts()
         assert taken, "MSIP 应被投递"
         assert h.mode == RiscvMode.S, "委派中断应保持 S 模式"
@@ -482,93 +480,63 @@ class TestMsipClearingOnTrapDelivery:
             f"scause 应为 MSI, 实际={h.scause_val:#x}"
         )
 
-        # 关键断言: CLINT _msip 已被清零
-        assert clint._msip[0] == 0, (
-            f"投递 MSIP 到 S 模式后 _msip 必须清零, 实际={clint._msip[0]}"
+        assert clint._msip[0] == 1, (
+            f"投递不改变硬件源, _msip 应仍为 1, 实际={clint._msip[0]}"
         )
-        assert not (h.mip_val & (1 << 3)), f"投递后 mip.MSIP 必须为 0, 实际 mip={h.mip_val:#x}"
-
-    def test_repeated_msip_delivery_does_not_storm(self):
-        """连续投递 MSIP 30 次 -> 每次 CLINT _msip 被清零, 不形成风暴.
-
-        模拟 bug_rec.txt 中观察到的场景: MSIP 连续投递 30 次且 mepc
-        始终不变.  若每次投递后 _msip 被清零但被立即重新断言 (如另一个
-        hart 持续发 IPI), 则 mepc 不变是正常的 — 中断每次都在同一
-        指令处发生.
-        """
-        h, clint, _ = self._make_hart_with_clint(hart_id=0, mode=RiscvMode.S)
-
-        mepc_values: list[int] = []
-        msip_after_clear: list[int] = []
-
-        for _ in range(30):
-            # 重新断言 MSIP (模拟另一个 hart 发 IPI)
-            clint.send_ipi(0)
-            assert clint._msip[0] == 1
-
-            saved_pc = h.pc
-            taken = h.check_pending_interrupts()
-
-            if taken:
-                # 记录 mepc (中断发生时 PC)
-                mepc_values.append(h.mepc_val)
-
-            # 验证: 投递后 CLINT _msip 必须为 0
-            msip_after_clear.append(clint._msip[0])
-            assert clint._msip[0] == 0, (
-                f"第 {_} 次投递后 _msip 必须清零, 实际={clint._msip[0]}"
-            )
-            assert not (h.mip_val & (1 << 3)), f"第 {_} 次投递后 mip.MSIP 必须为 0"
-
-            # 模拟 MRET 回到中断上下文 (相同的 PC)
-            h.mode = RiscvMode.S
-            h.pc = saved_pc
-            # 恢复 mstatus (MIE=1, MPIE=1)
-            h.mstatus_val = MSTATUS_MIE | (1 << 7)
-
-        # 所有 30 次投递后 _msip 均为 0
-        assert all(v == 0 for v in msip_after_clear), (
-            f"所有 30 次投递后 _msip 必须为 0, 实际={msip_after_clear}"
+        assert h.mip_val & (1 << 3), (
+            f"投递后 mip.MSIP 应保持置位, 实际 mip={h.mip_val:#x}"
         )
-        # mepc 每次相同 (因为每次重新断言 MSIP 时 PC 不变)
-        assert len(mepc_values) == 30
 
-    def test_deliver_msip_then_mret_no_residual_msip(self):
-        """MSIP 投递 -> MRET -> 下一指令边界检查: 无残留 MSIP.
-
-        完整的 trap -> return 循环: MSIP 投递到 M 模式, handler 执行后
-        mret 返回 S 模式, check_pending_interrupts 不应再检测到 MSIP.
-        """
+    def test_handler_clearing_clint_msip_revokes_pending(self):
+        """陷态处理函数写入 CLINT 的 msip 后, mip.MSIP 随之清除,
+        返回后不再投递."""
         h, clint, bus = self._make_hart_with_clint(hart_id=0, mode=RiscvMode.S)
 
-        # 在 mepc 处放一条 NOP (将从中断返回处执行)
         ret_addr = 0x80001000
         bus.write(ret_addr, self.NOP_INSTR.to_bytes(4, "little"))
 
-        # 1. 断言 MSIP
         clint.send_ipi(0)
-        h.pc = ret_addr  # 模拟在 ret_addr 处被中断
-
-        # 2. 投递 MSIP -> M 模式
-        taken = h.check_pending_interrupts()
-        assert taken
+        h.pc = ret_addr
+        assert h.check_pending_interrupts()
         assert h.mode == RiscvMode.M
-        assert h.mepc_val == ret_addr, f"mepc 应为 ret_addr, 实际={h.mepc_val:#x}"
+        assert h.mepc_val == ret_addr, (
+            f"mepc 应为 ret_addr, 实际={h.mepc_val:#x}"
+        )
 
-        # 3. 验证 MSIP 已清零
+        # 陷态处理函数写入 msip 撤销中断
+        clint.write(0, (0).to_bytes(4, "little"))
         assert clint._msip[0] == 0
-        assert not (h.mip_val & (1 << 3))
 
-        # 4. 执行 MRET -> 返回 S 模式, PC = mepc
-        h.exec_instr(0x30200073)  # MRET
+        h.exec_instr(self.MRET_INSTR)
         assert h.mode == RiscvMode.S, f"MRET 后应为 S 模式, 实际={h.mode}"
         assert h.pc == ret_addr, f"MRET 后 PC 应为 ret_addr, 实际={h.pc:#x}"
 
-        # 5. 执行 NOP, 然后检查中断 — 不应有 MSIP
         h.exec_instr(self.NOP_INSTR)
-        taken2 = h.check_pending_interrupts()
-        assert not taken2, (
-            f"MRET 后不应再有 MSIP 中断, mip={h.mip_val:#x} _msip={clint._msip[0]}"
+        assert not h.check_pending_interrupts(), (
+            f"撤销 msip 后不应再投递, mip={h.mip_val:#x} _msip={clint._msip[0]}"
         )
-        assert clint._msip[0] == 0, "MRET 后 _msip 仍应为 0"
-        assert not (h.mip_val & (1 << 3)), "MRET 后 mip.MSIP 仍应为 0"
+        assert not (h.mip_val & (1 << 3)), "撤销 msip 后 mip.MSIP 应为 0"
+
+    def test_uncleared_msip_is_redelivered_after_return(self):
+        """未撤销 msip 时, mret 返回后重新投递, 中断不会在投递时被丢弃."""
+        h, clint, bus = self._make_hart_with_clint(hart_id=0, mode=RiscvMode.S)
+
+        ret_addr = 0x80001000
+        bus.write(ret_addr, self.NOP_INSTR.to_bytes(4, "little"))
+
+        clint.send_ipi(0)
+        h.pc = ret_addr
+        assert h.check_pending_interrupts()
+        assert h.mode == RiscvMode.M
+
+        h.exec_instr(self.MRET_INSTR)
+        assert h.mode == RiscvMode.S
+
+        assert h.check_pending_interrupts(), (
+            f"未撤销的 MSIP 应在返回后重新投递, "
+            f"mip={h.mip_val:#x} _msip={clint._msip[0]}"
+        )
+        assert h.mode == RiscvMode.M
+        assert h.mepc_val == ret_addr, (
+            f"再次投递的 mepc 应为 ret_addr, 实际={h.mepc_val:#x}"
+        )

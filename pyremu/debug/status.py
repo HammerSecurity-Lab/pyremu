@@ -19,6 +19,7 @@ from pyremu.debug.utils import (
     ip_bits,
     IRQ_NAMES,
 )
+from pyremu.peripheral.power_ctrl import PowerRequest
 
 
 class StatusOps(SharedAttrs):
@@ -30,7 +31,9 @@ class StatusOps(SharedAttrs):
 
     def cmd_mode(self) -> None:
         h = self.hart
-        self._console.print(f"Mode = [bold cyan]{h.mode.name}[/] ({h.mode.value})")
+        self._console.print(
+            f"Mode = [bold cyan]{h.mode.name}[/] ({h.mode.value})"
+        )
 
     # ----------------------------------------------------------
     #  mstatus
@@ -200,9 +203,12 @@ class StatusOps(SharedAttrs):
         tbl.add_column("Mode", style="yellow", width=5)
         tbl.add_column("State", width=8)
         tbl.add_column("InstrNum", justify="right")
+        request = self._emu.power_request
         for h in harts:
             mark = "*" if h.id == active_hart else " "
-            if h._halted:
+            if request is not None:
+                state = "[red]off[/]"
+            elif h._halted:
                 state = "[red]halted[/]"
             elif h._waiting:
                 state = "[dim]pending[/]"  # waiting 也行
@@ -224,7 +230,15 @@ class StatusOps(SharedAttrs):
 
     def _show_hart_detail(self, hart_id: int) -> None:
         h = self._emu.harts[hart_id]
-        halted_note = " [red]已暂停 — 不可恢复陷态[/]" if h._halted else ""
+        request = self._emu.power_request
+        if request is PowerRequest.SHUTDOWN:
+            halted_note = " [red]受调试程序已请求关机[/]"
+        elif request is PowerRequest.REBOOT:
+            halted_note = " [red]受调试程序已请求复位[/]"
+        elif h._halted:
+            halted_note = " [red]已暂停 — 不可恢复陷态[/]"
+        else:
+            halted_note = ""
         instr_fmt = fmt_instr_count(h._total_instrs)
         tbl = Table(
             title=f"Hart {hart_id}  指令计数: {instr_fmt}{halted_note}",

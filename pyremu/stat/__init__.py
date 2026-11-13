@@ -8,7 +8,8 @@
 - batch.py     — 加速执行每轮的批次数、退出原因、每批指令数与三段耗时
 - recording.py — 记录入口与 ``PYREMU_BATCH_STATS`` 的判定
 
-统计关闭时 ``begin_round``、``mark_phase`` 与 ``end_round`` 均为空操作, 调用方直接调用.
+统计关闭时 ``begin_round``、``mark_phase`` 与 ``end_round`` 均为空操作,
+调用方直接调用.
 """
 
 from pyremu.stat.batch import BatchStats

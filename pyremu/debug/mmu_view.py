@@ -134,7 +134,9 @@ class MmuViewOps(SharedAttrs):
         """按匹配模式算出条目的起始地址与长度; 模式为 OFF 时两者都是 0."""
         if a_mode == PMP_A_TOR:
             prev = mask64(
-                h.csrs[f"pmpaddr{i - 1}"].val if i > 0 and f"pmpaddr{i - 1}" in h.csrs else 0
+                h.csrs[f"pmpaddr{i - 1}"].val
+                if i > 0 and f"pmpaddr{i - 1}" in h.csrs
+                else 0
             )
             lo = 0 if i == 0 else (prev << 2)
             hi = addr_field << 2
@@ -146,7 +148,11 @@ class MmuViewOps(SharedAttrs):
         return 0, 0
 
     @staticmethod
-    def _pmp_range_cells(a_mode: int, base: int, size: int) -> tuple[str, str, str]:
+    def _pmp_range_cells(
+        a_mode: int,
+        base: int,
+        size: int,
+    ) -> tuple[str, str, str]:
         """按匹配模式与长度给出起始地址、结束地址与长度三列."""
         if a_mode == PMP_A_OFF:
             return "-", "-", "-"
@@ -218,7 +224,8 @@ class MmuViewOps(SharedAttrs):
         vpn2 <<= 3
         out: list[str] = [
             f"[bold]VA[/] [cyan]0x{va:016x}[/]",
-            f"  VPN[2]={vpn2 >> 3:#05x}  VPN[1]={vpn1:#05x}  VPN[0]={vpn0:#05x}  "
+            f"  VPN[2]={vpn2 >> 3:#05x}  VPN[1]={vpn1:#05x}  "
+            f"VPN[0]={vpn0:#05x}  "
             f"offset={page_off:#05x}",
             f"  satp = {mn}, root PPN=0x{root_ppn:09x} -> PA=0x{root_pa:016x}",
         ]
@@ -251,9 +258,13 @@ class MmuViewOps(SharedAttrs):
             if level == 1:
                 out.append("[red]根页表不可读[/]")
             else:
-                out.append(f"[red]L{level} 页表 (PA=0x{table_pa:016x}) 不可读[/]")
+                out.append(
+                    f"[red]L{level} 页表 (PA=0x{table_pa:016x}) 不可读[/]"
+                )
             return None
-        pte = int.from_bytes(raw[index * 8 : index * 8 + 8], "little", signed=False)
+        pte = int.from_bytes(
+            raw[index * 8 : index * 8 + 8], "little", signed=False
+        )
         self._pt_append_level(out, level, index, pte)
         return pte
 
@@ -269,6 +280,9 @@ class MmuViewOps(SharedAttrs):
         ppn = (pte >> 10) & 0xF_FFFF_FFFF
         pa = ppn << 12
         status = "[red]无效[/]" if not (pte & 1) else flags
-        out.append(f"  L{level}[{idx:#05x}] = 0x{pte:016x}  PPN=0x{ppn:09x}  -> {status}")
+        out.append(
+            f"  L{level}[{idx:#05x}] = 0x{pte:016x}  "
+            f"PPN=0x{ppn:09x}  -> {status}"
+        )
         if pte & 1 and not (pte & 0xE) and level < 3:
             out.append(f"        └─ 下一级页表 PA = 0x{pa:016x}")

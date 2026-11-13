@@ -94,7 +94,7 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
             else (
                 "earlycon=sbi console=ttySIF0 "
                 "random.trust_bootloader=on "
-                "ro init=/bin/zsh TERM=vt100"
+                "ro init=/bin/zsh TERM=xterm-256color"
             )
         )
 
@@ -114,7 +114,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         self._mtime_instr_frac: int = 0  # 指令计数推进 mtime 的亚 tick 余数
         self._prev_all_exec_cnt: int = 0  # 上一轮加速执行累计的指令数
         # initramfs 的物理范围, 由 load_initrd 设置, 未加载时为 None;
-        # build_default_dtb 据此写入 /chosen/linux,initrd-start 与 linux,initrd-end.
+        # build_default_dtb 据此写入 /chosen 下的 linux,initrd-start 与
+        # linux,initrd-end.
         self._initrd: dev_tree.Initrd | None = None
 
         # 终端 I/O 管理器, 由 _init_termio 在 UART 就绪后创建; 后台线程管理标准
@@ -151,7 +152,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         self.clint = CLINT(num_harts=config.num_harts)
         self.clint.base_addr = config.periph.clint_base
         self.bus.add_device(self.clint.base_addr, self.clint)
-        # 统一声明外部中断设备为 None, 由 _setup_interrupt_controllers 按配置填充.
+        # 统一声明外部中断设备为 None, 由 _setup_interrupt_controllers
+        # 按配置填充.
         self.plic: PLIC | None = None
         self.imsic: IMSIC | None = None
         self.aplic: APLIC | None = None
@@ -237,7 +239,10 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
 
     @property
     def irq_route(self) -> dict[int, APLIC | PLIC]:
-        """中断源编号与中断控制器的对应关系, 由 _setup_interrupt_controllers 填充."""
+        """中断源编号与中断控制器的对应关系.
+
+        由 _setup_interrupt_controllers 填充.
+        """
         return self._irq_sink.irq_route
 
     # ----------------------------------------------------------
@@ -255,13 +260,13 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         """
         if self._closed:
             return
-        self._closed = True
         if self.watchdog is not None:
             self.watchdog.stop()
         if self._termio is not None:
             self._termio.stop()
         if self.uart is not None:
             self.uart.close_logs()
+        self._closed = True
 
     @silent_on_err
     def __del__(self) -> None:
@@ -282,8 +287,9 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
     def add_breakpoint(self, addr: int) -> None:
         """登记连续执行的停止地址.
 
-        地址命中时 ``run()`` 以 ``BREAKPOINT`` 停止. 地址表与调试器注入的断点相同:
-        纯 Python 循环在每步之前比对, 加速执行引擎在每条指令执行之前比对.
+        地址命中时 ``run()`` 以 ``BREAKPOINT`` 停止. 地址表与调试器注入的
+        断点相同: 纯 Python 循环在每步之前比对, 加速执行引擎在每条指令执行
+        之前比对.
         """
         if addr not in self._bp_addrs:
             self._bp_addrs.append(addr)
@@ -292,9 +298,9 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
     def irq_sink(self) -> DeviceIrqSink:
         """设备中断投递目标, 供 Emulator 之外的调用方修改中断线电平.
 
-        调用形式为 ``emu.irq_sink(source, pending)``: 按中断源编号选中处理该中断源
-        的控制器, 写入其挂起状态并置 ext_irq 通知位. 设备经构造参数 ``on_irq`` 持有
-        同一对象, 理由见 DeviceIrqSink.
+        调用形式为 ``emu.irq_sink(source, pending)``: 按中断源编号选中处理该
+        中断源的控制器, 写入其挂起状态并置 ext_irq 通知位. 设备经构造参数
+        ``on_irq`` 持有同一对象, 理由见 DeviceIrqSink.
         """
         return self._irq_sink
 

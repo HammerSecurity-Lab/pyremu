@@ -155,7 +155,9 @@ class TestWfi:
         assert not h._waiting, "应退出等待状态"
         assert h.pc == 0x80000000, "应跳转到 mtvec"
         cause = h.mcause_val
-        assert cause == 0x8000_0000_0000_0007, f"应为 MTI, 实际 mcause={cause:#018x}"
+        assert cause == 0x8000_0000_0000_0007, (
+            f"应为 MTI, 实际 mcause={cause:#018x}"
+        )
 
     def test_wfi_wake_by_ipi(self):
         """WFI 等待后 IPI 唤醒 hart."""
@@ -186,7 +188,9 @@ class TestWfi:
         assert not h._waiting
         assert h.pc == 0x80000000, "应跳转到 mtvec"
         cause = h.mcause_val
-        assert cause == 0x8000_0000_0000_0003, f"应为 MSI, 实际 mcause={cause:#018x}"
+        assert cause == 0x8000_0000_0000_0003, (
+            f"应为 MSI, 实际 mcause={cause:#018x}"
+        )
 
     def test_wfi_stays_waiting_no_interrupt(self):
         """无中断时 check_pending_interrupts 不唤醒 hart."""
@@ -287,7 +291,9 @@ class TestWfi:
         # 注入 ECALL trap
         h.deliver_trap(TrapType.EcallFromMmode, tval=0, is_interrupt=False)
         assert not h._waiting, "trap 应清除等待状态"
-        assert h.mcause_val == 11, f"应为 EcallFromMmode(11), 实际={h.mcause_val}"
+        assert h.mcause_val == 11, (
+            f"应为 EcallFromMmode(11), 实际={h.mcause_val}"
+        )
 
     # ============================================================
     #  WFI 在 emulator 中的行为
@@ -338,7 +344,9 @@ class TestWfi:
         assert not hart._waiting, "step 3: 应被定时器中断唤醒"
         assert hart.pc == 0x80000100, "应跳转到 mtvec"
         cause = hart.mcause_val
-        assert cause == 0x8000_0000_0000_0007, f"应为 MTI, 实际 mcause={cause:#018x}"
+        assert cause == 0x8000_0000_0000_0007, (
+            f"应为 MTI, 实际 mcause={cause:#018x}"
+        )
 
     def test_wfi_wake_with_mstatus_mie_zero(self):
         """mstatus.MIE=0 时 WFI 仍可被 MSIP 唤醒.
@@ -378,7 +386,9 @@ class TestWfi:
 
         # step 2: MSIP 已挂起, WFI 应被唤醒 (即使 MIE=0)
         emu.step()
-        assert not hart._waiting, "MIE=0 时也应从 WFI 中唤醒 (mip & mie != 0 已满足)"
+        assert not hart._waiting, (
+            "MIE=0 时也应从 WFI 中唤醒 (mip & mie != 0 已满足)"
+        )
         assert hart._wfi_woken, "唤醒后须置位 wfi_woken"
         # MIE=0 -> 中断不应投递, PC 保持在 WFI+4
         assert hart.pc == 0x80000004, "MIE=0 时中断不应投递, PC 保持在 WFI+4"
@@ -390,7 +400,11 @@ class TestWfi:
     def _make_msie_emu(self, num_harts: int) -> Emulator:
         """创建多 hart Emulator, 全部 hart 开启 MSIE + mtvec."""
         clint = CLINT(num_harts=num_harts)
-        emu = make_test_emu(num_harts=num_harts, ram_size=1024 * 1024, clint_base=0x0200_0000)
+        emu = make_test_emu(
+            num_harts=num_harts,
+            ram_size=1024 * 1024,
+            clint_base=0x0200_0000,
+        )
         emu.clint = clint
         for h in emu.harts:
             h.interrupt_ctrl = clint
@@ -416,7 +430,9 @@ class TestWfi:
         # hart 0 放 WFI; 其余 hart 放 NOP
         emu.bus.write(0x80000000, self.WFI_INSTR.to_bytes(4, "little"))
         for tid in range(1, num_harts):
-            emu.bus.write(0x80000100 + tid * 0x100, (0x00000013).to_bytes(4, "little"))
+            emu.bus.write(
+                0x80000100 + tid * 0x100, (0x00000013).to_bytes(4, "little")
+            )
             emu.harts[tid].pc = 0x80000100 + tid * 0x100
         hart0.pc = 0x80000000
 
@@ -430,7 +446,9 @@ class TestWfi:
 
         # step 2: hart 0 被 IPI 唤醒
         emu.step()
-        assert not hart0._waiting, f"hart 0 应被 IPI 唤醒 (num_harts={num_harts})"
+        assert not hart0._waiting, (
+            f"hart 0 应被 IPI 唤醒 (num_harts={num_harts})"
+        )
         assert hart0.pc == 0x80000100, (
             f"hart 0 应跳转到 mtvec, PC={hart0.pc:#x} (num_harts={num_harts})"
         )
@@ -449,7 +467,10 @@ class TestWfi:
 
         # 所有 waiter + hart 0 都写入 WFI
         for tid in [0] + waiters:
-            emu.bus.write(0x80000000 + tid * 0x100, self.WFI_INSTR.to_bytes(4, "little"))
+            emu.bus.write(
+                0x80000000 + tid * 0x100,
+                self.WFI_INSTR.to_bytes(4, "little"),
+            )
             emu.harts[tid].pc = 0x80000000 + tid * 0x100
 
         # step 1: 所有 hart 进入 WFI 等待
@@ -464,7 +485,9 @@ class TestWfi:
 
         # step 2: hart 0 唤醒, 其余继续等待
         emu.step()
-        assert not emu.harts[0]._waiting, f"hart 0 应被 IPI 唤醒 (num_harts={num_harts})"
+        assert not emu.harts[0]._waiting, (
+            f"hart 0 应被 IPI 唤醒 (num_harts={num_harts})"
+        )
         assert emu.harts[0].pc == 0x80000100, (
             f"hart 0 应跳转到 mtvec, PC={emu.harts[0].pc:#x}"
         )
@@ -508,7 +531,9 @@ class TestWfi:
         assert not hart0._waiting, (
             f"第二轮 step1: WFI 应视为 NOP (num_harts={num_harts})"
         )
-        assert hart0._wfi_woken is False, "_wfi_woken 应由 handle_wfi NOP 路径清除"
+        assert hart0._wfi_woken is False, (
+            "_wfi_woken 应由 handle_wfi NOP 路径清除"
+        )
         assert hart0.pc == 0x80000004, "NOP 后 PC 应推进 4"
 
         # 模拟 while 循环分支回到 WFI.
@@ -519,7 +544,9 @@ class TestWfi:
         assert hart0._waiting, f"第二轮: 应再次进入等待 (num_harts={num_harts})"
         emu.clint.send_ipi(0)
         emu.step()
-        assert not hart0._waiting, f"第二轮: 应再次被唤醒 (num_harts={num_harts})"
+        assert not hart0._waiting, (
+            f"第二轮: 应再次被唤醒 (num_harts={num_harts})"
+        )
 
 
     def test_wfi_woken_survives_mret(self):
@@ -592,7 +619,9 @@ class TestWfi:
         assert h._waiting is True, "_wfi_woken=False -> WFI 应正常进入等待"
         emu.clint.send_ipi(0)
         emu.step()  # 再次唤醒
-        assert h._waiting is False, "_wfi_woken=False 的 WFI 仍可被 IPI 正常唤醒"
+        assert h._waiting is False, (
+            "_wfi_woken=False 的 WFI 仍可被 IPI 正常唤醒"
+        )
 
 
 # ============================================================
@@ -610,7 +639,8 @@ _SO_SMODE_STACK_PA = 0x5000  # stack physical page
 
 
 class TestWfiWakeupByStimecmp:
-    """验证 sync_pending_interrupts 正确识别 SSTC stimecmp 定时器, 使 WFI 被唤醒.
+    """验证 sync_pending_interrupts 正确识别 SSTC stimecmp 定时器,
+    使 WFI 被唤醒.
 
     2026-07-07 修复前该同步只检查 CLINT.check_interrupt 返回的 MSIP/MTIP,
     忽略了 stimecmp 对应的 STIP.  内核使用 SSTC 设定时器时, stimecmp 到期后
@@ -654,7 +684,9 @@ class TestWfiWakeupByStimecmp:
 
         hart.sync_pending_interrupts()
         woken = hart.wake_hart_from_wfi()
-        assert woken, f"stimecmp=50 已过期 (mtime={self.clint.get_mtime()}), 应唤醒 WFI"
+        assert woken, (
+            f"stimecmp=50 已过期 (mtime={self.clint.get_mtime()}), 应唤醒 WFI"
+        )
         assert not hart._waiting, "应清除 waiting 状态"
         assert hart._wfi_woken, "应置位 wfi_woken 标志"
         assert hart.mip_val & (1 << 5), "STIP (bit 5) 应已置位"
@@ -733,7 +765,9 @@ class TestWfiWakeupByStimecmp:
         self.clint._mtime = 100  # mtime = 100 < 500
 
         remaining = emu._wfi_ticks_until_wake([hart])
-        assert remaining is not None, "stimecmp=500 > mtime=100, 应返回剩余 tick 数"
+        assert remaining is not None, (
+            "stimecmp=500 > mtime=100, 应返回剩余 tick 数"
+        )
         assert remaining == 400, f"剩余 ticks 应为 400, 实际 {remaining}"
 
     def test_wfi_ticks_returns_none_when_both_disabled(self):
@@ -773,7 +807,9 @@ class TestWfiWakeupByStimecmp:
         self.clint._mtime = 50
 
         remaining = emu._wfi_ticks_until_wake([hart])
-        assert remaining == 50, f"应返回最早到期者 (stimecmp=100), 剩余 50, 实际 {remaining}"
+        assert remaining == 50, (
+            f"应返回最早到期者 (stimecmp=100), 剩余 50, 实际 {remaining}"
+        )
 
     # ---- 端到端: Emulator.step + stimecmp WFI wakeup ----
 
@@ -817,13 +853,16 @@ class TestWfiWakeupByStimecmp:
         # step 1: 执行 WFI -> mtime=10 (< 5000) -> 应进入等待
         emu.step()
         assert hart._waiting, (
-            f"step 1: mtime={self.clint._mtime} < stimecmp=5000, 应进入 WFI 等待"
+            f"step 1: mtime={self.clint._mtime} < stimecmp=5000, "
+            f"应进入 WFI 等待"
         )
 
         # step 2: 推进 mtime 到超过 stimecmp -> 应唤醒
         self.clint._mtime = 5100  # >= 5000
         emu.step()
-        assert not hart._waiting, f"step 2: mtime={self.clint._mtime} >= stimecmp=5000, 应唤醒"
+        assert not hart._waiting, (
+            f"step 2: mtime={self.clint._mtime} >= stimecmp=5000, 应唤醒"
+        )
         assert hart._wfi_woken, "唤醒后应置位 wfi_woken"
 
 
@@ -863,8 +902,8 @@ class TestPreconditions:
         assert h.wake_hart_from_wfi()
         assert not h._waiting
 
-    def test_wakeup_enables_msie_for_raw_ipi(self):
-        """MSIP 硬件置位而 MSIE=0 时, 同步挂起中断置位 MSIE 以便后续投递."""
+    def test_wakeup_keeps_mie_unchanged(self):
+        """同步挂起中断不改变 mie; MSIE=0 时 MSIP 不构成唤醒来源."""
         h = make_hart()
         clint = CLINT(num_harts=1)
         h.interrupt_ctrl = clint
@@ -872,9 +911,10 @@ class TestPreconditions:
         h.csrs["mie"].val = 0
         h._waiting = True
         h.sync_pending_interrupts()
-        assert h.wake_hart_from_wfi()
-        assert h.csrs["mie"].val & (1 << 3)
-        assert h._wfi_woken
+        assert not h.wake_hart_from_wfi()
+        assert h.csrs["mie"].val == 0, "同步不写 mie, 使能位由受调试程序设置"
+        assert h.mip_val & (1 << 3), "MSIP 挂起位仍应置位"
+        assert h._waiting
 
     def test_interrupt_check_queries_imsic_pending_bits(self):
         h = make_hart()

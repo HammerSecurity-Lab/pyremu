@@ -38,8 +38,7 @@ PMP_A_NA4 = 0b0001_0000  # Naturally Aligned 4-byte
 PMP_A_NAPOT = 0b0001_1000  # Naturally Aligned Power-of-Two
 PMP_L = 0b1000_0000  # 锁定位
 
-# RiscvMode 值到 PMP 检查特权级逻辑的映射:
-# M=3 且 MPRV=0 则跳过 PMP; 否则按 MPP 特权级检查
+# RiscvMode 的 M 模式取值: 有效特权级为 M 时只有锁定条目参与检查
 _MODE_M = 3
 
 
@@ -100,12 +99,14 @@ def _addr_in_range(addr: int, size: int, base: int, rsize: int) -> bool:
 
 
 def _check_perm(cfg: int, is_write: bool, is_execute: bool) -> bool:
-    """检查单条目权限: R 必须置位; 写入需 W; 执行需 X."""
+    """检查单条目权限: 执行只要求 X; 读要求 R; 写入另要求 W.
+    R 为 0 且 W 为 1 是保留组合, 读与写均被拒绝.
+    """
+    if is_execute:
+        return bool(cfg & PMP_X)
     if not (cfg & PMP_R):
         return False
     if is_write and not (cfg & PMP_W):
-        return False
-    if is_execute and not (cfg & PMP_X):
         return False
     return True
 
@@ -148,7 +149,8 @@ class Pmp:
             raise ValueError("num_entries must be 0..64")
         self._num_entries = num_entries
 
-        # 按条目编号排列的 pmpcfg 字节数组与 pmpaddr 数组, 默认不与其他 hart 共享
+        # 按条目编号排列的 pmpcfg 字节数组与 pmpaddr 数组, 默认不与其他
+        # hart 共享
         self._flat_cfg: bytearray = bytearray(64)
         self._flat_addr: array = array("Q", [0] * 64)
         self._cache_dirty: bool = True
@@ -162,7 +164,9 @@ class Pmp:
 
     @property
     def flat_cfg(self):
-        """本 hart 的 pmpcfg 字节数组, 按条目编号排列, 长度为 ``num_entries``."""
+        """本 hart 的 pmpcfg 字节数组, 按条目编号排列, 长度为
+        ``num_entries``.
+        """
         return self._flat_cfg
 
     @property
@@ -230,12 +234,7 @@ class Pmp:
 
     def check(self, info: PmpAccessInfo) -> bool:
         """检查物理地址访问是否允许. 返回 True 表示通过."""
-        mode_val, mstatus_val = info.mode_val, info.mstatus_val
         pmpsplit, mdid = info.pmpsplit, info.mdid
-
-        # M-mode MPRV=0 — PMP 不检查 (RISC-V spec §3.7.1)
-        if mode_val == _MODE_M and ((mstatus_val >> 17) & 1) == 0:
-            return True
 
         # 飞地 split 超限预检 (在所有路径前, 避免无谓的缓存重建)
         if mdid != 0 and pmpsplit > 0 and pmpsplit >= self._num_entries:
@@ -262,20 +261,21 @@ class Pmp:
         is_write, is_execute = info.is_write, info.is_execute
         pmpsplit, mdid = info.pmpsplit, info.mdid
 
-        # 确定有效特权级
+        # MPRV 不作用于取指; M 模式的数据访问在 MPRV=1 且 MPP 不为 M 时
+        # 按 MPP 检查
         eff_mode = mode_val
-        if mode_val == _MODE_M:
+        if mode_val == _MODE_M and not is_execute:
             mprv = (mstatus_val >> 17) & 1
-            if not mprv:
-                return True
-            mpp = (mstatus_val >> 11) & 3
-            mpp_map = {0: 0, 1: 1, 3: 3}
-            eff_mode = mpp_map.get(mpp, 3)
+            if mprv:
+                mpp = (mstatus_val >> 11) & 3
+                mpp_map = {0: 0, 1: 1, 3: 3}
+                eff_mode = mpp_map.get(mpp, 3)
 
+        # 有效特权级为 M 时只有锁定条目参与检查, 未命中条目时放行
+        is_mmode = eff_mode == _MODE_M
         if self._num_entries == 0:
-            return False
+            return is_mmode
 
-        # TODO: 0更换为HOST_DID
         enclave_mode = mdid != 0
 
         # 按优先级遍历 PMP 条目 (低编号优先)
@@ -284,6 +284,8 @@ class Pmp:
                 continue
 
             cfg = self._read_cfg(i)
+            if is_mmode and not (cfg & PMP_L):
+                continue
             if not (cfg & PMP_A_MASK):
                 continue
 
@@ -294,7 +296,18 @@ class Pmp:
             ok = _check_perm(cfg, is_write, is_execute)
             return ok
 
-        return eff_mode == _MODE_M
+        return is_mmode
+
+    def is_entry_locked(self, idx: int) -> bool:
+        """第 *idx* 个条目的 L 位是否置位; 编号越界时返回 False."""
+        if idx < 0 or idx >= self._num_entries:
+            return False
+        return bool(self._read_cfg(idx) & PMP_L)
+
+    def is_cfg_group_locked(self, cfg_reg: int) -> bool:
+        """pmpcfg*cfg_reg* 覆盖的条目中任一 L 置位时返回 True."""
+        base = (cfg_reg // 2) * 8
+        return any(self.is_entry_locked(i) for i in range(base, base + 8))
 
     # ---- 内部 ----
 

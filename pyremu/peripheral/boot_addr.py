@@ -84,4 +84,6 @@ class BootAddrReg(Device):
                 continue
             shift = byte_index * 8
             mask = 0xFF << shift
-            self._entries[hart_id] = (self._entries[hart_id] & ~mask) | (byte << shift)
+            self._entries[hart_id] = (self._entries[hart_id] & ~mask) | (
+                byte << shift
+            )

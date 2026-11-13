@@ -57,7 +57,9 @@ def _reserved_nodes(fdt: libfdt.Fdt) -> list[tuple[int, int, bool]]:
         base_hi, base_lo, size_hi, size_lo = struct.unpack(">IIII", reg)
         # no-map 为布尔属性, 长度 0 表示已设置
         no_map = len(bytes(fdt.getprop(node, "no-map"))) == 0
-        out.append(((base_hi << 32) | base_lo, (size_hi << 32) | size_lo, no_map))
+        out.append(
+            ((base_hi << 32) | base_lo, (size_hi << 32) | size_lo, no_map)
+        )
         node = fdt.next_subnode(node, libfdt.QUIET_NOTFOUND)
     return out
 
@@ -75,14 +77,17 @@ def test_memory_reg_encodes_size_above_4gib():
     6 GiB 与 2 GiB 的高 32 位分别为 1 与 0, 两个取值一并锁定.
     """
     base, size = _reg(
-        "/memory", dev_tree.build_default_dtb(make_test_config(ram_size=RAM_SIZE_6GIB))
+        "/memory",
+        dev_tree.build_default_dtb(make_test_config(ram_size=RAM_SIZE_6GIB)),
     )
     assert (base, size) == (0x8000_0000, RAM_SIZE_6GIB)
     assert size >> 32 == 1, "6 GiB 的高 32 位必须落在 reg 的 size_hi 单元"
 
     base, size = _reg(
         "/memory",
-        dev_tree.build_default_dtb(make_test_config(ram_size=2 * 1024 * 1024 * 1024)),
+        dev_tree.build_default_dtb(
+            make_test_config(ram_size=2 * 1024 * 1024 * 1024)
+        ),
     )
     assert (base, size) == (0x8000_0000, 2 * 1024 * 1024 * 1024)
     assert size >> 32 == 0, "2 GiB 的高 32 位必须为 0"
@@ -103,9 +108,12 @@ def test_reserved_memory_reg_encodes_base_above_4gib():
 
 
 def test_reserved_memory_default_pool():
-    """默认 reserved_memory_ranges 应为固件映像区与 enclave 池两个 no-map 节点."""
+    """默认 reserved_memory_ranges 应为固件映像区与 enclave 池两个
+    no-map 节点."""
     cfg = make_test_config()
-    assert len(cfg.reserved_memory_ranges) == 2, "default should reserve fw + pool"
+    assert len(cfg.reserved_memory_ranges) == 2, (
+        "default should reserve fw + pool"
+    )
 
     emu = Emulator(cfg, bootargs="console=ttySIF0")
     blob = emu.build_default_dtb()
@@ -118,7 +126,9 @@ def test_reserved_memory_default_pool():
         (int(FW_RESERVED_MEM_BASE), int(FW_RESERVED_MEM_SIZE)),
         (int(RESERVED_MEM_BASE), int(RESERVED_MEM_SIZE)),
     ]
-    assert all(no_map for _, _, no_map in nodes), "reserved regions must all be no-map"
+    assert all(no_map for _, _, no_map in nodes), (
+        "reserved regions must all be no-map"
+    )
 
 
 def test_reserved_memory_covers_firmware_region():
@@ -142,7 +152,10 @@ def test_reserved_memory_covers_firmware_region():
         for base, size, no_map in nodes
         if no_map and base <= SITTIM_PA < base + size
     ]
-    assert covering, f"固件内嵌 .sittim (PA {SITTIM_PA:#x}) 未被任何 no-map 区间覆盖: {nodes}"
+    assert covering, (
+        f"固件内嵌 .sittim (PA {SITTIM_PA:#x}) "
+        f"未被任何 no-map 区间覆盖: {nodes}"
+    )
 
 
 def test_reserved_memory_multiple_ranges():
@@ -229,7 +242,9 @@ class TestDeviceTree:
         """未指定 bootargs 时, 默认包含 earlycon=sbi console=ttySIF0."""
         emu = Emulator()
         dtb = emu.build_default_dtb()
-        assert b"earlycon=sbi" in dtb, "默认 bootargs 应包含 earlycon=sbi 以确保内核输出可见"
+        assert b"earlycon=sbi" in dtb, (
+            "默认 bootargs 应包含 earlycon=sbi 以确保内核输出可见"
+        )
         assert b"console=ttySIF0" in dtb, (
             "默认 bootargs 应包含 console=ttySIF0 以将 UART 设为首选控制台"
         )

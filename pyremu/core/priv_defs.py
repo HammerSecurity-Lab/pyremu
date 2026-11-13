@@ -28,9 +28,8 @@ class RiscvMode(Enum):
     D = 8
 
 
-# ============================================================
 #  mstatus / sstatus 位字段定义 (RV64)
-# ============================================================
+
 # 这些常量用于按位读写 mstatus CSR 中的关键控制位。
 
 MSTATUS_SIE = 1 << 1  # Supervisor 中断使能
@@ -49,4 +48,6 @@ MSTATUS_MXR = 1 << 19  # 使能可执行内存的可读
 MSTATUS_TVM = 1 << 20  # 陷入 S 模式访问 satp
 MSTATUS_TW = 1 << 21  # 陷入 WFI
 MSTATUS_TSR = 1 << 22  # 陷入 SRET
-MSTATUS_SD = 1 << 63  # 状态脏位 (FS 或 XS 为脏时置 1)
+MSTATUS_UXL = 0b11 << 32  # 用户级 XLEN 字段, RV64 上只读
+MSTATUS_UXL_64 = 0b10 << 32  # mstatus.UXL 的读出值, 表示 U 模式为 64 位
+MSTATUS_SD = 1 << 63  # 状态脏位, 由 FS、VS、XS 是否为 3 算出

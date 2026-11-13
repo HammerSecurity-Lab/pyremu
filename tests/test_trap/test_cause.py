@@ -38,8 +38,12 @@ class TestTrapCauseCode:
         ]
         for trap, expected in cases:
             code = trap_cause_code(trap)
-            assert code == expected, f"{trap.name}: expected mcause={expected}, got {code}"
-            assert not trap_is_interrupt(trap), f"{trap.name} should NOT be an interrupt"
+            assert code == expected, (
+                f"{trap.name}: expected mcause={expected}, got {code}"
+            )
+            assert not trap_is_interrupt(trap), (
+                f"{trap.name} should NOT be an interrupt"
+            )
 
     def test_interrupt_codes(self):
         """中断: bit 63 = 1, 低 63 位 = 中断编号."""
@@ -58,9 +62,12 @@ class TestTrapCauseCode:
             code = trap_cause_code(trap)
             expected = exc_code | (1 << 63)
             assert code == expected, (
-                f"{trap.name}: expected mcause=0x{expected:016x}, got 0x{code:016x}"
+                f"{trap.name}: expected mcause=0x{expected:016x}, "
+                f"got 0x{code:016x}"
             )
-            assert trap_is_interrupt(trap), f"{trap.name} SHOULD be an interrupt"
+            assert trap_is_interrupt(trap), (
+                f"{trap.name} SHOULD be an interrupt"
+            )
 
     def test_all_trap_types_have_code(self):
         """确保所有 TrapType 成员都有对应的编码."""

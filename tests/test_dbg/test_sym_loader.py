@@ -42,20 +42,26 @@ def _write(tmp_path, data: bytes, name: str = "probe.elf") -> str:
 
 def _section_offset(data: bytes, index: int = 1) -> int:
     shoff = struct.unpack_from("<Q", data, 40)[0]
-    return struct.unpack_from("<Q", data, shoff + index * SECTION_HEADER_SIZE + 24)[0]
+    return struct.unpack_from(
+        "<Q", data, shoff + index * SECTION_HEADER_SIZE + 24
+    )[0]
 
 
 def _patch_section_offset(data: bytes, index: int, offset: int) -> bytes:
     buf = bytearray(data)
     shoff = struct.unpack_from("<Q", buf, 40)[0]
-    struct.pack_into("<Q", buf, shoff + index * SECTION_HEADER_SIZE + 24, offset)
+    struct.pack_into(
+        "<Q", buf, shoff + index * SECTION_HEADER_SIZE + 24, offset
+    )
     return bytes(buf)
 
 
 def _patch_section_entsize(data: bytes, index: int, entsize: int) -> bytes:
     buf = bytearray(data)
     shoff = struct.unpack_from("<Q", buf, 40)[0]
-    struct.pack_into("<Q", buf, shoff + index * SECTION_HEADER_SIZE + 56, entsize)
+    struct.pack_into(
+        "<Q", buf, shoff + index * SECTION_HEADER_SIZE + 56, entsize
+    )
     return bytes(buf)
 
 
@@ -73,7 +79,9 @@ class DeployTarget:
     runtime: int = RAM_BASE
 
 
-def _deploy(dbg, emu, path: str, data: bytes, target: DeployTarget | None = None):
+def _deploy(
+    dbg, emu, path: str, data: bytes, target: DeployTarget | None = None
+):
     target = DeployTarget() if target is None else target
     _stage(emu, data, target.runtime, _section_offset(data))
     return loader.load_symbol_module(dbg, path, target.space, target.base)
@@ -103,7 +111,9 @@ class _StubDbg:
 
 class TestBaseResolution:
     def test_physical_base_is_deployed_and_verified(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = _deploy(dbg, emu, path, data, DeployTarget("pa", RAM_BASE))
@@ -118,7 +128,9 @@ class TestBaseResolution:
         assert mod.sample_len == min(SAMPLE_LIMIT, remaining)
 
     def test_omitted_address_uses_link_address(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(
             symbols=SYMBOLS,
             header=HeaderSpec(entry=RAM_BASE),
@@ -131,7 +143,9 @@ class TestBaseResolution:
         assert mod.pa_base == RAM_BASE
 
     def test_virtual_base_is_translated(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = _deploy(dbg, emu, path, data, DeployTarget("va", RAM_BASE))
@@ -140,7 +154,9 @@ class TestBaseResolution:
         assert mod.pa_base == RAM_BASE
 
     def test_virtual_base_without_mapping_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         hart = dbg.hart
         hart.mode = RiscvMode.S
         hart.satp_val = (8 << 60) | (RAM_BASE >> 12)
@@ -151,7 +167,9 @@ class TestBaseResolution:
         assert "无法翻译" in buf.getvalue()
 
     def test_window_upper_violation_is_rejected(self, tmp_path):
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE + RAM_SIZE)
@@ -159,7 +177,9 @@ class TestBaseResolution:
         assert "不在任何存储区间内" in buf.getvalue()
 
     def test_window_lower_violation_is_rejected(self, tmp_path):
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE - 1)
@@ -168,7 +188,9 @@ class TestBaseResolution:
 
     def test_rom_base_is_accepted(self, tmp_path):
         """引导只读存储器也是存储区间, 模块区间完整落在其中即通过."""
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         rom = emu.bus.boot_rom
         assert rom is not None
         data = build_symbol_elf(symbols=SYMBOLS)
@@ -181,7 +203,9 @@ class TestBaseResolution:
 
     def test_range_beyond_rom_end_is_rejected(self, tmp_path):
         """越过引导只读存储器上界的区间不落在任何存储区间内."""
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         rom = emu.bus.boot_rom
         assert rom is not None
         data = build_symbol_elf(symbols=SYMBOLS)
@@ -191,10 +215,15 @@ class TestBaseResolution:
         assert mod is None
         text = buf.getvalue()
         assert "不在任何存储区间内" in text
-        assert f"引导只读存储器 [0x{rom.base_addr:x}, 0x{rom.base_addr + rom.size:x})" in text
+        assert (
+            f"引导只读存储器 [0x{rom.base_addr:x}, "
+            f"0x{rom.base_addr + rom.size:x})" in text
+        )
 
     def test_address_between_rom_and_ram_is_rejected(self, tmp_path):
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = loader.load_symbol_module(dbg, path, "pa", 0x6000_0000)
@@ -202,7 +231,9 @@ class TestBaseResolution:
         assert "不在任何存储区间内" in buf.getvalue()
 
     def test_interval_equal_to_window_end_is_accepted(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         text = b"\x13\x00\x00\x00" * 0x100
         data = build_symbol_elf(symbols=SYMBOLS, text=TextSpec(data=text))
         path = _write(tmp_path, data)
@@ -212,7 +243,9 @@ class TestBaseResolution:
         assert mod.pa_base == base
 
     def test_first_mismatching_byte_is_reported(self, tmp_path):
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         _stage(emu, data, RAM_BASE, _section_offset(data))
@@ -231,27 +264,37 @@ class TestBaseResolution:
 
 class TestLoadFailures:
     def test_missing_file_is_reported(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
-        mod = loader.load_symbol_module(dbg, str(tmp_path / "absent.elf"), "pa", RAM_BASE)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
+        mod = loader.load_symbol_module(
+            dbg, str(tmp_path / "absent.elf"), "pa", RAM_BASE
+        )
         assert mod is None
         assert "无法读取符号文件" in buf.getvalue()
 
     def test_non_elf_file_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         path = _write(tmp_path, b"not an elf file at all")
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE)
         assert mod is None
         assert "无法加载符号文件" in buf.getvalue()
 
     def test_missing_symbol_table_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         path = _write(tmp_path, build_symbol_elf(symbols=None))
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE)
         assert mod is None
         assert "未找到 .symtab 或 .dynsym" in buf.getvalue()
 
     def test_illegal_symbol_entry_size_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = _patch_section_entsize(build_symbol_elf(symbols=SYMBOLS), 2, 16)
         path = _write(tmp_path, data)
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE)
@@ -259,7 +302,9 @@ class TestLoadFailures:
         assert "条目长度非法" in buf.getvalue()
 
     def test_entry_limit_exceeded_is_rejected(self, tmp_path, monkeypatch):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         monkeypatch.setattr(loader.elf_idx, "MAX_SYMBOL_ENTRIES", 1)
         path = _write(tmp_path, build_symbol_elf(symbols=SYMBOLS))
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE)
@@ -267,7 +312,9 @@ class TestLoadFailures:
         assert "超过上限" in buf.getvalue()
 
     def test_warn_threshold_reports_index_size(self, tmp_path, monkeypatch):
-        dbg, emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         monkeypatch.setattr(loader.elf_idx, "WARN_SYMBOL_ENTRIES", 1)
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
@@ -283,7 +330,9 @@ class TestLoadFailures:
 
 class TestCoverageAndAnchor:
     def test_symbol_span_is_used_without_alloc_sections(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS, text=TextSpec(flags=0))
         path = _write(tmp_path, data)
         mod = _deploy(dbg, emu, path, data, DeployTarget("pa", RAM_BASE))
@@ -291,15 +340,21 @@ class TestCoverageAndAnchor:
         assert (mod.cover_start, mod.cover_end) == (0x1000, 0x2001)
 
     def test_missing_address_range_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         symbols = [(None, 0, 0, 0, 0)]
-        path = _write(tmp_path, build_symbol_elf(symbols=symbols, text=TextSpec(flags=0)))
+        path = _write(
+            tmp_path, build_symbol_elf(symbols=symbols, text=TextSpec(flags=0))
+        )
         mod = loader.load_symbol_module(dbg, path, "pa", RAM_BASE)
         assert mod is None
         assert "没有可用的地址范围" in buf.getvalue()
 
     def test_anchor_falls_back_to_lowest_exec_section(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS, header=HeaderSpec(entry=0))
         path = _write(tmp_path, data)
         mod = _deploy(dbg, emu, path, data, DeployTarget("pa", RAM_BASE))
@@ -307,7 +362,9 @@ class TestCoverageAndAnchor:
         assert mod.anchor_link == 0x1000
 
     def test_missing_exec_section_leaves_no_anchor(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(
             symbols=SYMBOLS,
             header=HeaderSpec(entry=0),
@@ -319,7 +376,9 @@ class TestCoverageAndAnchor:
         assert "无法在文件中定位校验样本的起点" in buf.getvalue()
 
     def test_anchor_outside_sections_uses_program_header(self, tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         program = ProgramSpec(
             p_type=PT_LOAD,
             offset=0x40,
@@ -342,7 +401,9 @@ class TestCoverageAndAnchor:
         assert mod.anchor_link == 0x1800
 
     def test_sample_shorter_than_minimum_is_rejected(self, tmp_path):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         raw = build_symbol_elf(symbols=SYMBOLS)
         data = _patch_section_offset(raw, 1, len(raw) - 2)
         path = _write(tmp_path, data)
@@ -359,7 +420,9 @@ class TestCoverageAndAnchor:
 class TestVerifyAndText:
     @staticmethod
     def _loaded(tmp_path):
-        dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, emu, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         mod = _deploy(dbg, emu, path, data, DeployTarget("pa", RAM_BASE))
@@ -376,7 +439,9 @@ class TestVerifyAndText:
         assert not loader.verify_module(dbg, mod)
 
     def test_verify_skips_module_without_index(self):
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         mod = model.SymMod(
             file_name="x.elf",
             path="/tmp/x.elf",
@@ -393,7 +458,9 @@ class TestVerifyAndText:
         assert loader.verify_module(dbg, mod)
 
     def test_verify_skips_module_without_physical_base(self, tmp_path):
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, is_code_loaded=False
+        )
         data = build_symbol_elf(symbols=SYMBOLS)
         path = _write(tmp_path, data)
         elf = loader._open_elf(path)
@@ -457,7 +524,9 @@ class TestVerifyAndText:
 
 def test_sample_length_is_capped(monkeypatch, tmp_path):
     """样本长度取剩余长度与上限中的较小者."""
-    dbg, emu, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+    dbg, emu, _ = make_test_dbg_buffered(
+        ram_size=RAM_SIZE, is_code_loaded=False
+    )
     data = build_symbol_elf(symbols=SYMBOLS)
     path = _write(tmp_path, data)
     monkeypatch.setattr(loader, "SAMPLE_MAX_BYTES", 8)

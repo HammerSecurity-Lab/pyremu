@@ -50,12 +50,23 @@ def _r(dev: APLIC, offset: int) -> int:
     return int.from_bytes(dev.read(offset, 4), "little")
 
 
-def _configure(a: APLIC, src: int, hart: int, eiid: int, *, level: bool) -> None:
+def _configure(
+    a: APLIC,
+    src: int,
+    hart: int,
+    eiid: int,
+    *,
+    level: bool,
+) -> None:
     """通过 MMIO 配置一个源 — 模拟内核 aplic_msi_write_msg + set_type 流程."""
     # 目标寄存器写入 hart 编号左移 18 位后与 EIID 的并集
     _w(a, _TARGET_BASE + (src - 1) * 4, (hart << _HART_SHIFT) | eiid)
     # sourcecfg[src] = SM 触发类型
-    _w(a, _SOURCECFG_BASE + (src - 1) * 4, _SM_LEVEL_HIGH if level else _SM_EDGE_RISE)
+    _w(
+        a,
+        _SOURCECFG_BASE + (src - 1) * 4,
+        _SM_LEVEL_HIGH if level else _SM_EDGE_RISE,
+    )
     # 通过 SETIENUM 使能该源
     _w(a, _SETIENUM, src)
 
@@ -151,7 +162,9 @@ class TestAplicRouting:
         # target 已设但 sourcecfg 仍 INACTIVE
         _w(a, _TARGET_BASE, (0 << _HART_SHIFT) | 6)
         a.set_irq(1, True)
-        assert imsic.get_pending_mip(0) == 0, "inactive source should not deliver"
+        assert imsic.get_pending_mip(0) == 0, (
+            "inactive source should not deliver"
+        )
 
 
 # ============================================================
@@ -173,7 +186,9 @@ class TestAplicSetipnum:
         a.set_irq(8, True)
         _w(a, _SETIPNUM, 8)
         mip = imsic.get_pending_mip(0)
-        assert mip & (1 << 9), f"setipnum retrigger should deliver, got mip={mip:#x}"
+        assert mip & (1 << 9), (
+            f"setipnum retrigger should deliver, got mip={mip:#x}"
+        )
 
     def test_setipnum_le_level_high_input_low_no_retrigger(self):
         """电平触发源输入已撤除时, setipnum_le 不重挂起 (AIA §4.9.2 防风暴)."""
@@ -185,10 +200,14 @@ class TestAplicSetipnum:
         # 拉高投递后再撤除: 输入回落, pending 已由投递清除
         a.set_irq(8, True)
         a.set_irq(8, False)
-        assert not (a._state[8] & (1 << 8)), "input should be low after deassert"
+        assert not (a._state[8] & (1 << 8)), (
+            "input should be low after deassert"
+        )
         # EOI retrigger: 输入已低, 不应重新置 pending
         _w(a, _SETIPNUM_LE, 8)
-        assert not (a._state[8] & 1), "pending must stay clear when input deasserted"
+        assert not (a._state[8] & 1), (
+            "pending must stay clear when input deasserted"
+        )
 
     def test_setipnum_le_level_high_input_high_retriggers(self):
         """电平触发源输入仍有效时, setipnum_le 重挂起并投递."""
@@ -203,7 +222,9 @@ class TestAplicSetipnum:
         # EOI retrigger: 输入仍有效, 重新置 pending
         _w(a, _SETIPNUM_LE, 8)
         assert not (a._state[8] & 1), "pending cleared after redelivery"
-        assert imsic.get_pending_mip(0) & (1 << 9), "SEIP should remain asserted"
+        assert imsic.get_pending_mip(0) & (1 << 9), (
+            "SEIP should remain asserted"
+        )
 
 
 # ============================================================
@@ -226,4 +247,6 @@ class TestAplicDomaincfg:
         assert imsic.get_pending_mip(0) == 0, "IE=0 should block delivery"
         # 恢复 IE=1 后投递 pending 源
         _w(a, _DOMAINCFG, 1 << 8)
-        assert imsic.get_pending_mip(0) & (1 << 9), "IE re-enable should deliver"
+        assert imsic.get_pending_mip(0) & (1 << 9), (
+            "IE re-enable should deliver"
+        )

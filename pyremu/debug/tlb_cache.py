@@ -49,15 +49,20 @@ class TlbCacheOps(SharedAttrs):
     def _print_tlb_counters(self, name: str, tlb, is_execute: bool) -> int:
         """输出单个 TLB 的条目数与两个执行引擎各自的计数, 返回两者之和.
 
-        *is_execute* 选定该表对应的加速执行引擎计数: 指令 TLB 与数据 TLB 各自累计.
+        *is_execute* 选定该表对应的加速执行引擎计数:
+        指令 TLB 与数据 TLB 各自累计.
         """
         engine_hits, engine_misses = (
-            self.hart.speedup_itlb_counts if is_execute else self.hart.speedup_dtlb_counts
+            self.hart.speedup_itlb_counts
+            if is_execute
+            else self.hart.speedup_dtlb_counts
         )
         engine_total = engine_hits + engine_misses
 
         self._console.print(f"[bold]{name}[/]: {len(tlb)}/{tlb.size} entries")
-        self._console.print("  " + self._fmt_tlb_counters(engine_hits, engine_misses))
+        self._console.print(
+            "  " + self._fmt_tlb_counters(engine_hits, engine_misses)
+        )
         return engine_total
 
     def _show_tlb(
@@ -79,7 +84,9 @@ class TlbCacheOps(SharedAttrs):
         if len(tlb) == 0:
             self._console.print("[dim]  (empty)[/]")
             if lookup_total == 0 and self.hart.mmu_mode == 0:
-                self._console.print("[dim]  # MMU 处于 Bare 模式, TLB 不会被填充[/]")
+                self._console.print(
+                    "[dim]  # MMU 处于 Bare 模式, TLB 不会被填充[/]"
+                )
             return
 
         has_mdid = any(e.mdid != 0 for e in tlb.entries if e.valid)
@@ -114,7 +121,11 @@ class TlbCacheOps(SharedAttrs):
             tbl.add_row(*row)
             shown += 1
 
-        if end_entry is not None and shown < total_valid and start_entry + shown < total_valid:
+        if (
+            end_entry is not None
+            and shown < total_valid
+            and start_entry + shown < total_valid
+        ):
             remaining = total_valid - start_entry - shown
             hint = (
                 f"[dim]… 还有 {remaining} 条, "
@@ -143,7 +154,8 @@ class TlbCacheOps(SharedAttrs):
                     continue
                 mdid_str = f" mdid={e.mdid}" if e.mdid != 0 else ""
                 self._console.print(
-                    f"  [[cyan]{name}[/]] VPN=0x{e.tag:09x} -> PPN=0x{e.ppn:09x}  "
+                    f"  [[cyan]{name}[/]] VPN=0x{e.tag:09x} -> "
+                    f"PPN=0x{e.ppn:09x}  "
                     f"perm={decode_tlb_perm(e.perm)}  "
                     f"size={self._tlb_page_size(e.level)}{mdid_str}"
                 )
@@ -179,8 +191,12 @@ class TlbCacheOps(SharedAttrs):
             if st < 0 or ed <= st:
                 self._err(f"范围需满足 0 <= start < end, 得到 {st}-{ed}")
                 return
-            self._show_tlb("ITLB", h.itlb, is_execute=True, start_entry=st, end_entry=ed)
-            self._show_tlb("DTLB", h.dtlb, is_execute=False, start_entry=st, end_entry=ed)
+            self._show_tlb(
+                "ITLB", h.itlb, is_execute=True, start_entry=st, end_entry=ed
+            )
+            self._show_tlb(
+                "DTLB", h.dtlb, is_execute=False, start_entry=st, end_entry=ed
+            )
             return
         vpn = int(arg, 0)
         if not check_rv64_addr(vpn):
@@ -230,7 +246,9 @@ class TlbCacheOps(SharedAttrs):
             f"last={e.last_access}"
         )
         if full:
-            return meta + "\n" + self._hexdump_bytes(bytes(e.data), indent="    ")
+            return (
+                meta + "\n" + self._hexdump_bytes(bytes(e.data), indent="    ")
+            )
         preview = bytes(e.data[:16]).hex(" ")
         return meta + f"  data[:16]={preview}"
 
@@ -315,12 +333,18 @@ class TlbCacheOps(SharedAttrs):
 
         lines = self._collect_cache_lines(entries, ways, scope)
         # 判定用 None 比较: *limit* 为 None 表示不限制行数.
-        if limit is not None and len(lines) >= limit and valid_count > len(lines):
+        if (
+            limit is not None
+            and len(lines) >= limit
+            and valid_count > len(lines)
+        ):
             lines.append(
                 f"[dim]... 还有 {valid_count - len(lines)} 条 valid 行, "
                 f"用 'cache <start>-<end>' 查看范围[/]"
             )
-        header += "\n" + "\n".join(lines) if lines else "\n[dim](无 valid 行)[/]"
+        header += (
+            "\n" + "\n".join(lines) if lines else "\n[dim](无 valid 行)[/]"
+        )
         self._console.print(header)
 
     def _cache_scope(
@@ -333,9 +357,13 @@ class TlbCacheOps(SharedAttrs):
 
         参数非法时报告错误并返回 None.
         """
-        err, target_set, target_way, range_start, range_end = self._parse_cache_args(
-            arg, num_sets, ways
-        )
+        (
+            err,
+            target_set,
+            target_way,
+            range_start,
+            range_end,
+        ) = self._parse_cache_args(arg, num_sets, ways)
         if err:
             return None
         if range_start is not None and range_end is not None:
@@ -360,7 +388,9 @@ class TlbCacheOps(SharedAttrs):
                 e = entries[set_idx * ways + way_idx]
                 if not e.valid:
                     continue
-                lines.append(self._fmt_cache_line(e, set_idx, way_idx, full_dump))
+                lines.append(
+                    self._fmt_cache_line(e, set_idx, way_idx, full_dump)
+                )
                 # 判定用 None 比较: *limit* 为 None 表示不限制行数.
                 if limit is not None and len(lines) >= limit:
                     return lines

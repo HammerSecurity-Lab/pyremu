@@ -181,7 +181,9 @@ def build_elf(
         )
 
     real_shoff = align_up(cursor)
-    total = real_shoff + len(specs) * SECTION_HEADER_SIZE + file_layout.extra_size
+    total = (
+        real_shoff + len(specs) * SECTION_HEADER_SIZE + file_layout.extra_size
+    )
     buf = bytearray(total)
     for offset, data in payloads:
         buf[offset : offset + len(data)] = data
@@ -238,8 +240,10 @@ def build_symbol_elf(
 ) -> bytes:
     """生成由空节、代码节、符号表节与字符串表节构成的 ELF.
 
-    *symbols* 为 None 时不生成符号表节; *header* 未给出 *entry* 时入口地址取 0x1000.
-    *layout* 的 *extra_size* 在节头表之后追加零字节, 用于让校验样本落在文件末尾之前.
+    *symbols* 为 None 时不生成符号表节; *header* 未给出 *entry* 时
+    入口地址取 0x1000.
+    *layout* 的 *extra_size* 在节头表之后追加零字节,
+    用于让校验样本落在文件末尾之前.
     """
     head = HeaderSpec() if header is None else header
     if head.entry is None:

@@ -61,7 +61,9 @@ class TestTimerInterrupt:
 
     def _set_mtimecmp(self, hart_id: int, val: int):
         """通过内存映射接口写入 hart 的 mtimecmp."""
-        self.clint.write(self.MTECMP_OFFSET + hart_id * 8, val.to_bytes(8, "little"))
+        self.clint.write(
+            self.MTECMP_OFFSET + hart_id * 8, val.to_bytes(8, "little")
+        )
 
     @staticmethod
     def _cause_is_timer(mcause: int) -> bool:
@@ -80,7 +82,8 @@ class TestTimerInterrupt:
         assert hart.pc == 0x80000000, "应跳转到 mtvec"
         assert hart.mode == RiscvMode.M
         assert self._cause_is_timer(hart.mcause_val), (
-            f"mcause 应为 MTI (0x8000000000000007), 实际 {hart.mcause_val:#018x}"
+            f"mcause 应为 MTI (0x8000000000000007), "
+            f"实际 {hart.mcause_val:#018x}"
         )
         # MIE 应在进入 trap 后清零
         assert not hart.mie, "进入 trap 后 MIE 应清零"
@@ -169,7 +172,8 @@ class TestTimerInterrupt:
         assert taken
         # MSI = cause code 3 | (1<<63)
         assert hart.mcause_val == 0x8000_0000_0000_0003, (
-            f"MSI 优先于 MTI, 应为 MSI (0x8000000000000003), 实际 {hart.mcause_val:#018x}"
+            f"MSI 优先于 MTI, 应为 MSI (0x8000000000000003), "
+            f"实际 {hart.mcause_val:#018x}"
         )
 
     # ---- 连续触发 ----
@@ -241,9 +245,12 @@ class TestStimecmpSTI:
         assert taken, "STI 应被触发"
         # STI 是非委派的 S 模式中断 (S 模式本身就处理它)
         # 在此配置下 (S-mode, 无 mideleg 位), 走 deliver_trap -> S 模式投递
-        assert hart.pc == 0x80004000, f"应跳转到 stvec=0x80004000, 实际 pc={hart.pc:#x}"
+        assert hart.pc == 0x80004000, (
+            f"应跳转到 stvec=0x80004000, 实际 pc={hart.pc:#x}"
+        )
         assert self._cause_is_sti(hart.scause_val), (
-            f"scause 应为 STI (0x8000000000000005), 实际 {hart.scause_val:#018x}"
+            f"scause 应为 STI (0x8000000000000005), "
+            f"实际 {hart.scause_val:#018x}"
         )
         assert not hart.sie, "进入 trap 后 SIE 应清零"
 
@@ -364,7 +371,9 @@ class TestStimecmpClintSync:
         assert self.clint._mtimecmp[0] == 0xFFFF_FFFF_FFFF_FFFF, (
             "stimecmp 写入后 CLINT mtimecmp 应保持不变 (独立比较器)"
         )
-        assert hart.csrs["stimecmp"].val == 0x12345_6789_ABCD, "stimecmp CSR 应正确存储写入值"
+        assert hart.csrs["stimecmp"].val == 0x12345_6789_ABCD, (
+            "stimecmp CSR 应正确存储写入值"
+        )
 
     def test_mtimecmp_independent_of_stimecmp(self, hart):
         """写 CLINT mtimecmp (MMIO) 不影响 stimecmp CSR."""
@@ -378,16 +387,21 @@ class TestStimecmpClintSync:
         """stimecmp=0 不影响已设置的 mtimecmp."""
         self.clint.set_mtimecmp(0, 0x100)
         hart.write_csr(0x14D, 0)
-        assert self.clint._mtimecmp[0] == 0x100, "stimecmp=0 写入后 mtimecmp 应保持不变"
+        assert self.clint._mtimecmp[0] == 0x100, (
+            "stimecmp=0 写入后 mtimecmp 应保持不变"
+        )
 
     def test_clint_check_interrupt_uses_mtimecmp_not_stimecmp(self, hart):
-        """CLINT.check_interrupt 的 MTIP 仅取决于 mtimecmp, 不取决于 stimecmp."""
+        """CLINT.check_interrupt 的 MTIP 仅取决于 mtimecmp,
+        不取决于 stimecmp."""
         # Set stimecmp far in the "past" — MTIP should NOT fire
         hart.write_csr(0x14D, 100)
         self.clint.set_mtimecmp(0, 0xFFFFFFFF_FFFFFFFF)  # far future
         self.clint.tick(200)
         has, mip, _src = self.clint.check_interrupt(0)
-        assert not (mip & (1 << 7)), "MTIP 仅取决于 CLINT mtimecmp; stimecmp 到期不应触发 MTIP"
+        assert not (mip & (1 << 7)), (
+            "MTIP 仅取决于 CLINT mtimecmp; stimecmp 到期不应触发 MTIP"
+        )
 
     def test_stimecmph_write_merges_to_stimecmp(self, hart):
         """stimecmph (0x15D) 写入高 32 位合并到 stimecmp (RV64)."""
@@ -444,7 +458,9 @@ class TestSoftwareStipTimerFallback:
         hart.mip_val |= 1 << 5
         self.clint.tick(100)
         hart.sync_pending_interrupts()
-        assert hart.mip_val & (1 << 5), "stimecmp 为 0 时不得清除软件写入的 STIP"
+        assert hart.mip_val & (1 << 5), (
+            "stimecmp 为 0 时不得清除软件写入的 STIP"
+        )
 
     def test_sti_taken_from_software_stip(self, hart):
         """只有软件写入的 STIP 时, STI 仍投递到 S 模式."""
@@ -454,20 +470,26 @@ class TestSoftwareStipTimerFallback:
         taken = hart.check_pending_interrupts()
 
         assert taken, "软件写入的 STIP 应触发 STI"
-        assert hart.pc == STVEC, f"应跳转 stvec={STVEC:#x}, 实际 pc={hart.pc:#x}"
+        assert hart.pc == STVEC, (
+            f"应跳转 stvec={STVEC:#x}, 实际 pc={hart.pc:#x}"
+        )
         assert hart.scause_val == self.STI_CAUSE, (
-            f"scause 应为 STI ({self.STI_CAUSE:#018x}), 实际 {hart.scause_val:#018x}"
+            f"scause 应为 STI ({self.STI_CAUSE:#018x}), "
+            f"实际 {hart.scause_val:#018x}"
         )
 
     def test_armed_sstc_clears_software_stip(self, hart):
-        """stimecmp 已装定且未到期时, STIP 由 sstc 定时器决定, 软件写入的该位被清除."""
+        """stimecmp 已装定且未到期时, STIP 由 sstc 定时器决定,
+        软件写入的该位被清除."""
         hart.mip_val |= 1 << 5
         hart.write_csr(self.CSR_STIMECMP, 1000)
         self.clint.tick(100)
 
         hart.sync_pending_interrupts()
 
-        assert not (hart.mip_val & (1 << 5)), "sstc 定时器已装定且未到期, STIP 应清除"
+        assert not (hart.mip_val & (1 << 5)), (
+            "sstc 定时器已装定且未到期, STIP 应清除"
+        )
 
     def test_stopi_reports_software_stip(self, hart):
         """stimecmp 为 0 时 stopi 仍报告 IID=5, 即 STI."""
@@ -486,9 +508,9 @@ class TestSipMipReadonlyMask:
 
     与 sie 不同, sip 并非对所有 mideleg 委派位都可写: 唯一可写位是 SSIP (bit 1),
     STIP (bit 5) 由 SSTC 定时器、SEIP (bit 9) 由 PLIC 硬件驱动. 飞地上下文切换
-    (csr_write(CSR_SIP, saved)) 写回陈旧 sip, 若把 SEIP/STIP 一并覆写会丢失挂起的
-    外设/定时器中断 (飞地回归测试后输入冻结). mip 的 SSIP 与 STIP 均可写, 其余
-    S 级位与 M 级位由硬件驱动."""
+    (csr_write(CSR_SIP, saved)) 写回陈旧 sip, 若把 SEIP/STIP 一并覆写会丢失
+    挂起的外设/定时器中断 (飞地回归测试后输入冻结). mip 的 SSIP 与 STIP 均可写,
+    其余 S 级位与 M 级位由硬件驱动."""
 
     @pytest.fixture
     def hart(self, hart) -> Hart:
@@ -499,7 +521,9 @@ class TestSipMipReadonlyMask:
 
     def test_csrw_sip_preserves_stip_and_seip(self, hart):
         """`csrw sip, 0` 只清除 SSIP, 保留硬件驱动的 STIP/SEIP."""
-        hart.csrs["mideleg"].val = (1 << 5) | (1 << 9) | (1 << 1)  # STIP/SEIP/SSIP 委派
+        hart.csrs["mideleg"].val = (
+            (1 << 5) | (1 << 9) | (1 << 1)
+        )  # STIP/SEIP/SSIP 委派
         hart.csrs["mip"].val = (1 << 5) | (1 << 9) | (1 << 1)
         hart.write_csr(0x144, 0)  # csrw sip, 0
         mip = hart.mip_val
@@ -521,6 +545,78 @@ class TestSipMipReadonlyMask:
         hart.csrs["mip"].val = 0
         hart.write_csr(0x344, 1 << 5)  # csrw mip, STIP
         assert hart.mip_val & (1 << 5), "STIP 可写, csrw mip 应置位该位"
+
+    def test_csrw_mip_ignores_read_only_u_bits(self, hart):
+        """USIP、UTIP 与 UEIP 在 mip 中只读, 写入被忽略."""
+        hart.csrs["mip"].val = 0
+        hart.write_csr(0x344, (1 << 0) | (1 << 4) | (1 << 8))
+        mip = hart.mip_val
+        assert not (mip & (1 << 0)), "USIP 由硬件驱动, 不得被 csrw mip 置位"
+        assert not (mip & (1 << 4)), "UTIP 由硬件驱动, 不得被 csrw mip 置位"
+        assert not (mip & (1 << 8)), "UEIP 由硬件驱动, 不得被 csrw mip 置位"
+
+
+class TestMipWriteMask:
+    """验证 CSRRS 与 CSRRC 的写入掩码约束 mip 的软件 SEIP 位.
+
+    外部中断线为高时 mip 的读出值 bit 9 为 1, 而 CSRRS 与 CSRRC 的写入值由读出值
+    算出. 写入路径若按该值的 bit 9 设置软件位, ``csrs mip, SSIP`` 会把外部中断线
+    记成软件位; 中断控制器撤销外部线之后该位仍为 1, 形成不会撤销的 S 外部中断.
+    """
+
+    CSR_MIP = 0x344
+
+    @staticmethod
+    def _csr_instr(funct3: int, rs1: int, csr: int, rd: int = 0) -> int:
+        """编码一条 CSR 指令."""
+        return (csr << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x73
+
+    @pytest.fixture
+    def hart(self, hart) -> Hart:
+        """M 模式 hart, 外部中断线为高."""
+        hart.pc = 0x1000
+        hart.mode = RiscvMode.M
+        hart.csrs["mip"].val = 1 << 9
+        return hart
+
+    def test_csrs_mip_ssip_does_not_latch_software_seip(self, hart):
+        """``csrs mip, SSIP`` 置位 SSIP, 不把外部线写入软件 SEIP 位."""
+        hart.gprs[5] = 1 << 1
+        hart.exec_instr(self._csr_instr(0b010, 5, self.CSR_MIP))
+
+        assert hart.mip_val & (1 << 1), "SSIP 应被置位"
+        hart.csrs["mip"].val &= ~(1 << 9)  # 中断控制器撤销外部中断线
+        assert not (hart.mip_val & (1 << 9)), (
+            "写入掩码不含 bit 9, 撤销外部线后 SEIP 必须为 0"
+        )
+
+    def test_csrc_mip_ssip_does_not_latch_software_seip(self, hart):
+        """``csrc mip, SSIP`` 只清 SSIP, 不改变软件 SEIP 位."""
+        hart.csrs["mip"].val |= 1 << 1
+        hart.gprs[5] = 1 << 1
+        hart.exec_instr(self._csr_instr(0b011, 5, self.CSR_MIP))
+
+        assert not (hart.mip_val & (1 << 1)), "SSIP 应被清除"
+        hart.csrs["mip"].val &= ~(1 << 9)
+        assert not (hart.mip_val & (1 << 9)), (
+            "写入掩码不含 bit 9, 撤销外部线后 SEIP 必须为 0"
+        )
+
+    def test_csrw_mip_clears_software_seip(self, hart):
+        """``csrw mip`` 写全部位, 写入值 bit 9 为 0 时清除软件 SEIP 位."""
+        hart.mip_val = 1 << 9  # 软件 SEIP 位置位, 存储值中的位 9 为 0
+        hart.gprs[5] = 0
+        hart.exec_instr(self._csr_instr(0b001, 5, self.CSR_MIP))
+
+        assert not (hart.mip_val & (1 << 9)), "csrw mip, 0 应清除软件 SEIP 位"
+
+    def test_csrs_mip_seip_sets_software_seip(self, hart):
+        """``csrs mip, SEIP`` 的掩码含 bit 9, 软件位随写入值置位."""
+        hart.csrs["mip"].val = 0  # 外部中断线为低
+        hart.gprs[5] = 1 << 9
+        hart.exec_instr(self._csr_instr(0b010, 5, self.CSR_MIP))
+
+        assert hart.mip_val & (1 << 9), "掩码含 bit 9 时软件 SEIP 应被置位"
 
 
 class TestNestedInterruptCheck:
@@ -548,7 +644,9 @@ class TestNestedInterruptCheck:
         hart.csrs["mie"].val = 1 << 7
         self.clint.tick(50)
         assert not hart.check_pending_interrupts_nested_enabled()
-        assert not hart.check_pending_interrupts_nested_enabled(), "第二次应命中缓存"
+        assert not hart.check_pending_interrupts_nested_enabled(), (
+            "第二次应命中缓存"
+        )
 
         self.clint.tick(50)
         assert hart.check_pending_interrupts_nested_enabled()
@@ -618,7 +716,9 @@ class TestSstcNotDeclared:
 
     @pytest.fixture
     def hart(self, hart) -> Hart:
-        hart.ratified_hart_attrs = RatifiedHartAttrs(isa_exts={"i": True, "c": True})
+        hart.ratified_hart_attrs = RatifiedHartAttrs(
+            isa_exts={"i": True, "c": True}
+        )
         hart.csrs["mtvec"].val = MTVEC
         hart.csrs["stvec"].val = STVEC
         hart.pc = 0x8000_4000

@@ -138,7 +138,9 @@ def _leaf_pte(pa: int) -> int:
 
 
 def _write_pte(dbg, table_pa: int, index: int, pte: int) -> None:
-    dbg._emu.bus.write_ram_direct(table_pa + index * 8, pte.to_bytes(8, "little"))
+    dbg._emu.bus.write_ram_direct(
+        table_pa + index * 8, pte.to_bytes(8, "little")
+    )
 
 
 def _build_three_level(dbg) -> None:

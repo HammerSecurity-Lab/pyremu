@@ -61,11 +61,11 @@ git config core.hooksPath tools/git-hooks
 | **指令集** | RV64 IMAFDC：基础整数、乘除（M）、原子操作与 LR/SC（A）、单精度与双精度浮点（F/D）、压缩指令（C） |
 | **扩展** | Zicsr：CSR 读写；Zifencei：FENCE.I；Zbb：位操作；Sstc：`stimecmp` 与 `stimecmph` |
 | **特权级** | U/S/M 三级；ECALL、EBREAK、MRET、SRET；陷态经 `medeleg` 与 `mideleg` 委派到 S 模式；WFI 使 hart 停止取指与执行，中断到达后唤醒，`mstatus.TW` 置位时非 M 模式执行 WFI 引起非法指令陷态 |
-| **虚拟内存** | Sv39 三级页表遍历，4 KiB 页与 2 MiB 超级页；每 hart 独立的指令 TLB 与数据 TLB，全相联，FIFO 或 LRU 替换；SFENCE.VMA 刷新全部 hart 的 TLB |
+| **虚拟内存** | Sv39 三级页表遍历，4 KiB 页与 2 MiB、1 GiB 超级页；每 hart 独立的指令 TLB 与数据 TLB，全相联，FIFO 或 LRU 替换；SFENCE.VMA 刷新全部 hart 的 TLB |
 | **内存保护** | PMP 默认由 `PlatformConfig.pmp_entries` 配置；NAPOT、NA4、TOR 匹配；`mstatus.MPRV` 置位且 `MPP` 为 S 或 U 时按该特权级检查；PMA 按 RAM 窗口与设备 MMIO 路由，未落入任何窗口的访问报告访问故障 |
 | **缓存** | 共享 L2 缓存，MESI 一致性协议 |
 | **中断** | CLINT：`mtime`/`mtimecmp` 定时器与 MSIP 核间中断；PLIC：电平语义，每 hart 一对 M/S context；AIA：每 hart 一个 IMSIC M 文件与一个 S 文件，APLIC 的 S 域与 M 域把有线中断转为 MSI；投递优先级 MEI > MSI > MTI > SEI > SSI > STI |
-| **外设** | UART、SPI、I2C、GPIO、看门狗、随机数发生器；virtio-mmio 块设备与网卡，网卡分宿主侧与飞地侧两个实例；终端输入输出桥接 |
+| **外设** | UART、SPI、I2C、GPIO、看门狗、随机数发生器、关机与复位请求设备；virtio-mmio 块设备与网卡，网卡分宿主侧与飞地侧两个实例；终端输入输出桥接 |
 | **平台** | FDT 设备树生成；PlatformConfig 预设 qemu\_virt 与 sifive\_u54，支持从 JSON、TOML、YAML 反序列化 |
 
 未实现：
@@ -135,6 +135,7 @@ pyremu/                       模拟器包
     gpio.py                   通用输入输出
     watchdog.py               看门狗
     crng.py                   随机数发生器
+    power_ctrl.py             关机与复位请求设备
     virtio_mmio.py            virtio-mmio 传输层
     virtio_blk.py             virtio 块设备
     virtio_net.py             virtio 网卡
@@ -149,6 +150,7 @@ pyremu/                       模拟器包
     wrapper.py                异常处理装饰器
     regname.py                寄存器名称查找
     tick.py                   时钟辅助
+    counter.py                顺序编号计数器
     file_ops.py               文件路径操作
   env_inject/                 运行时注入
     preload.py                把预置代码片段写入 RAM
@@ -157,13 +159,14 @@ pyremu/                       模拟器包
 bsp/                          板级支持包
   sittim/                     可嵌入 OpenSBI 的 S 模式运行时
   kei-boot/                   模拟器的零阶段加载器
-  tee_aux_tools/              辅助驱动、签名工具与评测套件
+  linux_tee_drvs/             Linux 飞地驱动与模块工具
     linux-driver/             Linux 飞地交互内核驱动, 提供 /dev/tee_enclave
-    ext-mod-loader/           扩展模块加载器
     ext-mod-svc/              扩展模块服务
     sign-mod/                 为扩展模块文件追加 ECDSA 签名
-    cache-probe-exploit/      TEE 评测套件, 部署到根文件系统的 /eval/cache-probe-exploit
-    stress-test/              TEE 压力测试套件, 部署到根文件系统的 /eval/stress-test
+  eval-suites/                TEE 评测工具, 部署到根文件系统的 /eval
+    cache-sidechannel/        TEE 缓存侧信道评测套件, 部署到 /eval/cache-sidechannel
+    basic-test/               TEE 飞地生命周期批处理测试套件, 部署到 /eval/basic-test
+    ext_app_loader/           最小扩展应用装载器, 部署到 /eval/ext_app_loader
   linux/                      内核源码树, 需要自行复制到本仓库
   setup-rootfs/               用 debootstrap 构建根文件系统, 并打包测试程序与驱动
 
@@ -174,7 +177,7 @@ fn_apps/                      可信应用载荷
   ising/                      二维 Ising 模型的蒙特卡洛载荷
   fem/                        二维 Poisson 方程的有限元载荷
   dsp/                        FFT 谱分析、FIR 滤波与 OFDM 基带载荷
-  linalg/                     稠密 Cholesky 分解载荷
+  linalg/                     稠密 Cholesky 分解载荷, 矩阵尺寸分 2mib、4mib、8mib、16mib 四种变体, 默认 43.95 MiB
   dune/                       DUNE 有限元库的计算载荷
   Langlands/                  模形式与 L 函数的计算载荷, 依赖 FLINT、MPFR 与 GMP
   knots/                      Jones 多项式的计算载荷

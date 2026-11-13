@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """生成平台设备树 DTB。
 
-用指定平台预设构造 Emulator, 调用 build_default_dtb() 得到完整 DTB blob, 写入输出路径
-(默认 build/emu.dtb)。配合根 makefile 的 `dtb` 目标: 先生成 DTB, 再用
-`dtc -I dtb -O dts` 还原为人类可读的 DTS。
+用指定平台预设构造 Emulator, 调用 build_default_dtb() 得到完整 DTB blob,
+写入输出路径 (默认 build/emu.dtb)。配合根 makefile 的 `dtb` 目标: 先生成
+DTB, 再用 `dtc -I dtb -O dts` 还原为人类可读的 DTS。
 
 本脚本由 makefile 以 `uv run python tools/dump_dtb.py` 的方式调用。
 """

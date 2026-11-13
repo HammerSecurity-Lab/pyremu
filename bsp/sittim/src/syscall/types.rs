@@ -5,9 +5,7 @@
 //! 编译失败, 不在运行期表现为读到错位的字段。
 #![allow(dead_code)]
 
-// ---------------------------------------------------------------
 //  时间类型
-// ---------------------------------------------------------------
 
 #[repr(C)]
 pub struct Timeval {
@@ -28,9 +26,7 @@ pub struct Timespec {
 const _: () = assert!(core::mem::size_of::<Timespec>() == 16);
 const _: () = assert!(core::mem::offset_of!(Timespec, tv_nsec) == 8);
 
-// ---------------------------------------------------------------
 //  系统信息
-// ---------------------------------------------------------------
 
 #[repr(C)]
 pub struct Utsname {
@@ -70,9 +66,7 @@ const _: () = assert!(core::mem::offset_of!(Sysinfo, procs) == 80);
 const _: () = assert!(core::mem::offset_of!(Sysinfo, totalhigh) == 88);
 const _: () = assert!(core::mem::offset_of!(Sysinfo, mem_unit) == 104);
 
-// ---------------------------------------------------------------
 //  资源
-// ---------------------------------------------------------------
 
 /// 内核 struct rusage 的布局, 即 getrusage 调用写入的字节数: 2 个 [Timeval] 与 14 个
 /// i64, 合计 18 个 8 字节字。
@@ -122,9 +116,7 @@ pub struct Rlimit {
 
 const _: () = assert!(core::mem::size_of::<Rlimit>() == 16);
 
-// ---------------------------------------------------------------
 //  套接字地址
-// ---------------------------------------------------------------
 
 /// IPv4 套接字地址 (musl riscv64 的 struct sockaddr_in, 16 字节)。
 /// sin_family 按本机字节序, sin_port 与 sin_addr 按网络字节序。
@@ -141,9 +133,7 @@ const _: () = assert!(core::mem::size_of::<SockaddrIn>() == 16);
 const _: () = assert!(core::mem::offset_of!(SockaddrIn, sin_port) == 2);
 const _: () = assert!(core::mem::offset_of!(SockaddrIn, sin_addr) == 4);
 
-// ---------------------------------------------------------------
 //  缓冲区描述与报文首部
-// ---------------------------------------------------------------
 
 /// 一个收发缓冲区 (musl riscv64 的 struct iovec, 16 字节)。
 ///
@@ -191,9 +181,7 @@ const _: () = assert!(core::mem::offset_of!(MsgHdr, msg_control) == 32);
 const _: () = assert!(core::mem::offset_of!(MsgHdr, msg_controllen) == 40);
 const _: () = assert!(core::mem::offset_of!(MsgHdr, msg_flags) == 48);
 
-// ---------------------------------------------------------------
 //  轮询
-// ---------------------------------------------------------------
 
 /// 一个被轮询的描述符 (musl riscv64 的 struct pollfd, 8 字节)。
 ///

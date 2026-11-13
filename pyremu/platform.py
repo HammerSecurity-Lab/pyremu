@@ -47,7 +47,8 @@ class InterruptMode(Enum):
     """中断子系统模式."""
 
     LEGACY = "legacy"  # CLINT (MSIP+MTIP) + PLIC (MEIP+SEIP)
-    AIA = "aia"  # CLINT (MTIP only) + IMSIC (MSIP+MEIP+SEIP) + APLIC (wired->MSI)
+    # CLINT 只提供 MTIP, IMSIC 提供 MSIP+MEIP+SEIP, APLIC 把有线中断转为 MSI
+    AIA = "aia"
 
 
 @dataclass
@@ -63,13 +64,16 @@ class PeripheralConfig:
     plic_base: int = configs_gen.PLIC_BASE
     virtio_blk_base: int = configs_gen.VIRTIO_BLK_BASE
     virtio_blk_irq: int = VIRTIO_BLK_IRQ  # 块设备的中断源编号
-    virtio_net_s_base: int = configs_gen.VIRTIO_NET_S_BASE  # 宿主侧网卡, 中断由 S 模式接受
+    # 宿主侧网卡: 中断由 S 模式接受
+    virtio_net_s_base: int = configs_gen.VIRTIO_NET_S_BASE
     virtio_net_s_irq: int = VIRTIO_NET_S_IRQ  # 宿主侧网卡的中断源编号
-    virtio_net_m_base: int = configs_gen.VIRTIO_NET_M_BASE  # 飞地侧网卡, 中断由 M 模式接受
+    # 飞地侧网卡: 中断由 M 模式接受
+    virtio_net_m_base: int = configs_gen.VIRTIO_NET_M_BASE
     virtio_net_m_irq: int = VIRTIO_NET_M_IRQ  # 飞地侧网卡的中断源编号
     watchdog_base: int = configs_gen.WATCHDOG_BASE
     watchdog_irq: int = WATCHDOG_IRQ  # 看门狗的中断源编号
     crng_base: int = configs_gen.CRNG_BASE
+    power_base: int = configs_gen.POWER_BASE  # 关机与复位请求设备
     imsic_m_base: int = configs_gen.IMSIC_M_BASE
     imsic_s_base: int = configs_gen.IMSIC_S_BASE
     aplic_s_base: int = configs_gen.APLIC_S_BASE
@@ -116,7 +120,10 @@ class PlatformConfig:
     # 在保留区内分配页面, 与固件访问产生冲突.
     reserved_memory_ranges: list[tuple[int, int]] = field(
         default_factory=lambda: [
-            (configs_gen.FW_RESERVED_MEM_BASE, configs_gen.FW_RESERVED_MEM_SIZE),
+            (
+                configs_gen.FW_RESERVED_MEM_BASE,
+                configs_gen.FW_RESERVED_MEM_SIZE,
+            ),
             (configs_gen.RESERVED_MEM_BASE, configs_gen.RESERVED_MEM_SIZE),
         ]
     )
@@ -131,14 +138,19 @@ class PlatformConfig:
         (预设工厂 / from_dict / 直接实例化) 均经由此处统一解析, 故 Emulator
         无需再对 interrupt_mode 做二次判断.
         """
-        if configs_gen.PYREMU_AIA and self.interrupt_mode == InterruptMode.LEGACY:
+        if (
+            configs_gen.PYREMU_AIA
+            and self.interrupt_mode == InterruptMode.LEGACY
+        ):
             self.interrupt_mode = InterruptMode.AIA
             self.periph.imsic_m_base = configs_gen.IMSIC_M_BASE
             self.periph.imsic_s_base = configs_gen.IMSIC_S_BASE
             self.periph.aplic_s_base = configs_gen.APLIC_S_BASE
             self.periph.aplic_m_base = configs_gen.APLIC_M_BASE
         # 低于 1000 Hz 时 1 ms 内不足一个计数, 固件无法按毫秒配置定时器.
-        assert self.timebase_freq >= 1_000, f"timebase_freq={self.timebase_freq} < 1000 Hz!"
+        assert self.timebase_freq >= 1_000, (
+            f"timebase_freq={self.timebase_freq} < 1000 Hz!"
+        )
         # 引导只读存储器与 RAM 的窗口不允许重叠: 同一物理地址只能有一条访问路径.
         if self.rom_base:
             assert self.rom_size > 0, f"rom_size={self.rom_size} 须大于 0"
@@ -154,7 +166,11 @@ class PlatformConfig:
             windows.append(("引导只读存储器", self.rom_base, self.rom_size))
         if self.periph.boot_addr_base:
             windows.append(
-                ("启动地址寄存器", self.periph.boot_addr_base, self.periph.boot_addr_size)
+                (
+                    "启动地址寄存器",
+                    self.periph.boot_addr_base,
+                    self.periph.boot_addr_size,
+                )
             )
         for index, (name_a, base_a, size_a) in enumerate(windows):
             for name_b, base_b, size_b in windows[index + 1 :]:
@@ -180,9 +196,13 @@ class PlatformConfig:
         )
 
         plat_fields = set(cls.__dataclass_fields__) - {"periph"}
-        plat_kw: dict[str, Any] = {k: v for k, v in d.items() if k in plat_fields}
+        plat_kw: dict[str, Any] = {
+            k: v for k, v in d.items() if k in plat_fields
+        }
         # 枚举转换: interrupt_mode 从 string 反序列化
-        if "interrupt_mode" in plat_kw and isinstance(plat_kw["interrupt_mode"], str):
+        if "interrupt_mode" in plat_kw and isinstance(
+            plat_kw["interrupt_mode"], str
+        ):
             plat_kw["interrupt_mode"] = InterruptMode(plat_kw["interrupt_mode"])
         return cls(periph=periph, **plat_kw)
 
@@ -254,6 +274,7 @@ class PlatformConfig:
                 gpio_base=0,
                 clint_base=0x0200_0000,
                 crng_base=0,
+                power_base=0,
             ),
         )
 

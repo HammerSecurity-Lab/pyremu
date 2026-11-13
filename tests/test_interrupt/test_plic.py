@@ -122,7 +122,9 @@ class TestPending:
         """写 pending 寄存器无效 (hardware 控制)."""
         plic.set_irq(3, True)
         _write_u32(plic, _pending_word_offset(0), 0)  # 尝试写清零
-        assert _read_u32(plic, _pending_word_offset(0)) & 8 == 8  # source 3 仍 pending
+        assert (
+            _read_u32(plic, _pending_word_offset(0)) & 8 == 8
+        )  # source 3 仍 pending
 
     def test_claim_clears_pending(self, plic):
         """Claim 会清除 pending 位."""
@@ -403,7 +405,8 @@ class TestEnableWordBound:
 
 
 class TestLevelRetrigger:
-    """complete 时设备电平仍高则 pending 重新置位, 与 QEMU sifive_plic gateway 语义一致.
+    """complete 时设备电平仍高则 pending 重新置位,
+    与 QEMU sifive_plic gateway 语义一致.
 
     UART TX watermark 为电平中断; sifive 驱动 ISR 每次仅发送
     FIFO 深度的 8 个字符, 期间 TXDATA 写由 Rust inline 处理, 不再有任何
@@ -446,12 +449,14 @@ class TestLevelRetrigger:
         _write_u32(plic, _context_claim_offset(0), 7)
         # complete 时电平仍高则 pending 必须重挂
         assert _read_u32(plic, _pending_word_offset(0)) & (1 << 7) != 0, (
-            "第一轮 complete: 电平仍高但 pending 未重挂 — TX 中断在第一批 8 字符后永久丢失"
+            "第一轮 complete: 电平仍高但 pending 未重挂 — "
+            "TX 中断在第一批 8 字符后永久丢失"
         )
 
         # 第二轮 claim+complete (中间无 set_irq 调用, 模拟 TXDATA Rust inline)
         assert _read_u32(plic, _context_claim_offset(0)) == 7, (
-            "第二轮 claim 失败 — 电平仍高但找不到中断源, 旧 _do_claim 错误清除了 _level"
+            "第二轮 claim 失败 — 电平仍高但找不到中断源, "
+            "旧 _do_claim 错误清除了 _level"
         )
         _write_u32(plic, _context_claim_offset(0), 7)
         assert _read_u32(plic, _pending_word_offset(0)) & (1 << 7) != 0, (
@@ -471,7 +476,8 @@ class TestLevelRetrigger:
 
         # claim -> 验证 pending 清但 level 保留
         assert _read_u32(plic, _context_claim_offset(0)) == 7
-        # 不做任何 set_irq 调用, 直接执行 complete, 此时电平仍为高, pending 重新挂起
+        # 不做任何 set_irq 调用, 直接执行 complete, 此时电平仍为高,
+        # pending 重新挂起
         _write_u32(plic, _context_claim_offset(0), 7)
         assert _read_u32(plic, _pending_word_offset(0)) & (1 << 7) != 0
 

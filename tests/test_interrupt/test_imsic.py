@@ -29,7 +29,8 @@ from tests.conftest import (
 def _disable_aia_compile_override(monkeypatch):
     """Disable PYREMU_AIA compile-time override.
 
-    Tests use explicit configs: basic_machine() for legacy, basic_aia_machine() for AIA.
+    Tests use explicit configs: basic_machine() for legacy,
+    basic_aia_machine() for AIA.
     """
     monkeypatch.setattr(configs_gen, "PYREMU_AIA", False)
 
@@ -69,7 +70,8 @@ class TestImsicMMIO:
     """IMSIC MMIO (seteipnum / clreipnum) 寄存器."""
 
     def test_seteipnum_sets_pending_and_meip(self):
-        """seteipnum 写后 eip 置位, get_pending_mip 返回 MEIP, eidelivery=1 且 eie 已使能."""
+        """seteipnum 写后 eip 置位, get_pending_mip 返回 MEIP,
+        eidelivery=1 且 eie 已使能."""
         imsic = _make_imsic()
         imsic.csr_write(0, "M", 0x70, 1)  # eidelivery=1
         imsic.csr_write(0, "M", 0xC0, 1 << 10)  # eie: enable identity 10
@@ -112,7 +114,9 @@ class TestImsicMMIO:
         imsic.csr_write(0, "S", 0x70, 1)  # S-file eidelivery=1
         imsic.csr_write(0, "S", 0xC0, 1 << 5)  # eie: enable identity 5
         # S-file hart 0: num_harts * 0x1000 + 0 * 0x1000 = 0x2000
-        imsic.write(0x2000, (5).to_bytes(4, "little"))  # hart 0 S-file seteipnum
+        imsic.write(
+            0x2000, (5).to_bytes(4, "little")
+        )  # hart 0 S-file seteipnum
         mip = imsic.get_pending_mip(0)
         assert mip & (1 << 9), f"SEIP should be set, got mip={mip:#x}"
         assert not (mip & (1 << 11)), "MEIP should not be set"
@@ -175,9 +179,12 @@ class TestImsicCSR:
         # 设 eip[0] bit 10 (IID 10) 和 eip[1] bit 31 (IID 63)
         imsic.set_ip_number(0, "M", 10)  # word 0, bit 10
         imsic.set_ip_number(0, "M", 63)  # word 1, bit 31
-        val = imsic.csr_read(0, "M", 0x80)  # select eip0 -> eip[0] | (eip[1] << 32)
+        val = imsic.csr_read(0, "M", 0x80)
+        # select eip0 -> eip[0] | (eip[1] << 32)
         assert val & (1 << 10), "eip[0] bit 10 (IID 10) should be set"
-        assert val & (1 << 63), "eip[1] bit 31 (IID 63) -> mireg bit 63 should be set"
+        assert val & (1 << 63), (
+            "eip[1] bit 31 (IID 63) -> mireg bit 63 should be set"
+        )
 
     def test_unknown_select_reads_zero(self):
         """未注册的 select 读返回 0."""
@@ -203,7 +210,9 @@ class TestImsicPriority:
         imsic.csr_write(0, "M", 0xC0, 1 << 5)  # enable identity 5
         imsic.set_ip_number(0, "M", 5)
         topei = imsic.read_topei(0, "M")
-        assert topei == 0, f"topei should be 0 (filtered by eithreshold), got {topei:#x}"
+        assert topei == 0, (
+            f"topei should be 0 (filtered by eithreshold), got {topei:#x}"
+        )
 
     def test_get_pending_mip_respects_eithreshold(self):
         """get_pending_mip returns 0 when the only pending IMSIC
@@ -263,8 +272,12 @@ class TestImsicPriority:
         imsic.csr_write(0, "M", 0x70, 1)
         imsic.csr_write(0, "M", 0xC0, 1 << 10)
         imsic.set_ip_number(0, "M", 10)
-        assert imsic.read_topei(0, "M") != 0, "first topei should return pending"
-        assert imsic.read_topei(0, "M") == 0, "second topei should return 0 (claimed)"
+        assert imsic.read_topei(0, "M") != 0, (
+            "first topei should return pending"
+        )
+        assert imsic.read_topei(0, "M") == 0, (
+            "second topei should return 0 (claimed)"
+        )
 
 
 # ============================================================
@@ -328,7 +341,9 @@ class TestMtopi:
         h.pc = 0x40000000
 
         val = h.read_csr(0xFB0)
-        assert val == 0, f"mtopi should return 0 when no interrupt pending, got {val:#x}"
+        assert val == 0, (
+            f"mtopi should return 0 when no interrupt pending, got {val:#x}"
+        )
 
     def test_mtopi_traps_ill_instr_when_gate_closed(self, make_aia_emu):
         """门控关闭时 mtopi 不可达 — 与上一用例成对锁定门控的两个方向."""
@@ -340,7 +355,8 @@ class TestMtopi:
         instr = (0xFB0 << 20) | (5 << 7) | 0x73  # csrr t0, mtopi
         h.exec_instr(instr)
         assert h.mcause_val == trap_cause_code(TrapType.IllInstr), (
-            f"mtopi should trap IllInstr when AIA gate is closed, got mcause={h.mcause_val}"
+            f"mtopi should trap IllInstr when AIA gate is closed, "
+            f"got mcause={h.mcause_val}"
         )
 
     def test_mtopi_reports_msip_as_iid_3(self, aia_csr_gate, make_aia_emu):
@@ -369,10 +385,17 @@ class TestMtopi:
             f"sbi_trap_aia_irq() expects mtopi>>16 == IRQ_M_SOFT (3), "
             f"got IID={iid} (mtopi={mtopi:#x})"
         )
-        assert mtopi & 0xFFFF, f"mtopi priority should be non-zero, got {mtopi:#x}"
+        assert mtopi & 0xFFFF, (
+            f"mtopi priority should be non-zero, got {mtopi:#x}"
+        )
 
-    def test_mtopi_reports_imsic_ipi_as_iid_11(self, aia_csr_gate, make_aia_emu):
-        """IMSIC M-file eip 有 IPI (minor identity 1) 时 mtopi 返回 major identity 11 (MEI).
+    def test_mtopi_reports_imsic_ipi_as_iid_11(
+        self,
+        aia_csr_gate,
+        make_aia_emu,
+    ):
+        """IMSIC M-file eip 有 IPI (minor identity 1) 时 mtopi 返回
+        major identity 11 (MEI).
 
         All IMSIC interrupts (IPI minor identity 1 and external IID>=6)
         drive MEIP/SEIP per AIA spec.  A ``seteipnum = 1`` write to the M-file
@@ -398,13 +421,16 @@ class TestMtopi:
         assert imsic is not None, "IMSIC must be present in AIA mode"
         imsic.write(0x000, (1).to_bytes(4, "little"))  # hart 0 M-file seteipnum
 
-        # M-file + IID=1 stays in M-file (no cross-file routing) -> MEIP, not SEIP.
+        # M-file + IID=1 stays in M-file (no cross-file routing) ->
+        # MEIP, not SEIP.
         imsic_mip = imsic.get_pending_mip(h.id)
         assert (imsic_mip & (1 << 11)) != 0, (
-            f"MEIP should be set when M-file eip[1] is set, got mip={imsic_mip:#x}"
+            f"MEIP should be set when M-file eip[1] is set, "
+            f"got mip={imsic_mip:#x}"
         )
         assert (imsic_mip & (1 << 9)) == 0, (
-            f"SEIP must NOT be set (no cross-file routing), got mip={imsic_mip:#x}"
+            f"SEIP must NOT be set (no cross-file routing), "
+            f"got mip={imsic_mip:#x}"
         )
 
         # M-mode mtopi sees major identity 11 (MEI).
@@ -419,7 +445,8 @@ class TestMtopi:
         mtopei = h.read_csr(0x35C)
         minor = (mtopei >> 16) & 0xFFFF
         assert minor == 1, (
-            f"mtopei>>16 should be minor identity 1, got minor={minor} (mtopei={mtopei:#x})"
+            f"mtopei>>16 should be minor identity 1, got minor={minor} "
+            f"(mtopei={mtopei:#x})"
         )
 
 
@@ -439,7 +466,9 @@ class TestStopi:
         h.pc = 0x40000000
 
         val = h.read_csr(0xDB0)
-        assert val == 0, f"stopi should return 0 when no interrupt pending, got {val:#x}"
+        assert val == 0, (
+            f"stopi should return 0 when no interrupt pending, got {val:#x}"
+        )
 
     def test_stopi_traps_ill_instr_when_gate_closed(self, make_aia_emu):
         """门控关闭时 stopi 不可达 — 与上一用例成对锁定门控的两个方向."""
@@ -451,7 +480,8 @@ class TestStopi:
         instr = (0xDB0 << 20) | (5 << 7) | 0x73  # csrr t0, stopi
         h.exec_instr(instr)
         assert h.mcause_val == trap_cause_code(TrapType.IllInstr), (
-            f"stopi should trap IllInstr when AIA gate is closed, got mcause={h.mcause_val}"
+            f"stopi should trap IllInstr when AIA gate is closed, "
+            f"got mcause={h.mcause_val}"
         )
 
     def test_stopi_reports_ssip_as_iid_1(self, aia_csr_gate, make_aia_emu):
@@ -480,7 +510,9 @@ class TestStopi:
             f"riscv_intc_aia_irq() expects stopi>>16 == IRQ_S_SOFT (1), "
             f"got IID={iid} (stopi={stopi:#x})"
         )
-        assert stopi & 0xFFFF, f"stopi priority should be non-zero, got {stopi:#x}"
+        assert stopi & 0xFFFF, (
+            f"stopi priority should be non-zero, got {stopi:#x}"
+        )
 
     def test_stopi_reports_imsic_ext_as_iid_9(self, aia_csr_gate, make_aia_emu):
         """IMSIC S-file eip 有待处理中断时 stopi 返回 (IRQ_S_EXT << 16) | prio.
@@ -504,12 +536,15 @@ class TestStopi:
         # Inject IMSIC S-mode external interrupt via S-file seteipnum
         imsic = h._imsic
         assert imsic is not None, "IMSIC must be present in AIA mode"
-        imsic.write(0x2000, (21).to_bytes(4, "little"))  # hart 0 S-file seteipnum
+        imsic.write(
+            0x2000, (21).to_bytes(4, "little")
+        )  # hart 0 S-file seteipnum
 
         # Sync IMSIC -> mip bits
         imsic_mip = imsic.get_pending_mip(h.id)
         assert imsic_mip & (1 << 9), (
-            f"SEIP should be set by IMSIC S-file interrupt, got mip={imsic_mip:#x}"
+            f"SEIP should be set by IMSIC S-file interrupt, "
+            f"got mip={imsic_mip:#x}"
         )
 
         # Read stopi -> should return MAJOR identity IID=9 (IRQ_S_EXT).
@@ -521,13 +556,16 @@ class TestStopi:
             f"stopi>>16 should be major identity IID=9 (IRQ_S_EXT), "
             f"got IID={iid} (stopi={stopi:#x})"
         )
-        assert stopi & 0xFFFF, f"stopi priority should be non-zero, got {stopi:#x}"
+        assert stopi & 0xFFFF, (
+            f"stopi priority should be non-zero, got {stopi:#x}"
+        )
 
         # Verify the minor IID is retrievable from STOPEI
         stopei = h.read_csr(0x15C)
         minor_iid = (stopei >> 16) & 0xFFFF
         assert minor_iid == 21, (
-            f"STOPEI>>16 should be minor IID 21, got {minor_iid} (stopei={stopei:#x})"
+            f"STOPEI>>16 should be minor IID 21, got {minor_iid} "
+            f"(stopei={stopei:#x})"
         )
 
     def test_stopi_reports_stip_as_iid_5(self, aia_csr_gate, make_aia_emu):
@@ -554,11 +592,18 @@ class TestStopi:
         stopi = h.read_csr(0xDB0)
         iid = (stopi >> 16) & 0xFFFF
         assert iid == 5, (
-            f"STIP stopi>>16 should be IRQ_S_TIMER (5), got IID={iid} (stopi={stopi:#x})"
+            f"STIP stopi>>16 should be IRQ_S_TIMER (5), "
+            f"got IID={iid} (stopi={stopi:#x})"
         )
-        assert stopi & 0xFFFF, f"stopi priority should be non-zero, got {stopi:#x}"
+        assert stopi & 0xFFFF, (
+            f"stopi priority should be non-zero, got {stopi:#x}"
+        )
 
-    def test_stopi_clears_after_stimecmp_written(self, aia_csr_gate, make_aia_emu):
+    def test_stopi_clears_after_stimecmp_written(
+        self,
+        aia_csr_gate,
+        make_aia_emu,
+    ):
         """stopi returns 0 after stimecmp is advanced into the future.
 
         The kernel's timer ISR writes a new stimecmp (future value) and
@@ -583,7 +628,9 @@ class TestStopi:
 
         # stopi must now return 0 because mtime < stimecmp
         stopi = h.read_csr(0xDB0)
-        assert stopi == 0, f"stopi must return 0 after stimecmp is advanced, got {stopi:#x}"
+        assert stopi == 0, (
+            f"stopi must return 0 after stimecmp is advanced, got {stopi:#x}"
+        )
 
     def test_stopi_ignores_mtip(self, aia_csr_gate, make_aia_emu):
         """MTIP (bit 7) alone must NOT be reported by stopi.
@@ -609,7 +656,9 @@ class TestStopi:
 
         # Read stopi -> should return 0 (MTIP is deliberately ignored)
         stopi = h.read_csr(0xDB0)
-        assert stopi == 0, f"stopi must ignore MTIP (bit 7), got stopi={stopi:#x}"
+        assert stopi == 0, (
+            f"stopi must ignore MTIP (bit 7), got stopi={stopi:#x}"
+        )
 
 
 # ============================================================
@@ -737,7 +786,9 @@ class TestImsicFfiWriteThrough:
         imsic.set_ip_number(0, "S", 10)
 
         assert states[0].imsic_s.eip[0] == 1 << 10, "注入的 eip 位必须写穿"
-        assert states[0].imsic_s.eip_ext_any == 1, "外部中断存在性缓存必须同步置位"
+        assert states[0].imsic_s.eip_ext_any == 1, (
+            "外部中断存在性缓存必须同步置位"
+        )
         assert states[1].imsic_s.eip[0] == 0, "其它 hart 的数组不得被污染"
 
     def test_clear_ip_number_republishes(self):
@@ -777,7 +828,9 @@ class TestImsicFfiWriteThrough:
         emu._init_for_speedup_lib()
 
         assert emu.imsic is not None
-        assert emu._speedup_hart_states is not None, "回归测试必须走 native 路径"
+        assert emu._speedup_hart_states is not None, (
+            "回归测试必须走 native 路径"
+        )
         assert emu.imsic._ffi_states is emu._speedup_hart_states, (
             "IMSIC 必须绑定引擎实际读写的同一份 hart 状态数组"
         )
@@ -842,7 +895,8 @@ class TestImsicIpi:
         imsic.write(0x000, (3).to_bytes(4, "little"))  # seteipnum 3 (M-file)
         mip = imsic.get_pending_mip(0)
         assert (mip & (1 << 11)) != 0, (
-            f"MEIP should be set for M-file IID=3 (stays in M-file), got mip={mip:#x}"
+            f"MEIP should be set for M-file IID=3 (stays in M-file), "
+            f"got mip={mip:#x}"
         )
 
     def test_sfile_ipi_sets_seip(self):
@@ -856,8 +910,8 @@ class TestImsicIpi:
         imsic.write(0x2000, (3).to_bytes(4, "little"))  # S-file seteipnum 3
         mip = imsic.get_pending_mip(0)
         assert (mip & (1 << 9)) != 0, (
-            f"SEIP should be set for ALL IMSIC interrupts (including IPI IID=3), "
-            f"got mip={mip:#x}"
+            f"SEIP should be set for ALL IMSIC interrupts "
+            f"(including IPI IID=3), got mip={mip:#x}"
         )
 
     def test_ext_interrupt_sets_meip(self):
@@ -867,7 +921,9 @@ class TestImsicIpi:
         imsic.csr_write(0, "M", 0xC0, 1 << 10)  # eie bit 10
         imsic.write(0x000, (10).to_bytes(4, "little"))  # seteipnum 10
         mip = imsic.get_pending_mip(0)
-        assert mip & (1 << 11), f"MEIP should be set for ext int, got mip={mip:#x}"
+        assert mip & (1 << 11), (
+            f"MEIP should be set for ext int, got mip={mip:#x}"
+        )
 
     def test_mixed_ipi_and_ext(self):
         """IPI IID=1 与外部中断 IID=10 同时写 M-file 时 MEIP 置位, SEIP 不置位.
@@ -878,9 +934,15 @@ class TestImsicIpi:
         """
         imsic = _make_imsic()
         imsic.csr_write(0, "M", 0x70, 1)  # M-file eidelivery=1
-        imsic.csr_write(0, "M", 0xC0, (1 << 1) | (1 << 10))  # eie: enable IID=1,10
-        imsic.write(0x000, (1).to_bytes(4, "little"))  # M-file IID=1 -> stays in M-file
-        imsic.write(0x000, (10).to_bytes(4, "little"))  # M-file IID=10 -> stays in M-file
+        imsic.csr_write(
+            0, "M", 0xC0, (1 << 1) | (1 << 10)
+        )  # eie: enable IID=1,10
+        imsic.write(
+            0x000, (1).to_bytes(4, "little")
+        )  # M-file IID=1 -> stays in M-file
+        imsic.write(
+            0x000, (10).to_bytes(4, "little")
+        )  # M-file IID=10 -> stays in M-file
         mip = imsic.get_pending_mip(0)
         assert mip & (1 << 11), (
             f"MEIP should be set (from IID=1,10 in M-file), got mip={mip:#x}"
@@ -892,17 +954,25 @@ class TestImsicIpi:
     def test_clreipnum_ipi_clears_pending(self):
         """clreipnum identity 1 -> M-file pending 清除, MEIP cleared.
 
-        Regression: clreipnum mirrors seteipnum's direct mapping — ``clreipnum = 1``
-        written to the M-file clears M-file eip[1] (not the S-file).
+        Regression: clreipnum mirrors seteipnum's direct mapping —
+        ``clreipnum = 1`` written to the M-file clears M-file eip[1]
+        (not the S-file).
         """
         imsic = _make_imsic()
         imsic.csr_write(0, "M", 0x70, 1)  # M-file eidelivery=1
         imsic.csr_write(0, "M", 0xC0, 1 << 1)
         imsic.write(0x000, (1).to_bytes(4, "little"))
-        # M-file IID=1 stays in M-file -> MEIP, M-file topei reports pending IPI.
-        assert (imsic.get_pending_mip(0) & (1 << 11)) != 0, "MEIP should be set for IPI IID=1"
-        assert imsic.peek_topei(0, "M") != 0, "M-file topei should report pending IPI"
+        # M-file IID=1 stays in M-file -> MEIP,
+        # M-file topei reports pending IPI.
+        assert (imsic.get_pending_mip(0) & (1 << 11)) != 0, (
+            "MEIP should be set for IPI IID=1"
+        )
+        assert imsic.peek_topei(0, "M") != 0, (
+            "M-file topei should report pending IPI"
+        )
         imsic.write(0x008, (1).to_bytes(4, "little"))  # clreipnum 1 on M-file
         # clreipnum clears the M-file eip bit directly.
         assert imsic.get_pending_mip(0) == 0, "mip should be 0 after clear"
-        assert imsic.peek_topei(0, "M") == 0, "M-file topei should be 0 after clear"
+        assert imsic.peek_topei(0, "M") == 0, (
+            "M-file topei should be 0 after clear"
+        )

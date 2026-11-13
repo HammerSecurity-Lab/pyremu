@@ -5,8 +5,10 @@
 
 """exFAT 的引导扇区、根目录与分配位图解析.
 
-引导扇区给出几何参数, 根目录中的分配位图条目给出位图位置, 位图中的 0 位给出空闲簇数.
-根目录与分配位图在 FAT 表中按簇链(cluster chain)组织, 即每个簇的 FAT 表条目给出下一个簇.
+引导扇区给出几何参数, 根目录中的分配位图条目给出位图位置,
+位图中的 0 位给出空闲簇数.
+根目录与分配位图在 FAT 表中按簇链(cluster chain)组织,
+即每个簇的 FAT 表条目给出下一个簇.
 本模块只读映像, 不写入任何扇区.
 """
 
@@ -85,7 +87,11 @@ class ExfatSuperblock:
         ]
         if self.bitmap_byte_offset is not None:
             regions.append(
-                DiskRegion("分配位图", self.bitmap_byte_offset, self.bitmap_byte_size)
+                DiskRegion(
+                    "分配位图",
+                    self.bitmap_byte_offset,
+                    self.bitmap_byte_size,
+                )
             )
         regions.append(
             DiskRegion(
@@ -95,7 +101,9 @@ class ExfatSuperblock:
             )
         )
 
-        free_text = "未知" if self.free_clusters is None else f"{self.free_clusters:,}"
+        free_text = (
+            "未知" if self.free_clusters is None else f"{self.free_clusters:,}"
+        )
         properties = (
             ("卷标", self.volume_label or "未命名"),
             ("文件系统修订号", f"{self.revision_major}.{self.revision_minor}"),
@@ -139,12 +147,19 @@ def probe(path: str | Path) -> ExfatSuperblock | None:
         superblock = _parse_boot_sector(boot)
         fp.seek(0, io.SEEK_END)
         file_size = fp.tell()
-        if superblock.volume_length_sectors * superblock.bytes_per_sector > file_size:
+        if (
+            superblock.volume_length_sectors * superblock.bytes_per_sector
+            > file_size
+        ):
             raise DiskFormatError("映像短于引导扇区声明的扇区总数")
 
         label, bitmap = _scan_root_directory(fp, superblock)
-        free_clusters = _read_free_clusters(fp, superblock, bitmap) if bitmap else None
-        bitmap_offset = _cluster_offset(superblock, bitmap[0]) if bitmap else None
+        free_clusters = (
+            _read_free_clusters(fp, superblock, bitmap) if bitmap else None
+        )
+        bitmap_offset = (
+            _cluster_offset(superblock, bitmap[0]) if bitmap else None
+        )
         return replace(
             superblock,
             volume_label=label,
@@ -217,7 +232,9 @@ def _scan_root_directory(
     cluster = superblock.root_cluster
     visited: set[int] = set()
     while True:
-        if not FIRST_CLUSTER <= cluster < superblock.cluster_count + FIRST_CLUSTER:
+        if not (
+            FIRST_CLUSTER <= cluster < superblock.cluster_count + FIRST_CLUSTER
+        ):
             raise DiskFormatError("根目录簇链超出簇堆范围")
         if cluster in visited:
             raise DiskFormatError("根目录簇链中同一簇第二次出现, 判定为环")
@@ -245,7 +262,11 @@ def _read_free_clusters(
 ) -> int:
     """读取分配位图并统计 0 位, 即空闲簇数."""
     first_cluster, byte_size = bitmap
-    if not FIRST_CLUSTER <= first_cluster < superblock.cluster_count + FIRST_CLUSTER:
+    if not (
+        FIRST_CLUSTER
+        <= first_cluster
+        < superblock.cluster_count + FIRST_CLUSTER
+    ):
         raise DiskFormatError("分配位图起始簇超出簇堆范围")
     if byte_size == 0:
         raise DiskFormatError("分配位图长度为 0")
@@ -264,7 +285,10 @@ def _read_free_clusters(
 
 
 def _read_cluster_chain(
-    fp: BinaryIO, superblock: ExfatSuperblock, first_cluster: int, byte_size: int
+    fp: BinaryIO,
+    superblock: ExfatSuperblock,
+    first_cluster: int,
+    byte_size: int,
 ) -> bytes:
     """沿簇链读取至多 *byte_size* 字节."""
     chunks: list[bytes] = []
@@ -272,7 +296,9 @@ def _read_cluster_chain(
     cluster = first_cluster
     visited: set[int] = set()
     while remaining > 0:
-        if not FIRST_CLUSTER <= cluster < superblock.cluster_count + FIRST_CLUSTER:
+        if not (
+            FIRST_CLUSTER <= cluster < superblock.cluster_count + FIRST_CLUSTER
+        ):
             raise DiskFormatError("簇链超出簇堆范围")
         if cluster in visited:
             raise DiskFormatError("簇链中同一簇第二次出现, 判定为环")
@@ -290,7 +316,11 @@ def _read_cluster_chain(
     return b"".join(chunks)
 
 
-def _read_cluster(fp: BinaryIO, superblock: ExfatSuperblock, cluster: int) -> bytes:
+def _read_cluster(
+    fp: BinaryIO,
+    superblock: ExfatSuperblock,
+    cluster: int,
+) -> bytes:
     fp.seek(_cluster_offset(superblock, cluster))
     data = fp.read(superblock.cluster_bytes)
     if len(data) < superblock.cluster_bytes:
@@ -306,9 +336,16 @@ def _cluster_offset(superblock: ExfatSuperblock, cluster: int) -> int:
     return sector * superblock.bytes_per_sector
 
 
-def _next_cluster(fp: BinaryIO, superblock: ExfatSuperblock, cluster: int) -> int:
+def _next_cluster(
+    fp: BinaryIO,
+    superblock: ExfatSuperblock,
+    cluster: int,
+) -> int:
     """读取 FAT 表中 *cluster* 的下一簇编号."""
-    fp.seek(superblock.fat_offset_sectors * superblock.bytes_per_sector + cluster * 4)
+    fp.seek(
+        superblock.fat_offset_sectors * superblock.bytes_per_sector
+        + cluster * 4
+    )
     raw = fp.read(4)
     if len(raw) < 4:
         raise DiskFormatError("FAT 表超出映像范围")

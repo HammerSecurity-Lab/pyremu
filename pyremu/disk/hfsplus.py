@@ -81,7 +81,10 @@ class HfsplusVolumeHeader:
             ("卷标", self.volume_label or "未命名"),
             ("文件系统类型", "HFSX" if self.is_case_sensitive else "HFS+"),
             ("卷标识", self.volume_identifier or "未设置"),
-            ("卷属性", join_names(flag_names(self.attributes, VOLUME_ATTRIBUTES))),
+            (
+                "卷属性",
+                join_names(flag_names(self.attributes, VOLUME_ATTRIBUTES)),
+            ),
             ("上次挂载版本", _fourcc_text(self.last_mounted_version)),
             ("日志信息块", f"{self.journal_info_block:,}"),
             ("文件数", f"{self.file_count:,}"),
@@ -109,7 +112,8 @@ def probe(path: str | Path) -> HfsplusVolumeHeader | None:
     """读取卷头并判定格式; 签名不符时返回 None.
 
     Raises:
-        DiskFormatError: 布局字段自相矛盾, 映像短于声明的总块数, 或目录文件无法读取.
+        DiskFormatError: 布局字段自相矛盾, 映像短于声明的总块数,
+            或目录文件无法读取.
     """
     with Path(path).open("rb") as fp:
         fp.seek(VOLUME_HEADER_OFFSET)
@@ -179,7 +183,10 @@ def _parse_volume_header(raw: bytes) -> HfsplusVolumeHeader:
     )
 
 
-def _parse_allocation_extents(raw: bytes, block_count: int) -> tuple[tuple[int, int], ...]:
+def _parse_allocation_extents(
+    raw: bytes,
+    block_count: int,
+) -> tuple[tuple[int, int], ...]:
     """解析分配位图文件的前 8 个区段; 区段超出总块数时抛出 DiskFormatError."""
     extents: list[tuple[int, int]] = []
     for index in range(EXTENT_COUNT):

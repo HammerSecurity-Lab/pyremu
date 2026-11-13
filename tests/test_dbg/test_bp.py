@@ -115,7 +115,9 @@ class TestBpMatchPc:
         hart = dbg.hart
         hart.mode = RiscvMode.S
         hart.satp_val = SATP_SV39
-        monkeypatch.setattr(MemoryAccessOps, "translate_addr", lambda *a, **k: (False, 0))
+        monkeypatch.setattr(
+            MemoryAccessOps, "translate_addr", lambda *a, **k: (False, 0)
+        )
         assert not dbg._bp_match_pc(hart, CODE_VA, CODE_PA)
 
 
@@ -212,7 +214,8 @@ class TestEvalBpCondition:
             cond_type="csr",
             cond_reg="mstatus",
             cond_op="==",
-            cond_val=0x1800,
+            # mstatus 的读出值含只读派生位 UXL=2
+            cond_val=0x1800 | (2 << 32),
         )
         assert dbg._eval_bp_condition(dbg.hart, bp)
 

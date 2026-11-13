@@ -43,9 +43,8 @@ import struct
 
 from pyremu.utils.mask import mask16, mask32
 
-# ============================================================
 #  MMIO 寄存器偏移与区域大小
-# ============================================================
+
 
 VIRTIO_MMIO_MAGIC_VALUE = 0x000
 VIRTIO_MMIO_VERSION = 0x004
@@ -77,9 +76,9 @@ VIRTIO_MMIO_CONFIG_OFFSET = 0x100
 # 整个 MMIO 区域大小
 VIRTIO_MMIO_SIZE = 0x200
 
-# ============================================================
+
 #  设备状态位
-# ============================================================
+
 
 VIRTIO_STATUS_ACKNOWLEDGE = 1
 VIRTIO_STATUS_DRIVER = 2
@@ -88,17 +87,17 @@ VIRTIO_STATUS_FEATURES_OK = 8
 VIRTIO_STATUS_DEVICE_NEEDS_RESET = 0x40
 VIRTIO_STATUS_FAILED = 0x80
 
-# ============================================================
+
 #  Feature bits
-# ============================================================
+
 
 VIRTIO_F_VERSION_1 = 1 << 32
 VIRTIO_F_RING_INDIRECT_DESC = 1 << 28
 VIRTIO_F_RING_EVENT_IDX = 1 << 29
 
-# ============================================================
+
 #  virtqueue 描述符标志
-# ============================================================
+
 
 VRING_DESC_F_NEXT = 1
 VRING_DESC_F_WRITE = 2
@@ -148,8 +147,8 @@ class VirtqDesc:
 class VirtQueue:
     """一条 virtqueue 的环状态与描述符遍历.
 
-    available ring 由驱动写入, used ring 由本类写入。两部分都在受调试程序的物理内存里,
-    经 read_fn 与 write_fn 回调访问。
+    available ring 由驱动写入, used ring 由本类写入。
+    两部分都在受调试程序的物理内存里, 经 read_fn 与 write_fn 回调访问。
     """
 
     def __init__(
@@ -201,7 +200,12 @@ class VirtQueue:
 
     def configured(self) -> bool:
         """三处地址均已写入且队列长度非零."""
-        return bool(self.num) and bool(self.desc) and bool(self.driver) and bool(self.device)
+        return (
+            bool(self.num)
+            and bool(self.desc)
+            and bool(self.driver)
+            and bool(self.device)
+        )
 
     # ---- available ring ----
 
@@ -222,7 +226,8 @@ class VirtQueue:
     def push_used(self, desc_head: int, length: int) -> None:
         """向 used ring 写入一项 (描述符链头索引与写入字节数).
 
-        used ring 布局: [0] flags (u16), [2] idx (u16), [4+] ring (每项 8 字节)。
+        used ring 布局: [0] flags (u16), [2] idx (u16),
+        [4+] ring (每项 8 字节)。
         """
         ring_idx = self.last_avail_idx % self.num
         entry_off = self.device + 4 + ring_idx * 8
@@ -244,11 +249,16 @@ class VirtQueue:
             next=int.from_bytes(raw[14:16], "little"),
         )
 
-    def descriptor_chain(self, head: int, max_desc: int) -> list[VirtqDesc] | None:
+    def descriptor_chain(
+        self,
+        head: int,
+        max_desc: int,
+    ) -> list[VirtqDesc] | None:
         """自 *head* 起沿 next 取出描述符链, 至多取 *max_desc* 个.
 
-        成环保护: 链中某一描述符索引第二次出现即判定为环, 返回 None。此外链长以队列
-        长度为上界, 越界同样返回 None。两者使遍历步数有界, 不会因驱动给出的畸形链自旋。
+        成环保护: 链中某一描述符索引第二次出现即判定为环, 返回 None。
+        此外链长以队列长度为上界, 越界同样返回 None。
+        两者使遍历步数有界, 不会因驱动给出的畸形链自旋。
 
         返回:
             描述符列表; 检出成环或越界时为 None.
@@ -301,14 +311,15 @@ class VirtioMMIOConfig:
 class VirtioMMIO:
     """virtio-mmio 寄存器堆、队列调度与中断状态.
 
-    宿主设备类持有本对象, 并把 Device 接口的读写委托给它。本对象不保存任何指向宿主
-    设备的引用: 设备持有本对象, 本对象若再持有设备的绑定方法, 二者互相持有, 该环使
-    设备及其持有的主存不经引用计数释放。设备侧的四项分工因此改为传数据、传当次调用的
-    函数, 或由设备自行处理:
+    宿主设备类持有本对象, 并把 Device 接口的读写委托给它。
+    本对象不保存任何指向宿主设备的引用: 设备持有本对象,
+    本对象若再持有设备的绑定方法, 二者互相持有,
+    该环使设备及其持有的主存不经引用计数释放。
+    设备侧的四项分工因此改为传数据、传当次调用的函数, 或由设备自行处理:
 
-    - 配置空间: 0x000 至 0x0ff 由本对象解码; 0x100 起为设备特定配置空间, 其字节映像由
-      设备在构造时给出并存于 cfg_space_data 属性, 设备自身的配置发生变化时由设备
-      改写该属性;
+    - 配置空间: 0x000 至 0x0ff 由本对象解码; 0x100 起为设备特定配置空间,
+      其字节映像由设备在构造时给出并存于 cfg_space_data 属性,
+      设备自身的配置发生变化时由设备改写该属性;
     - QueueNotify: 由设备在自己的 write 中处理, 本对象对该寄存器不做动作;
     - 请求处理: 设备在每次 process_queue 调用时传入处理描述符链的函数;
     - 中断: 中断投递目标与中断源号在构造时给出, 二者都不指向宿主设备。
@@ -360,9 +371,9 @@ class VirtioMMIO:
     def read(self, offset: int, size: int) -> bytes:
         if size not in (1, 2, 4, 8):
             return b"\x00" * size
-        # 读取宽度小于 4 字节时只取低位: 配置空间按字节映像返回以该偏移为起始的小端字,
-        # 高出本次读取宽度的字节不属于本次读。驱动读 MAC 这类起始偏移不保证 4 字节对齐的
-        # 字段时按单字节读, 不截位会在该处溢出。
+        # 读取宽度小于 4 字节时只取低位: 配置空间按字节映像返回以该偏移为起始的
+        # 小端字, 高出本次读取宽度的字节不属于本次读。驱动读 MAC 这类起始偏移
+        # 不保证 4 字节对齐的字段时按单字节读, 不截位会在该处溢出。
         val = self.mmio_read(offset) & ((1 << (size * 8)) - 1)
         return val.to_bytes(size, "little")
 
@@ -408,9 +419,10 @@ class VirtioMMIO:
     def _read_config_space(self, offset: int) -> int:
         """读取 0x100 起的设备配置空间.
 
-        配置空间按字节寻址: 取以该偏移为起始的 4 字节小端字. 进入本方法时 offset 不小于
-        VIRTIO_MMIO_CONFIG_OFFSET, 故 local 非负; 切片越出映像末尾时只取到实际存在的
-        字节, 不足 4 字节的部分由 ljust 补 0
+        配置空间按字节寻址: 取以该偏移为起始的 4 字节小端字.
+        进入本方法时 offset 不小于 VIRTIO_MMIO_CONFIG_OFFSET, 故 local 非负;
+        切片越出映像末尾时只取到实际存在的字节,
+        不足 4 字节的部分由 ljust 补 0
         """
         local = offset - VIRTIO_MMIO_CONFIG_OFFSET
         word = self.cfg_space_data[local : local + 4].ljust(4, b"\x00")
@@ -419,7 +431,8 @@ class VirtioMMIO:
     # ---- MMIO 写 ----
 
     def mmio_write(self, offset: int, val: int, size: int) -> None:
-        """写入 MMIO 寄存器. QueueNotify 由设备处理, 本方法对该寄存器不做动作."""
+        """写入 MMIO 寄存器. QueueNotify 由设备处理,
+        本方法对该寄存器不做动作."""
         if offset == VIRTIO_MMIO_DRIVER_FEATURES:
             sel = self.driver_features_sel
             mask_low = mask32(val) << (sel * 32)
@@ -477,7 +490,8 @@ class VirtioMMIO:
             queue.set_device(val, high=True)
 
     def _current_queue(self) -> VirtQueue:
-        """按 QueueSel 取当前队列. 选择越界时返回第 0 条, 与单队列设备的既有行为一致."""
+        """按 QueueSel 取当前队列.
+        选择越界时返回第 0 条."""
         queue = self.queue_at(self.queue_sel)
         return self.queues[0] if queue is None else queue
 
@@ -492,7 +506,9 @@ class VirtioMMIO:
     def process_queue(
         self,
         index: int,
-        handle_request: Callable[[VirtQueue, list[VirtqDesc]], tuple[bool, int]],
+        handle_request: Callable[
+            [VirtQueue, list[VirtqDesc]], tuple[bool, int]
+        ],
         max_descriptors: int = 0,
     ) -> bool:
         """处理第 *index* 条队列中待处理的请求.
@@ -538,7 +554,9 @@ class VirtioMMIO:
         self,
         queue: VirtQueue,
         desc_head: int,
-        handle_request: Callable[[VirtQueue, list[VirtqDesc]], tuple[bool, int]],
+        handle_request: Callable[
+            [VirtQueue, list[VirtqDesc]], tuple[bool, int]
+        ],
     ) -> tuple[bool, int]:
         """取出一个描述符链并交给设备处理. 链不可解析时按失败计入 used ring."""
         chain = queue.descriptor_chain(desc_head, self.chain_max_desc)
@@ -558,7 +576,8 @@ class VirtioMMIO:
             self._set_irq_level(False)
 
     def _set_irq_level(self, level: bool) -> None:
-        """按电平向中断控制器投递本设备中断源. 中断源号为 0 或未给出投递目标时不做动作."""
+        """按电平向中断控制器投递本设备中断源.
+        中断源号为 0 或未给出投递目标时不做动作."""
         if self._irq_resp_fn is not None and self._irq:
             self._irq_resp_fn(self._irq, level)
 

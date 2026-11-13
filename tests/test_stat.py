@@ -4,9 +4,9 @@
 
 """加速执行统计的记录与汇总.
 
-覆盖 ``BatchStats`` 的聚合规则与 ``pyremu.stat.recording`` 的开关判定. 统计打开时
-``end_round`` 会在进程退出时输出汇总, 故打开开关的用例只记录轮次而不结束轮次,
-使退出时的输出为空.
+覆盖 ``BatchStats`` 的聚合规则与 ``pyremu.stat.recording`` 的开关判定.
+统计打开时 ``end_round`` 会在进程退出时输出汇总, 故打开开关的用例只记录轮次而
+不结束轮次, 使退出时的输出为空.
 """
 
 from __future__ import annotations

@@ -25,7 +25,13 @@ import pytest
 from pyremu._native import FfiUartCtx, native_available
 from pyremu.emulator import Emulator
 from pyremu.interrupt.plic import PLIC
-from pyremu.peripheral.uart import IP_RXWM, IP_TXWM, REG_RXDATA, RX_FIFO_SIZE, UART
+from pyremu.peripheral.uart import (
+    IP_RXWM,
+    IP_TXWM,
+    REG_RXDATA,
+    RX_FIFO_SIZE,
+    UART,
+)
 from tests.conftest import make_test_emu
 
 TXDATA = 0x00
@@ -89,7 +95,8 @@ class TestPerHartLineBuffer:
 
 
 class TestPerHartLogFiles:
-    """set_hart_log_dir: 各 hart 输出另存 hart<N>.log (原始文本, 无 ANSI 标签)."""
+    """set_hart_log_dir: 各 hart 输出另存 hart<N>.log
+    (原始文本, 无 ANSI 标签)."""
 
     def test_writes_separate_files(self, tmp_path):
         sink: list[str] = []
@@ -235,7 +242,8 @@ class TestNativeUartPairRouting:
         assert (tmp_path / "hart1.log").read_text() == "YO\n"
 
     def test_flush_advances_log_index_not_drain(self, tmp_path):
-        """日志消费者只推进 tx_log_rd; tx_drain 归 termio 线程独占, Python 不碰."""
+        """日志消费者只推进 tx_log_rd; tx_drain 归 termio 线程独占,
+        Python 不碰."""
         emu = self._make_uart_emu(tmp_path)
         self._push_pair(emu, 0, ord("A"))
         self._push_pair(emu, 0, ord("\n"))
@@ -304,7 +312,10 @@ class TestNativeUartPairRouting:
         assert uart is not None
         assert termio is not None
         written: list[bytes] = []
-        monkeypatch.setattr("pyremu.peripheral.uart.os.write", lambda fd, b: written.append(b))
+        monkeypatch.setattr(
+            "pyremu.peripheral.uart.os.write",
+            lambda fd, b: written.append(b),
+        )
         uart.set_console_echo(False)  # native 模式配置 (Rust 引擎负责即时输出)
         for b in b"hi\n":
             self._push_pair(emu, 0, b)
@@ -493,10 +504,12 @@ class TestTxArchiveDaemonPollFallback:
         """调试器 REPL 与运行模式往返时, stop 之后 start 必须重建管道.
 
         调试器执行 ``continue`` 时 ``_tx_archive_loop`` 与 ``_rx_daemon_loop``
-        均崩溃: ``ValueError: file descriptor cannot be a negative integer (-1)``。
+        均崩溃:
+        ``ValueError: file descriptor cannot be a negative integer (-1)``。
         根因: ``_enter_repl_mode`` 调 ``termio.stop()`` 关闭全部管道并把读端 fd
         置为 -1, 随后 ``continue`` 的 ``_enter_run_mode`` 调 ``termio.start()``,
-        而 start() 不重建管道, 守护线程捕获 fd=-1 后在 ``poll.register(-1)`` 崩溃。
+        而 start() 不重建管道, 守护线程捕获 fd=-1 后在 ``poll.register(-1)``
+        崩溃。
         修复后 start() 先重建管道, 全部读端 fd 恢复有效。
         """
         emu = self._make_uart_emu(tmp_path)
@@ -615,7 +628,8 @@ class TestRxDaemonLostNotifyFallback(_RxRingHarness):
     """
 
     def test_rx_daemon_drains_on_timeout_without_notify(self, tmp_path):
-        """通知字节丢失时, 超时路径仍读出接收环形缓冲区; 修复前该路径跳过读出."""
+        """通知字节丢失时, 超时路径仍读出接收环形缓冲区;
+        修复前该路径跳过读出."""
         emu = self._make_uart_emu(tmp_path)
         termio = emu._termio
         assert termio is not None
@@ -627,8 +641,11 @@ class TestRxDaemonLostNotifyFallback(_RxRingHarness):
             assert termio._rx_wr.value != termio._rx_rd.value
             poll = select.poll()
             poll.register(termio._rx_notify_r, select.POLLIN)
-            # 管道为空, poll 走 1ms 超时路径; 修复前该分支跳过读出, 数据留在缓冲区.
-            assert termio._rx_daemon_tick(termio._rx_notify_r, poll, timeout_ms=1)
+            # 管道为空, poll 走 1ms 超时路径;
+            # 修复前该分支跳过读出, 数据留在缓冲区.
+            assert termio._rx_daemon_tick(
+                termio._rx_notify_r, poll, timeout_ms=1
+            )
             assert bytes(uart._rx_fifo) == b"hi"
             assert termio._rx_wr.value == termio._rx_rd.value
         finally:
@@ -641,8 +658,8 @@ class TestRxDaemonStopNotify(_RxRingHarness):
 
     Rust termio 线程识别 Ctrl+Q 后直接置位 CPU 引擎的停止标志, 并向接收通知管道
     写 1 字节; 该路径不向接收环形缓冲区写入字节, ``drain_rx`` 因而不置位
-    ``Emulator._wake_event``. 全部 hart 处于 WFI 时引擎不执行指令, 主线程阻塞在该
-    事件上, 停止标志没有别的送达途径.
+    ``Emulator._wake_event``. 全部 hart 处于 WFI 时引擎不执行指令,
+    主线程阻塞在该事件上, 停止标志没有别的送达途径.
 
     修复前守护线程只经 ``drain_rx`` 置位该事件, 停顿时按 Ctrl+Q 无法让受调试程序
     回到调试器.
@@ -660,9 +677,13 @@ class TestRxDaemonStopNotify(_RxRingHarness):
             os.write(termio._rx_notify_w, b"\x01")
             poll = select.poll()
             poll.register(termio._rx_notify_r, select.POLLIN)
-            assert termio._rx_daemon_tick(termio._rx_notify_r, poll, timeout_ms=1)
+            assert termio._rx_daemon_tick(
+                termio._rx_notify_r, poll, timeout_ms=1
+            )
             assert emu._wake_event.is_set(), "Ctrl+Q 通知应置位唤醒事件"
-            assert termio._rx_wr.value == termio._rx_rd.value, "通知字节不得进入接收环形缓冲区"
+            assert termio._rx_wr.value == termio._rx_rd.value, (
+                "通知字节不得进入接收环形缓冲区"
+            )
         finally:
             uart = emu.uart
             if uart is not None:
@@ -714,10 +735,13 @@ class TestRxRoomRefill(_RxRingHarness):
         try:
             uart.set_rx_room_notifier(termio.drain_rx)
             uart.preload(b"f" * RX_FIFO_SIZE)  # FIFO 填满
-            self._push_rx_ring(emu, b"tail")  # 4 字节留在接收环形缓冲区, 不写通知管道
+            self._push_rx_ring(
+                emu, b"tail"
+            )  # 4 字节留在接收环形缓冲区, 不写通知管道
             assert len(uart._rx_fifo) == RX_FIFO_SIZE
             assert uart.read(REG_RXDATA, 1) == b"f"
-            # 读出 1 个字节后立即由接收环形缓冲区续写 1 个字节, FIFO 内的字节数不变
+            # 读出 1 个字节后立即由接收环形缓冲区续写 1 个字节,
+            # FIFO 内的字节数不变
             assert len(uart._rx_fifo) == RX_FIFO_SIZE
             assert bytes(uart._rx_fifo[-1:]) == b"t"
             assert termio._rx_wr.value - termio._rx_rd.value == 3
@@ -810,7 +834,7 @@ class TestTxWatermarkInterrupt:
 
 
 class TestRxWatermarkInterrupt:
-    """RX 触发阈值 rxcnt 位于 rxctrl bits[18:16], 与 txcnt 同偏移, 见 SiFive spec.
+    """RX 触发阈值 rxcnt 位于 rxctrl bits[18:16], 与 txcnt 同偏移.
 
     旧实现误从 bits[2:0] 取 rxcnt, 而 Linux sifive 驱动 probe 写
     rxctrl = RXEN|(0<<16) = 0x1, 旧代码读到 rxcnt=1 即 rxen 位, 单字节输入使
@@ -853,7 +877,9 @@ class TestRxWatermarkInterrupt:
     def test_rxwm_respects_rxcnt_threshold(self):
         """rxcnt=1 (bits[18:16]) 时: 1 字节不触发, 第 2 字节触发."""
         uart = _make_uart([])
-        uart.write(self.REG_RXCTRL, (self.RXEN | (1 << 16)).to_bytes(4, "little"))
+        uart.write(
+            self.REG_RXCTRL, (self.RXEN | (1 << 16)).to_bytes(4, "little")
+        )
         uart.preload(b"a")
         assert not (self._read_ip(uart) & IP_RXWM)
         uart.preload(b"b")
@@ -866,7 +892,9 @@ class TestRxWatermarkInterrupt:
         """
         plic = PLIC(base_addr=0x0C00_0000, num_sources=4, num_contexts=2)
         uart = UART(base=0x1000_0000, plic=plic, irq=1)
-        uart.write(self.REG_RXCTRL, (self.RXEN | (1 << 16)).to_bytes(4, "little"))
+        uart.write(
+            self.REG_RXCTRL, (self.RXEN | (1 << 16)).to_bytes(4, "little")
+        )
         uart.write(self.REG_IE, (0x2).to_bytes(4, "little"))
         uart.preload(b"a")  # 占用 1, rxcnt=1 ->不满足
         assert not plic.pending[1]
@@ -954,9 +982,9 @@ class TestUartFlush:
 
         hart.gprs[11] = 0x41
         hart.pc = 0x80000000
-        code = self._lui(10, 0x10000).to_bytes(4, "little") + self._sb(10, 11, 0).to_bytes(
-            4, "little"
-        )
+        code = self._lui(10, 0x10000).to_bytes(4, "little") + self._sb(
+            10, 11, 0
+        ).to_bytes(4, "little")
         emu.bus.write(0x80000000, code)
 
         emu.step()  # LUI
@@ -978,9 +1006,9 @@ class TestUartFlush:
         uart_base = 0x10000000
         code_addr = 0x80000000
         lui_imm = (uart_base >> 12) & 0xFFFFF
-        code = self._lui(10, lui_imm).to_bytes(4, "little") + self._sb(10, 11, 0).to_bytes(
-            4, "little"
-        )
+        code = self._lui(10, lui_imm).to_bytes(4, "little") + self._sb(
+            10, 11, 0
+        ).to_bytes(4, "little")
         emu.bus.write(code_addr, code)
         hart = emu.harts[0]
         hart.gprs[11] = 0x41  # 'A'

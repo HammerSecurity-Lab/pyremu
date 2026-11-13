@@ -45,7 +45,7 @@ def cfg_bool(name: str) -> bool:
 def cfg_int(name: str) -> int:
     """整数配置: env 优先, 否则回退到 configs_gen 同名默认值.
 
-    env 值支持十进制与 ``0x`` 前缀十六进制 (如 ``FAST_LOAD_THRESHOLD=0x200000``).
+    env 值支持十进制与 ``0x`` 前缀十六进制, 如 ``FAST_LOAD_THRESHOLD=0x200000``.
     """
     val = os.environ.get(name, "")
     if val != "":
@@ -63,7 +63,7 @@ def cfg_float(name: str) -> float:
 
 
 def cfg_is_set(name: str) -> bool:
-    """环境变量 *name* 是否被显式设置 (非 configs_gen 默认)."""
+    """环境变量 *name* 是否被显式设置."""
     return name in os.environ
 
 
@@ -71,7 +71,7 @@ def cfg_is_set(name: str) -> bool:
 def force_config(name: str, value: object) -> Iterator[None]:
     """临时覆盖 configs_gen 中的配置项, 退出上下文时恢复原值.
 
-    供测试项在局部强制切换编译期开关 (如 PYREMU_AIA), 不改动全局默认值.
+    供测试项在局部强制切换编译期开关, 不改动全局默认值.
     恢复在 finally 中执行, 测试中途抛异常也会还原, 避免污染后续用例.
 
     用法::
@@ -91,11 +91,17 @@ def force_config(name: str, value: object) -> Iterator[None]:
 # partial 以位置参数预绑定 path_join 的 dir_path: 无参调用返回目录
 # Path, 传 *name* 返回目录内文件 Path (path_join 的 name 有默认值).
 
-firmware_dir = partial(path_join, getattr(configs_gen, "FIRM_DIR", "build/firm-bin"))
+firmware_dir = partial(
+    path_join, getattr(configs_gen, "FIRM_DIR", "build/firm-bin")
+)
 
 elf_dir = partial(path_join, getattr(configs_gen, "ELF_DIR", "build/elf"))
 
 examed_elf_dir = partial(
     path_join,
-    str((Path(__file__).resolve().parent.parent / "tests" / "build" / "elf").absolute()),
+    str(
+        (
+            Path(__file__).resolve().parent.parent / "tests" / "build" / "elf"
+        ).absolute()
+    ),
 )

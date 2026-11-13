@@ -19,7 +19,7 @@ pub(crate) fn wfi_sync_and_check(
 	sync_msip(state, clint);
 	sync_imsic(state);
 
-	let ext_irq_pending = !ext_irq.is_null() && unsafe { (*ext_irq).pending != 0 };
+	let ext_irq_pending = !ext_irq.is_null() && (unsafe { (*ext_irq).pending != 0 });
 	if ext_irq_pending {
 		let mfile_owns = state.imsic_m.present != 0 && state.imsic_m.eidelivery != 0;
 		let sfile_owns = state.imsic_s.present != 0 && state.imsic_s.eidelivery != 0;
@@ -44,7 +44,7 @@ pub(crate) fn wfi_sync_and_check(
 		state.mie |= 1 << 9; // SEIE 置位
 	}
 
-	let rx_ready = !uart_rx_notify.is_null() && unsafe { *uart_rx_notify != 0 };
+	let rx_ready = !uart_rx_notify.is_null() && (unsafe { *uart_rx_notify != 0 });
 	let msip_pending = (state.mip.load(Ordering::Acquire) & (1 << 3)) != 0;
 
 	// 唤醒判定不使用 mip.MEIP. IMSIC M 文件存在且 eidelivery 为 0 时, 外部中断使
@@ -63,14 +63,15 @@ pub(crate) fn wfi_sync_and_check(
 	// M 模式陷态处理函数也不处理它们, 为其醒来只会在 WFI 与跳过之间反复, hart 降到
 	// S 模式后才投递. 未委派的机器级中断 MEI、MSI、MTI 一律唤醒.
 	let level_pending = if state.mode == riscv_mode::M {
-		(state.mip.load(Ordering::Acquire) & wake_mask & !state.mideleg) != 0
+		(state.mip_value() & wake_mask & !state.mideleg) != 0
 	} else {
-		(state.mip.load(Ordering::Acquire) & wake_mask) != 0
+		(state.mip_value() & wake_mask) != 0
 	};
 	// IMSIC 有挂起的中断时, 仍要求 mie 中的 MEIE 已使能, 才作为唤醒来源.
 	let imsic_pending = mfile_pending && (state.mie & (1 << 11)) != 0;
-	let other_pending = level_pending || imsic_pending;
-	let woke = other_pending || msip_pending || rx_ready || ext_irq_pending;
+	// 唤醒条件取「存在已使能且挂起的中断」; 未使能的中断源不唤醒 hart.
+	// rx_ready 与 ext_irq_pending 为宿主机侧的事件, 仅使 hart 退出等待.
+	let woke = level_pending || imsic_pending || rx_ready || ext_irq_pending;
 	(woke, msip_pending)
 }
 
@@ -81,11 +82,11 @@ pub(crate) fn wfi_check_all_idle(
 	module: &ModuleState,
 	msip_pending: bool,
 ) -> Option<bool> {
-	let cur_mtime = unsafe { &*clint.mtime }.load(Ordering::Relaxed);
+	let cur_mtime = (unsafe { &*clint.mtime }).load(Ordering::Relaxed);
 	let mut earliest: u64 = u64::MAX;
 
-	for hid in 0..(clint.num_harts as usize) {
-		let cmp = unsafe { &*clint.mtimecmp.add(hid) }.load(Ordering::Relaxed);
+	for hid in 0..clint.num_harts as usize {
+		let cmp = (unsafe { &*clint.mtimecmp.add(hid) }).load(Ordering::Relaxed);
 		if cmp > 0 && cmp > cur_mtime && cmp < earliest {
 			earliest = cmp;
 		}
@@ -95,7 +96,7 @@ pub(crate) fn wfi_check_all_idle(
 	// 两个来源都需检查.
 	let hart_states_ptr = clint.hart_states.get();
 	if !hart_states_ptr.is_null() {
-		for hid in 0..(clint.num_harts as usize) {
+		for hid in 0..clint.num_harts as usize {
 			let st = unsafe { &*hart_states_ptr.add(hid) };
 			if st.stimecmp > 0 && st.stimecmp > cur_mtime && st.stimecmp < earliest {
 				earliest = st.stimecmp;
@@ -124,8 +125,8 @@ pub(crate) fn wfi_check_all_idle(
 	}
 
 	let mut any_hart_msip = false;
-	for hid in 0..(clint.num_harts as usize) {
-		if unsafe { (*clint.msip.add(hid)).load(Ordering::Relaxed) } & 1 != 0 {
+	for hid in 0..clint.num_harts as usize {
+		if ((unsafe { (*clint.msip.add(hid)).load(Ordering::Relaxed) }) & 1) != 0 {
 			any_hart_msip = true;
 			break;
 		}
@@ -176,7 +177,7 @@ pub(crate) fn wfi_spin(
 
 		// 调试器暂停标志
 		if module.stop_flag.load(Ordering::Acquire)
-			|| !stop_flag.is_null() && unsafe { *stop_flag != 0 }
+			|| (!stop_flag.is_null() && (unsafe { *stop_flag != 0 }))
 		{
 			sync_msip(state, clint);
 			module.wfi_flags[hart_id].store(0, Ordering::Release);

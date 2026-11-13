@@ -34,8 +34,8 @@ def get_abs_filename_arr_from_dir(dir_path: str | PathLike) -> list[Path]:
 def iter_regular_files(dir_path: str | PathLike) -> list[Path]:
     """非递归列出目录下的普通文件, 按名称升序.
 
-    符号链接按其目标判定, 指向普通文件的列入. 目录不存在、不是目录、无读取权限时,
-    异常向上传递.
+    符号链接按其目标判定, 指向普通文件的列入.
+    目录不存在、不是目录、无读取权限时, 异常向上传递.
     """
     entries = [p for p in Path(dir_path).iterdir() if p.is_file()]
     entries.sort(key=lambda p: p.name)

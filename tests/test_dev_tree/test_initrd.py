@@ -31,7 +31,9 @@ def test_dtb_encodes_initrd_range():
     """build_default_dtb 应在 /chosen 写入 initrd 起止 (u64 大端)."""
     cfg = make_test_config(ram_size=RAM_SIZE)
     start, end = 0x9800_0000, 0x9A34_5678
-    blob = build_default_dtb(cfg, bootargs="console=ttySIF0", initrd=Initrd(start, end))
+    blob = build_default_dtb(
+        cfg, bootargs="console=ttySIF0", initrd=Initrd(start, end)
+    )
     fdt = libfdt.Fdt(blob)
     chosen = fdt.path_offset("/chosen")
     assert _read_u64_prop(fdt, chosen, "linux,initrd-start") == start
@@ -51,7 +53,9 @@ def test_dtb_no_initrd_when_absent():
 def test_dtb_chosen_emitted_for_initrd_only():
     """即使无 bootargs, 只要有 initrd 也应生成 /chosen 节点."""
     cfg = make_test_config(ram_size=RAM_SIZE)
-    blob = build_default_dtb(cfg, bootargs=None, initrd=Initrd(0x9000_0000, 0x9001_0000))
+    blob = build_default_dtb(
+        cfg, bootargs=None, initrd=Initrd(0x9000_0000, 0x9001_0000)
+    )
     fdt = libfdt.Fdt(blob)
     chosen = fdt.path_offset("/chosen")  # 不存在会抛异常
     assert _read_u64_prop(fdt, chosen, "linux,initrd-start") == 0x9000_0000
@@ -77,4 +81,6 @@ def test_load_initrd_writes_ram_and_records_range(tmp_path):
     fdt = libfdt.Fdt(blob)
     chosen = fdt.path_offset("/chosen")
     assert _read_u64_prop(fdt, chosen, "linux,initrd-start") == addr
-    assert _read_u64_prop(fdt, chosen, "linux,initrd-end") == addr + len(payload)
+    assert _read_u64_prop(fdt, chosen, "linux,initrd-end") == addr + len(
+        payload
+    )

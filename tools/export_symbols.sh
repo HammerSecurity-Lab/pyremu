@@ -3,16 +3,28 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 #
 # 把带符号表的 ELF 汇集到一个目录, 供 rvdb 的 sym chdir / sym ls / sym load 使用。
-#
-# 用法:
-#   tools/export_symbols.sh <输出目录> <源>[:<名称>] ...
-#
-# 源为普通文件时建立一项, 名称省略时取文件名。
-# 源为目录时链接目录内每个普通文件, 名称为 <名称><文件名>, 名称省略时取文件名。
-# 建立的是指向构建产物的相对符号链接: 产物重新链接后, 目录中的内容随之更新。
-# 源不存在时跳过并报告, 不视为错误。
 
 set -euo pipefail
+
+usage() {
+	cat <<EOF
+用法: $0 <输出目录> <源>[:<名称>] ...
+
+源为普通文件时建立一项, 名称省略时取文件名.
+源为目录时链接目录内每个普通文件, 名称为 <名称><文件名>, 名称省略时取文件名.
+建立的是指向构建产物的相对符号链接: 产物重新链接后, 目录中的内容随之更新.
+源不存在时跳过并报告, 不视为错误.
+
+    -h, --help  显示本说明
+EOF
+}
+
+case "${1:-}" in
+	-h | --help)
+		usage
+		exit 0
+		;;
+esac
 
 out_dir=${1:?did not properly set the output directory}
 shift

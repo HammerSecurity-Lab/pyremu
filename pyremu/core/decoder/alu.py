@@ -45,9 +45,7 @@ def _trunc_rem(a: int, b: int) -> int:
     return a - _trunc_div(a, b) * b
 
 
-# ============================================================
 #  Zba / Zbb / Zbs 位操作辅助函数
-# ============================================================
 
 
 def _zbb_unary(
@@ -128,9 +126,7 @@ def _bext(v1: int, shamt: int) -> int:
     return (mask64(v1) >> shamt) & 1
 
 
-# ============================================================
 #  R 型 ALU 的纯 Python 计算, 按 funct3 分组
-# ============================================================
 
 
 def _alu_py_000(funct7: int, v1: int, v2: int) -> int:
@@ -265,15 +261,15 @@ def _exec_alu_via_native(fields, v1: int, v2: int) -> int:
     """经加速执行引擎计算 R 型 ALU 指令."""
     r = _native.exec_alu_op(fields.func3, fields.func7, v1, v2)
     if r.trap:
-        raise ValueError(f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}")
+        raise ValueError(
+            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
+        )
     return r.value
 
 
-# ============================================================
 #  I 型立即数 ALU 的纯 Python 计算, 按 funct3 分组
 #
 #  各函数的 funct6 为 funct7 右移一位的结果; shamt 为立即数的低 6 位.
-# ============================================================
 
 
 def _op_imm_py_000(funct6: int, v1: int, imm: int, shamt: int) -> int:
@@ -358,15 +354,15 @@ def _exec_op_imm_via_native(fields, v1: int) -> int:
     """经加速执行引擎计算 I 型立即数 ALU 指令."""
     r = _native.exec_op_imm(fields.func3, fields.func7, v1, fields.imm12_se)
     if r.trap:
-        raise ValueError(f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}")
+        raise ValueError(
+            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
+        )
     return r.value
 
 
-# ============================================================
 #  RV64 32 位字运算的纯 Python 计算, 按 funct3 分组
 #
 #  各函数收到的 v1 与 v2 已截断为 32 位.
-# ============================================================
 
 
 def _op32_py_000(funct7: int, v1: int, v2: int) -> int:
@@ -418,7 +414,9 @@ def _op32_py_100(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return sext32(mask32(v1 ^ v2))
     if funct7 == 1:
-        return sext32(mask32(_trunc_div(sint64(sext32(v1)), sint64(sext32(v2)))))
+        return sext32(
+            mask32(_trunc_div(sint64(sext32(v1)), sint64(sext32(v2))))
+        )
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=100")
 
 
@@ -440,7 +438,9 @@ def _op32_py_110(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return sext32(mask32(v1 | v2))
     if funct7 == 1:
-        return sext32(mask32(_trunc_rem(sint64(sext32(v1)), sint64(sext32(v2)))))
+        return sext32(
+            mask32(_trunc_rem(sint64(sext32(v1)), sint64(sext32(v2))))
+        )
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=110")
 
 
@@ -493,13 +493,13 @@ def _exec_op32_via_native(fields, v1: int, v2: int) -> int:
     """经加速执行引擎计算 RV64 32 位字运算指令."""
     r = _native.exec_op32(fields.func3, fields.func7, v1, v2)
     if r.trap:
-        raise ValueError(f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}")
+        raise ValueError(
+            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
+        )
     return r.value
 
 
-# ============================================================
 #  I 型 32 位字立即数运算的纯 Python 计算, 按 funct3 分组
-# ============================================================
 
 
 def _op_imm32_py_000(funct7: int, v1: int, imm: int, shamt: int) -> int:
@@ -549,13 +549,13 @@ def _exec_op_imm32_via_native(fields, v1: int) -> int:
     """经加速执行引擎计算 I 型 32 位字立即数运算."""
     r = _native.exec_op_imm32(fields.func3, fields.func7, v1, fields.imm12_se)
     if r.trap:
-        raise ValueError(f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}")
+        raise ValueError(
+            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
+        )
     return r.value
 
 
-# ============================================================
 #  对外入口: 加速执行引擎可用时经其计算, 否则查纯 Python 表
-# ============================================================
 
 
 def exec_alu(fields, v1: int, v2: int) -> int:

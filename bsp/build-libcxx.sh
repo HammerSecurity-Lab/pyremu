@@ -2,7 +2,7 @@
 # 从 LLVM 源码树交叉编译 libc++/libc++abi/libunwind并设置到bsp/musl-gc-sysroot,
 # 从而便于 riscv64-linux-musl 使用静态 C++ 标准库。
 #
-# 用途: C++ 载荷如fn_apps/dune交叉编译时的 stdlib。
+# 用途: C++ 载荷如 bsp/eval-suites/fn_apps/dune 交叉编译时的 stdlib。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,25 +17,43 @@ LLVM_RANLIB="llvm-ranlib"
 LLVM_SRC=""
 
 usage() {
-    cat >&2 <<EOF
-用法: $0 -s <llvm-src> [-h]
+    cat <<EOF
+用法: $0 -s <LLVM 源码树>
 
-    -s <path>   path to LLVM source tree  (Required. e.g.: $ROOT/vendor/riscv-llvm-toolchain)
-    -h          print this help
+从 LLVM 源码树交叉编译 libc++、libc++abi 与 libunwind, 安装到 bsp/musl-gc-sysroot.
+
+    -s <path>   LLVM 源码树, 例如 $ROOT/vendor/riscv-llvm-toolchain
+    -h          显示本说明
+
+前置: 先运行 bsp/build-musl-sysroot.sh 产出 sysroot;
+      需要 clang、clang++、cmake、ninja、llvm-ar 与 llvm-ranlib.
 EOF
-    exit 1
 }
+
+case "${1:-}" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+esac
 
 while getopts 's:h' opt; do
     case "$opt" in
         s) LLVM_SRC="$OPTARG" ;;
-        h) usage ;;
-        *) usage ;;
+        h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 1
+            ;;
     esac
 done
 
 if [ -z "$LLVM_SRC" ]; then
-    usage
+    usage >&2
+    exit 1
 fi
 
 for tool in "$CLANG" "$CLANGXX" cmake ninja "$LLVM_AR" "$LLVM_RANLIB"; do

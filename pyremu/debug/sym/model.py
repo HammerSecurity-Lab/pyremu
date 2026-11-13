@@ -78,7 +78,8 @@ def module_spaces(mod: SymMod) -> tuple[str, ...]:
 
 
 def link_addr_of(mod: SymMod, addr: int, space: str) -> int | None:
-    """把 *space* 空间中的运行时地址换算为链接地址; 不在覆盖范围内时返回 None."""
+    """把 *space* 空间中的运行时地址换算为链接地址;
+    不在覆盖范围内时返回 None."""
     base = mod.pa_base if space == SPACE_PA else mod.va_base
     if base is None:
         return None
@@ -96,7 +97,10 @@ def _selection_key(mod: SymMod, has_pa: bool) -> tuple[int, int, int]:
     return (mod.span, -mod.load_order, 1 if has_pa else 0)
 
 
-def select_module(mods: list[SymMod], addr: int) -> tuple[SymMod, str, str] | None:
+def select_module(
+    mods: list[SymMod],
+    addr: int,
+) -> tuple[SymMod, str, str] | None:
     """选取覆盖 *addr* 且能解析出符号名的模块.
 
     Returns:

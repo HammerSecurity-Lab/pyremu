@@ -82,8 +82,8 @@ def region_text(
 class DtDeviceRequest:
     """要补充到设备树中的设备: 节点名前缀, compatible 与 reg 的大小.
 
-    节点名为前缀加区间基址, 形如 virtio@2000; 中断编号在有中断控制器时由树中未占用
-    的取值给出.
+    节点名为前缀加区间基址, 形如 virtio@2000;
+    中断编号在有中断控制器时由树中未占用的取值给出.
     """
 
     name: str
@@ -214,12 +214,16 @@ class ChipDt:
             for name in ("riscv,isa", "riscv,isa-extensions"):
                 values = strings_of(node, name)
                 if values:
-                    chip.per_hart.setdefault(name, {})[hid] = " ".join(str(v) for v in values)
+                    chip.per_hart.setdefault(name, {})[hid] = " ".join(
+                        str(v) for v in values
+                    )
         pmp_counts = chip.per_hart.get("riscv,pmpregions", {})
         if pmp_counts:
             chip.pmp_entries = max(pmp_counts.values())
         chip.isa = chip.per_hart.get("riscv,isa", {}).get(0)
-        chip.isa_extensions = chip.per_hart.get("riscv,isa-extensions", {}).get(0)
+        chip.isa_extensions = chip.per_hart.get("riscv,isa-extensions", {}).get(
+            0
+        )
         return chip
 
     def differing_attrs(self) -> dict[str, dict[int, int | str]]:
@@ -270,9 +274,10 @@ class ChipDt:
     ) -> DtRegion:
         """返回不小于 start 且与树中区间、reserved 都不重叠的一段 MMIO 区间.
 
-        reserved 中每个元素为一段区间 [下界, 上界), 用于给出树中没有声明、但是
-        同样不可占用的地址区间. 基址按 4 KiB 对齐; 与某个区间重叠时改取该区间上界
-        之上对齐后的地址. 两处区间都是有限段, 搜索在越过最后一段之后结束.
+        reserved 中每个元素为一段区间 [下界, 上界),
+        用于给出树中没有声明、但是同样不可占用的地址区间.
+        基址按 4 KiB 对齐; 与某个区间重叠时改取该区间上界之上对齐后的地址.
+        两处区间都是有限段, 搜索在越过最后一段之后结束.
         基址 0 不作分配: 基址取 0 表示该设备不注册.
         """
         occupied = [(region.base, region.end) for region in self.regions()]
@@ -294,14 +299,17 @@ class ChipDt:
     ) -> DtDeviceNode:
         """为树中没有声明的设备给出补充节点的区间与中断源编号.
 
-        区间取地址空间中第一段能容纳该设备、且与树中全部区间及 reserved 都不重叠的
-        位置, 中断源取树中未声明的最小可用编号.
+        区间取地址空间中第一段能容纳该设备、
+        且与树中全部区间及 reserved 都不重叠的位置,
+        中断源取树中未声明的最小可用编号.
 
         Raises:
             ValueError: 树中没有 PLIC 节点, 或没有可用的区间与中断源编号.
         """
         if self.periph.plic is None:
-            raise ValueError(f"芯片设备树中没有 PLIC 节点, 无法为 {request.name} 声明中断")
+            raise ValueError(
+                f"芯片设备树中没有 PLIC 节点, 无法为 {request.name} 声明中断"
+            )
         region = self.first_avail_mmio_region(request.size, reserved=reserved)
         return request.placed(region, self.first_free_irq_source())
 
@@ -384,7 +392,9 @@ def _regions(
 
     给出 compatibles 时, 节点须为有效节点且 compatible 命中其一, 否则返回空列表.
     """
-    if compatibles and (not is_enabled(node) or not has_compat(node, compatibles)):
+    if compatibles and (
+        not is_enabled(node) or not has_compat(node, compatibles)
+    ):
         return []
     cells = cells_of(node, "reg")
     if not cells:
@@ -472,11 +482,17 @@ def _matches(
     device_type: str | None,
 ) -> bool:
     """节点有效、命中给定条件且声明了 reg."""
-    if not is_enabled(node) or compatibles and not has_compat(node, compatibles):
+    if (
+        not is_enabled(node)
+        or compatibles
+        and not has_compat(node, compatibles)
+    ):
         return False
     if name is not None and base_name(node) != name:
         return False
-    if device_type is not None and device_type not in strings_of(node, "device_type"):
+    if device_type is not None and device_type not in strings_of(
+        node, "device_type"
+    ):
         return False
     return bool(_regions(node))
 

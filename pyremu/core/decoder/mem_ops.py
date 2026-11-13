@@ -28,7 +28,8 @@ def decode_c_sdsp(half: int) -> tuple[int, int] | None:
         bits[12:10] = uimm[5:3]
         bits[9:7]   = uimm[8:6]
         bits[15:13] = 111 (funct3)
-    The uimm is assembled from {bits[9:7], bits[12:10]} << 3, i.e. 8-byte aligned.
+    The uimm is assembled from {bits[9:7], bits[12:10]} << 3, i.e. 8-byte
+    aligned.
     """
     if (half & 0xE003) != 0xE002:  # bits[15:13]=111, bits[1:0]=10
         return None
@@ -100,7 +101,13 @@ def _amo_signed(val: int, width: AmoWidth) -> int:
     return sint64(sext(val, 64 if width == AmoWidth.D else 32))
 
 
-def amo_result(op: AmoFunct5, mem_val: int, op_val: int, width: AmoWidth, mask: int) -> int:
+def amo_result(
+    op: AmoFunct5,
+    mem_val: int,
+    op_val: int,
+    width: AmoWidth,
+    mask: int,
+) -> int:
     """按 AMO 子操作计算写回内存的新值."""
     if op == AmoFunct5.SWAP:
         result = op_val

@@ -121,9 +121,9 @@ __all__ = [
 # virtio-blk 配置空间 (offset 0x100+)
 VIRTIO_BLK_CFG_CAPACITY = 0x000
 
-# ============================================================
+
 #  virtio-blk 请求类型
-# ============================================================
+
 
 VIRTIO_BLK_T_IN = 0
 VIRTIO_BLK_T_OUT = 1
@@ -131,9 +131,9 @@ VIRTIO_BLK_T_FLUSH = 4
 VIRTIO_BLK_T_DISCARD = 11
 VIRTIO_BLK_T_WRITE_ZEROES = 13
 
-# ============================================================
+
 #  virtio-blk 响应状态
-# ============================================================
+
 
 VIRTIO_BLK_S_OK = 0
 VIRTIO_BLK_S_IOERR = 1
@@ -142,9 +142,9 @@ VIRTIO_BLK_S_UNSUPP = 2
 
 SECTOR_SIZE = 512
 
-# ============================================================
+
 #  PLIC 中断源号
-# ============================================================
+
 
 VIRTIO_BLK_IRQ = 1
 
@@ -163,10 +163,12 @@ _BLK_QUEUE_NUM_MAX = 256
 # event-index 通知抑制路径 needs_kick = vring_need_event(avail_event, new, old),
 # 而设备侧从不更新 used ring 的 avail_event 字段 (始终为 0), 使第二个及之后的
 # 缓冲区不再写 QueueNotify, 内核永远等不到 I/O 完成。不声明时驱动退回 flags 模式
-# (检查 VRING_USED_F_NO_NOTIFY), 该 flag 设备侧同样从不置位, 故每次添加缓冲区都会 kick。
+# (检查 VRING_USED_F_NO_NOTIFY), 该 flag 设备侧同样从不置位,
+# 故每次添加缓冲区仍会写 QueueNotify。
 #
 # VIRTIO_F_RING_INDIRECT_DESC (bit 28) 同样不声明: 若声明, 驱动可使用间接描述符,
-# 但描述符链遍历不实现间接表, 遇到带 INDIRECT 标志的描述符会因缺失 NEXT 标志而失败,
+# 但描述符链遍历不实现间接表, 遇到带 INDIRECT 标志的描述符会因缺失
+# NEXT 标志而失败,
 # 内核取不到 ext4 superblock 后 VFS panic。
 _DEVICE_FEATURES = VIRTIO_F_VERSION_1
 
@@ -174,7 +176,8 @@ _DEVICE_FEATURES = VIRTIO_F_VERSION_1
 class VirtIOBlock(Device):
     """virtio-blk MMIO 块设备.
 
-    通过 MMIO 寄存器接口暴露一个 virtio-blk 设备, 受调试程序可以读写磁盘镜像 (raw 格式).
+    通过 MMIO 寄存器接口暴露一个 virtio-blk 设备,
+    受调试程序可以读写磁盘镜像 (raw 格式).
 
     Usage::
 
@@ -220,9 +223,10 @@ class VirtIOBlock(Device):
         self._is_notify_served = False
 
         # 中断投递: 完成中断经投递目标上报, 编号为 0 或未给出目标时不投递。
-        # 调用方应传设备中断投递目标 DeviceIrqSink, 该目标除置位中断控制器外还通知
-        # 加速执行引擎并唤醒 WFI 阻塞的 hart; 直接调 plic.set_irq 会略过这两步, 使设备
-        # 中断在引擎的单轮加速执行内不可见, 且无法唤醒已进入 WFI 的 hart。
+        # 调用方应传设备中断投递目标 DeviceIrqSink, 该目标除置位中断控制器外
+        # 还通知加速执行引擎并唤醒 WFI 阻塞的 hart; 直接调 plic.set_irq 会略过
+        # 这两步, 使设备中断在引擎的单轮加速执行内不可见, 且无法唤醒已进入
+        # WFI 的 hart。
         irq, on_irq = irq_sink if irq_sink is not None else (0, None)
         self.mmio = VirtioMMIO(
             VirtioMMIOConfig(
@@ -309,13 +313,18 @@ class VirtIOBlock(Device):
 
     # ---- 请求处理 ----
 
-    def _handle_request(self, _queue: VirtQueue, chain: list[VirtqDesc]) -> tuple[bool, int]:
+    def _handle_request(
+        self,
+        _queue: VirtQueue,
+        chain: list[VirtqDesc],
+    ) -> tuple[bool, int]:
         """处理一个 virtio-blk 请求的描述符链.
 
         链的布局: 请求头 (virtio_blk_outhdr, 16 字节) 与数据缓冲区与状态字节。
 
         返回:
-            (是否成功, 记入 used ring 的写入字节数)。受调试程序的 virtio-blk 驱动不读取
+            (是否成功, 记入 used ring 的写入字节数)。受调试程序的
+            virtio-blk 驱动不读取
             used ring 的写入字节数, 故此处恒返回 0, 与抽取前的行为一致.
         """
         hdr_desc = chain[0]
@@ -356,11 +365,6 @@ class VirtIOBlock(Device):
             data = b"\x00" * buf_len
         else:
             data = os.pread(self._fd, buf_len, offset)
-        # 写入前探查目标页, 残留的 PAGE_POISON 说明页面分配时未被清零。
-        try:
-            self._mem_read_chunk(buf_pa & ~0xFFF, 64)
-        except Exception:
-            pass
         self.mmio.write_phys(buf_pa, data)
         return True
 

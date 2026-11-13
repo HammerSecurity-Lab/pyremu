@@ -140,7 +140,9 @@ class TestUartLineBuffering:
             log = tmp_path / f"hart{hid}.log"
             if log.exists():
                 hart_outputs[hid] = log.read_text()
-        assert len(hart_outputs) == 4, f"应有 4 个日志文件, 得到 {len(hart_outputs)}"
+        assert len(hart_outputs) == 4, (
+            f"应有 4 个日志文件, 得到 {len(hart_outputs)}"
+        )
         cold_count = sum(1 for t in hart_outputs.values() if "cold boot" in t)
         assert cold_count == 1, f"应恰好 1 个 cold boot, 得到 {cold_count}"
         warm_count = sum(1 for t in hart_outputs.values() if "warm boot" in t)
@@ -166,7 +168,9 @@ class TestUartLineBuffering:
             log = tmp_path / f"hart{hid}.log"
             if log.exists():
                 hart_outputs[hid] = log.read_text()
-        assert len(hart_outputs) == 4, f"应有 4 个日志文件, 得到 {len(hart_outputs)}"
+        assert len(hart_outputs) == 4, (
+            f"应有 4 个日志文件, 得到 {len(hart_outputs)}"
+        )
         # 恰好一个 cold boot (在某个 hart 的日志中)
         cold_harts = [h for h, t in hart_outputs.items() if "cold boot" in t]
         assert len(cold_harts) == 1, f"应恰好 1 个 cold boot, 得到 {cold_harts}"

@@ -3,15 +3,12 @@
 //! 依据 ``medeleg`` 与 ``mideleg`` 把陷态委派到 S 模式
 
 use crate::concurrent::{ConcurrentClintCtx, ModuleState};
+use crate::csr::MSTATUS_MPRV;
 use crate::ffi::FfiDevCtx;
 use crate::hart_sched::read_gpr;
 use crate::interrupt::clint::write_mtimecmp;
-use crate::interrupt::imsic_clear_ipi_on_trap;
 use crate::state::{riscv_mode, HartState};
 use std::sync::atomic::Ordering;
-// ============================================================
-//  陷态原因码, 与 mcause、scause 的编码兼容
-// ============================================================
 
 /// RISC-V 异常的原因码, 由 mcause 第 63 位的取值确定是异常还是中断。
 #[allow(dead_code)]
@@ -41,9 +38,7 @@ pub fn mcause_val(code: u64, is_interrupt: bool) -> u64 {
 	}
 }
 
-// ============================================================
 //  mstatus 位定义的相关常量
-// ============================================================
 
 const MSTATUS_SIE: u64 = 1 << 1;
 const MSTATUS_MIE: u64 = 1 << 3;
@@ -73,9 +68,7 @@ fn mode_to_spp(mode: u8) -> u64 {
 	}
 }
 
-// ============================================================
 // 含委派判定的入口
-// ============================================================
 
 /// 派发一次陷态, 依据 ``medeleg`` 与 ``mideleg`` 判定是否委派。
 ///
@@ -106,9 +99,7 @@ pub fn deliver_trap(state: &mut HartState, code: u64, tval: u64) -> u64 {
 	}
 }
 
-// ============================================================
 //  S 模式陷态派发
-// ============================================================
 
 /// 把陷态分发到 S 模式, 保存 PC 与相关 CSR, 并跳转到 ``stvec``。
 ///
@@ -160,37 +151,12 @@ pub fn deliver_trap_smode(state: &mut HartState, code: u64, tval: u64) -> u64 {
 		state.pc = tvec_base + 4 * exc_code;
 	}
 
-	// MSIP 与 SSIP 的自动清除按模式区分。
-	// AIA 模式下 sbi_ipi_raw_clear(false) 不产生效果, eip 的清除推迟到
-	// MTOPEI 或 STOPEI 得到响应, 使处理程序读到中断标识。
-	// 传统模式下清除对应的 mip 位与 IMSIC 的 eip, 依据 RISC-V 规范 §3.1.15。
-	if !is_interrupt {
-		return 0;
-	}
-	// AIA 模式下 IPI 经 MEIP 或 SEIP 投递, 原因码为 11 或 9, 不经 MSIP 或 SSIP
-	// 的原因码 3 或 1。中断以原因码 3 或 1 到达时按传统模式处理。
-	let in_aia_s = state.imsic_s.present != 0 && state.imsic_s.eidelivery != 0;
-	if exc_code == 3 {
-		if in_aia_s {
-			// AIA 模式推迟 MSIP 与 eip 的清除。
-		} else {
-			state.mip.fetch_and(!(1u64 << 3), Ordering::AcqRel); // MSIP
-			imsic_clear_ipi_on_trap(state, 3);
-		}
-	} else if exc_code == 1 {
-		if in_aia_s {
-			// AIA 模式推迟 SSIP 与 eip 的清除。
-		} else {
-			state.mip.fetch_and(!(1u64 << 1), Ordering::AcqRel); // SSIP
-			imsic_clear_ipi_on_trap(state, 1);
-		}
-	}
+	// 软件中断的挂起位与 IMSIC 的 eip 由软件清除: CLINT 的 msip 写 0, 或经
+	// MTOPEI 与 STOPEI 回应中断. 进入陷态时不改变这两者.
 	0
 }
 
-// ============================================================
 //  M 模式陷态分发, 未经委派时的去向
-// ============================================================
 
 /// 把陷态分发给 M 模式, 保存 PC 与相关 CSR, 并跳转到 ``mtvec``。
 ///
@@ -200,29 +166,6 @@ pub fn deliver_trap_mmode(state: &mut HartState, code: u64, tval: u64) -> u64 {
 	// 任何陷态都清除 LR/SC 的保留地址。
 	state.reservation_valid = 0;
 	state.reservation_addr = 0;
-
-	// RISC-V 规范 §3.1.15 规定未委派的机器级中断在进入陷态时由硬件自动清除,
-	// 否则 CLINT 的 MSIP 保持置位期间, MRET 之后中断立即再次触发。
-	// AIA 模式下 MSIP 与 eip 的清除推迟到 compute_mtopi 或 MTOPEI 得到响应,
-	// 见下面的分支说明。
-	let is_interrupt = (code >> 63) != 0;
-	let exc_code = code & 0x7fff_ffff_ffff_ffffu64;
-
-	// AIA 模式下 eidelivery 为 1, OpenSBI 经 MTOPI 分派, 在 compute_mtopi 中清除
-	// MSIP。若在此处清除 MSIP 与 IMSIC 的 eip, MTOPI 读不到中断标识, IPI 丢失,
-	// 引起 RCU 停滞与多 hart 启动超时。
-	// 传统模式下 eidelivery 为 0, OpenSBI 按 mcause 分派, 并在此处按规范 §3.1.15 清除 MSIP。
-	let in_aia = state.imsic_m.present != 0 && state.imsic_m.eidelivery != 0;
-	if is_interrupt && exc_code == 3 {
-		if in_aia {
-			// AIA 模式推迟 MSIP 与 eip 的清除, 使 sbi_trap_aia_irq 经 MTOPI
-			// 读到中断标识后正确分派。
-		} else {
-			// 传统模式按 RISC-V 规范 §3.1.15 自动清除 MSIP。
-			state.mip.fetch_and(!(1u64 << 3), Ordering::AcqRel);
-			imsic_clear_ipi_on_trap(state, 3);
-		}
-	}
 
 	// 从 WFI 等待状态唤醒。
 	state.waiting = 0;
@@ -250,7 +193,7 @@ pub fn deliver_trap_mmode(state: &mut HartState, code: u64, tval: u64) -> u64 {
 	// RISC-V 规范规定进入 M 模式陷态时清除 MPRV, 使处理程序访问自身的栈与
 	// 数据时不经过上一特权模式的 MMU 翻译。MPRV 为 1 期间发生嵌套中断时,
 	// 若不清除该位, M 模式的栈访问会使用 S 模式页表, 破坏 M 模式的栈状态。
-	state.mstatus &= !(1u64 << 17); // 清除 MPRV
+	state.mstatus &= !MSTATUS_MPRV; // 清除 MPRV
 
 	// 切换到 M 模式。
 	state.mode = riscv_mode::M;
@@ -279,9 +222,7 @@ pub fn deliver_illegal_instruction(state: &mut HartState, tval: u64) -> u64 {
 	deliver_trap(state, mcause_val(exc_code::ILL_INSTR, false), tval)
 }
 
-// ============================================================
 //  特权指令的处理函数
-// ============================================================
 
 pub(crate) fn priv_ecall_concurrent(
 	state: &mut HartState,
@@ -363,6 +304,10 @@ pub(crate) fn priv_mret_concurrent(state: &mut HartState, instr: u32) -> u64 {
 	}
 	state.mstatus |= 1 << 7;
 	state.mstatus &= !(0b11 << 11);
+	// 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 3.3.2 节)
+	if state.mode != riscv_mode::M {
+		state.mstatus &= !MSTATUS_MPRV;
+	}
 	state.pc = state.mepc;
 	state.waiting = 0;
 	0
@@ -373,7 +318,10 @@ pub(crate) fn priv_sret_concurrent(
 	instr: u32,
 	_ctx: &crate::translate::WalkCtx,
 ) -> u64 {
-	if state.mode < riscv_mode::S {
+	// mstatus.TSR=1 时 S 模式执行 SRET 触发 IllInstr
+	if state.mode < riscv_mode::S
+		|| (state.mode == riscv_mode::S && ((state.mstatus >> 22) & 1) != 0)
+	{
 		deliver_illegal_instruction(state, instr as u64);
 		return 0;
 	}
@@ -390,6 +338,8 @@ pub(crate) fn priv_sret_concurrent(
 	}
 	state.mstatus |= 1 << 5;
 	state.mstatus &= !(1 << 8);
+	// 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 3.3.2 节)
+	state.mstatus &= !MSTATUS_MPRV;
 	state.pc = state.sepc;
 	state.waiting = 0;
 	0
@@ -405,7 +355,7 @@ pub(crate) fn priv_wfi_concurrent(state: &mut HartState, instr: u32) -> u64 {
 		state.wfi_woken = 0;
 		return 4;
 	}
-	let pending = state.mip.load(Ordering::Acquire) & state.mie;
+	let pending = state.mip_value() & state.mie;
 	if pending != 0 {
 		return 4;
 	}
@@ -637,74 +587,65 @@ mod tests {
 		assert_eq!(mcause_val(7, true), (1u64 << 63) | 7);
 	}
 
-	// ============================================================
-	//  进入陷态时自动清除 MSIP 的用例
-	// ============================================================
+	//  进入陷态不改变 mip 的硬件源位
 	//
-	// 为避免 MSIP 保持置位引起同一中断反复进入 trap 处理函数，对 MSIP 与 SSIP 的清除推迟到 MTOPI 得到响应为止
+	// MSIP 与 SSIP 分别由 CLINT 的 msip 与软件写入 mip 决定. 投递陷态不改变这两个位,
+	// 处理函数须写入中断源才能撤销挂起状态.
 
 	#[test]
-	fn msip_cleared_in_deliver_trap_mmode() {
-		// deliver_trap_mmode 对原因码为 3 的中断清除 MSIP
+	fn deliver_trap_mmode_preserves_msip() {
 		let mut s = default_state();
-		s.mip.store(1 << 3, Ordering::Release); // 置位 MSIP
+		s.mip.store(1 << 3, Ordering::Release);
 		deliver_trap_mmode(&mut s, mcause_val(3, true), 0);
 		assert_eq!(
 			s.mip.load(Ordering::Acquire) & (1 << 3),
-			0,
-			"MSIP must be cleared by deliver_trap_mmode"
+			1 << 3,
+			"投递陷态不得清除 MSIP"
 		);
 	}
 
 	#[test]
-	fn msip_not_cleared_for_non_interrupt_in_deliver_trap_mmode() {
-		// deliver_trap_mmode 只对中断清除 MSIP, 不对异常清除
+	fn deliver_trap_mmode_preserves_msip_for_exception() {
 		let mut s = default_state();
-		s.mip.store(1 << 3, Ordering::Release); // 置位 MSIP
+		s.mip.store(1 << 3, Ordering::Release);
 		deliver_trap_mmode(&mut s, mcause_val(exc_code::ILL_INSTR, false), 0);
 		assert_eq!(
 			s.mip.load(Ordering::Acquire) & (1 << 3),
 			1 << 3,
-			"MSIP must NOT be cleared for exceptions"
+			"投递异常不得清除 MSIP"
 		);
 	}
 
 	#[test]
-	fn ssip_cleared_in_deliver_trap_for_delegated_interrupt() {
-		// SSIP 的原因码为 1, 可以被委派, 验证 deliver_trap 会清除该位
+	fn deliver_trap_delegated_preserves_ssip() {
 		let mut s = default_state();
 		s.mode = riscv_mode::S;
-		s.mip.store(1 << 1, Ordering::Release); // 置位 SSIP
-		s.mideleg = 1 << 1; // 委派 SSIP
-		s.mstatus |= 1 << 1; // SIE 为 1
+		s.mip.store(1 << 1, Ordering::Release);
+		s.mideleg = 1 << 1;
+		s.mstatus |= 1 << 1;
 		deliver_trap(&mut s, mcause_val(1, true), 0);
 		assert_eq!(
 			s.mip.load(Ordering::Acquire) & (1 << 1),
-			0,
-			"SSIP must be cleared by deliver_trap for delegated interrupt"
+			1 << 1,
+			"委派投递不得清除 SSIP"
 		);
 	}
 
 	#[test]
-	fn msip_cleared_for_non_mmode_interrupt_in_deliver_trap() {
-		// 非 M 模式下发生中断且该中断未被委派时, deliver_trap 转入
-		// deliver_trap_mmode, 验证 S 模式到 M 模式的路径清除 MSIP。
+	fn deliver_trap_mmode_from_smode_preserves_msip() {
+		// MSIP 不可委派, S 模式下的该中断经 deliver_trap 的 M 模式路径分发
 		let mut s = default_state();
 		s.mode = riscv_mode::S;
-		s.mip.store(1 << 3, Ordering::Release); // 置位 MSIP, 该中断不可委派
-		s.mstatus |= 1 << 1; // SIE 为 1
-					   // MSIP 不可委派, 因此经 deliver_trap 的 M 模式路径分发,
-					   // 该路径内部调用 _trap_deliver_mmode。
+		s.mip.store(1 << 3, Ordering::Release);
+		s.mstatus |= 1 << 1;
 		deliver_trap(&mut s, mcause_val(3, true), 0);
 		assert_eq!(
 			s.mip.load(Ordering::Acquire) & (1 << 3),
-			0,
-			"MSIP must be cleared in deliver_trap non-delegated M-interrupt path"
+			1 << 3,
+			"未委派中断的 M 模式投递不得清除 MSIP"
 		);
 	}
 
-	// ============================================================
-	// ============================================================
 	//
 	// 只写 CLINT 的 mtimecmp 而不设 mtip_deadline 时, sync_mtip 落入
 	// 共享 mtime 的比较分支, 其他活跃 hart 经 fetch_max 使 MTIP

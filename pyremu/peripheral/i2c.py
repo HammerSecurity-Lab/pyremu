@@ -7,13 +7,13 @@
 I2C 主模式控制器.
 
 寄存器布局 (每寄存器 4 字节宽):
-  偏移    名称       读写    描述
-  ────────────────────────────────────────
-  0x00    CTRL       R/W    控制: bit0=EN, bit1=START, bit2=STOP, bit3=ACK
-  0x04    STATUS     R      状态: bit0=busy, bit1=rx_avail, bit2=tx_done, bit3=nack
-  0x08    DATA       R/W    数据寄存器 (写=TX, 读=RX)
-  0x0C    ADDR       R/W    从设备地址 (bit0:7=addr, bit8=rw)
-  0x10    PRESCALE   R/W    时钟预分频器
+  偏移   名称      读写  描述
+  ─────────────────────────────────
+  0x00   CTRL      R/W  控制: bit0=EN, bit1=START, bit2=STOP, bit3=ACK
+  0x04   STATUS    R    状态: bit0=busy, bit1=rx_avail, bit2=tx_done, bit3=nack
+  0x08   DATA      R/W  数据寄存器 (写=TX, 读=RX)
+  0x0C   ADDR      R/W  从设备地址 (bit0:7=addr, bit8=rw)
+  0x10   PRESCALE  R/W  时钟预分频器
 
 传输模型: 写 ADDR + CTRL.START 后, 写 DATA 为 TX, 读 DATA 为 RX.
 CTRL.STOP 结束传输. 简化为即时完成模型 (总线不实际仿真时序).
@@ -109,7 +109,8 @@ class I2C(Device):
         return st
 
     def _read_data(self) -> int:
-        """清除忙标志后返回从设备寄存器值; 地址未带读标志时返回本级数据寄存器."""
+        """清除忙标志后返回从设备寄存器值;
+        地址未带读标志时返回本级数据寄存器."""
         self._busy = False
         if self._addr & 0x100:  # rw=1: read
             return self._slave_data.get(mask08(self._addr), 0)

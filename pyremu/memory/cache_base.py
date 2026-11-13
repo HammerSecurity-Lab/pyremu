@@ -74,7 +74,9 @@ class CacheBase(ABC):
         self.name = name
         self._num_entries = num_entries
         self._policy = policy
-        self._entries: list[CacheLineBase] = [self._make_line() for _ in range(num_entries)]
+        self._entries: list[CacheLineBase] = [
+            self._make_line() for _ in range(num_entries)
+        ]
         self._clock: int = 0  # 全局访问计数 — LRU 用
         self._fifo_ptr: int = 0  # FIFO 写入指针
         self._hits: int = 0
@@ -153,7 +155,8 @@ class CacheBase(ABC):
         return idx
 
     def _alloc_entry(self, tag: int, **kwargs) -> CacheLineBase:
-        """分配一个条目: 若 tag 已存在则原地更新; 否则按替换策略逐出一个条目并复用其槽位.
+        """分配一个条目: 若 tag 已存在则原地更新; 否则按替换策略逐出一个
+        条目并复用其槽位.
 
         Returns:
             分配的 CacheLineBase 条目, 子类应填充自定义字段.

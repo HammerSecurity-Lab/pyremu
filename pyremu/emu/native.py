@@ -3,7 +3,8 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""NativeOps — 每轮加速执行前后同步 Python 侧与 Rust 侧的状态, 并处理引擎退回的原因.
+"""NativeOps — 每轮加速执行前后同步 Python 侧与 Rust 侧的状态,
+并处理引擎退回的原因.
 
 hart、PMP、CLINT、PLIC、UART 与 virtio-blk 的状态在每轮加速执行前后于两侧之间
 复制.
@@ -82,7 +83,9 @@ class NativeOps:
             ok2, fetch_pa2 = hart.check_instruction_fetch(mask64(pc + 2))
             if not ok2:
                 return 0
-            instr_bytes = self.bus.read(fetch_pa, 2) + self.bus.read(fetch_pa2, 2)
+            instr_bytes = self.bus.read(fetch_pa, 2) + self.bus.read(
+                fetch_pa2, 2
+            )
         else:
             instr_bytes = self.bus.read(fetch_pa, 4)
         instr = int.from_bytes(instr_bytes, "little", signed=False)
@@ -215,8 +218,8 @@ class NativeOps:
         if self.virtio_blk is not None:
             self.virtio_blk.clear_notify_served()
         recording.mark_phase("sync_after")
-        # result.total_instrs 是各 hart 的累计值, 与上一轮累计值之差即本轮的指令数.
-        # _native_finalize 会推进 _prev_all_exec_cnt, 故在它之前登记.
+        # result.total_instrs 为各 hart 的累计值, 与上一轮累计值之差即本轮的
+        # 指令数. _native_finalize 会推进 _prev_all_exec_cnt, 故在它之前登记.
         recording.end_round(
             result.exit_reason,
             all_exec_cnt - self._prev_all_exec_cnt,
@@ -226,7 +229,7 @@ class NativeOps:
         )
         return self._native_finalize(all_exec_cnt)
 
-    # ---- _speedup_for_cmd_step 的组成: 进入前的状态复制、退出后的结果同步与收尾 ----
+    # ---- _speedup_for_cmd_step: 进入前复制状态, 退出后同步结果并收尾 ----
 
     def _native_sync_plic_mip(self) -> None:
         """把各 hart 的 PLIC 挂起外部中断合并进其 mip 的 MEIP 位与 SEIP 位.
@@ -245,7 +248,9 @@ class NativeOps:
                 ext_mip = hart._imsic.get_pending_mip(hart.id)
             if ext_mip == 0 and hart._plic is not None:
                 ext_mip = hart._plic.get_pending_mip(hart.id)
-            hart.mip_val = (hart.mip_val & ~ext_mask) | ext_mip
+            # 位 9 与位 11 均由中断控制器驱动, 属 mip 的存储值,
+            # 不涉及软件位 SEIP.
+            hart.mip_raw_val = (hart.mip_raw_val & ~ext_mask) | ext_mip
 
     def _native_marshal_plic(self) -> PlicInfo | None:
         """构造 PlicInfo, 各数组即 PLIC 对象持有的 ctypes 数组, 不做复制.
@@ -312,7 +317,10 @@ class NativeOps:
             return
         cfg_now = bytes(self._pmp_cfg_buf)
         addr_now = bytes(self._pmp_addr_buf)
-        if cfg_now == self._pmp_cfg_snapshot and addr_now == self._pmp_addr_snapshot:
+        if (
+            cfg_now == self._pmp_cfg_snapshot
+            and addr_now == self._pmp_addr_snapshot
+        ):
             return
         cfg_before = self._pmp_cfg_snapshot
         addr_before = self._pmp_addr_snapshot
@@ -368,9 +376,11 @@ class NativeOps:
                 level = clint._msip[hid] & 1
                 prev = self._clint_msip_prev[hid]
                 if level == 1 and prev == 0:
-                    self._clint_msip_edge[hid] = (self._clint_msip_edge[hid] + 1) & 0x7F
+                    edge = self._clint_msip_edge[hid] + 1
+                    self._clint_msip_edge[hid] = edge & 0x7F
                 self._clint_msip_prev[hid] = level
-                self._clint_msip_arr[hid] = level | (self._clint_msip_edge[hid] << 1)
+                edge = self._clint_msip_edge[hid]
+                self._clint_msip_arr[hid] = level | (edge << 1)
         return ClintInfo(
             mtime=clint.get_mtime(),
             mtimecmp=self._clint_mtimecmp_arr,
@@ -412,7 +422,11 @@ class NativeOps:
         丢弃该字节, 见 uart.rs 的 try_write_fd, 使 CPU 引擎线程不阻塞在控制台
         输出上.
         """
-        if self._termio is None or self.uart is None or self._native_uart_ffi is None:
+        if (
+            self._termio is None
+            or self.uart is None
+            or self._native_uart_ffi is None
+        ):
             return UartInfo(base=0)
 
         # 此处刷新 termio 持有的字段与 UART 基址; 寄存器字段由下一行的
@@ -509,19 +523,21 @@ class NativeOps:
 
         # QueueNotify: Rust 置 notify_pending=1, 由 Python 处理 virtqueue.
         # 分批处理, 每批最多 VIRTIO_PROCESS_BATCH 个描述符, 循环直到全部完成.
-        # 每批之间 Python 可响应 Ctrl+Q; _max_batches 防止异常情况下的死循环.
+        # 每批之间 Python 可响应 Ctrl+Q; max_batches 防止异常情况下的死循环.
         if not virtio_ffi.notify_pending:
             return
 
         virtio_ffi.notify_pending = 0
-        _batch_guard, _max_batches = 0, 256
+        batch_guard = 0
+        max_batches = 256
+        desc_limit = cfg_int("VIRTIO_PROCESS_BATCH")
         is_cleared = False
         while True:
-            if not vblk.process_queue(max_descriptors=cfg_int("VIRTIO_PROCESS_BATCH")):
+            if not vblk.process_queue(max_descriptors=desc_limit):
                 is_cleared = True
                 break
-            _batch_guard += 1
-            if _batch_guard >= _max_batches:
+            batch_guard += 1
+            if batch_guard >= max_batches:
                 if not self._warned_infinite_virtio:
                     self._warned_infinite_virtio = True
                 break
@@ -531,14 +547,20 @@ class NativeOps:
             vblk.mark_notify_served()
         virtio_ffi.interrupt_status = mmio.interrupt_status
 
-    def _native_handle_exit(self, result: InstrToBeExec, all_exec_cnt: int) -> int:
-        """处理单轮加速执行的退出原因, 取值为 ECALL、MMIO、TRAP 或 BREAKPOINT."""
+    def _native_handle_exit(
+        self,
+        result: InstrToBeExec,
+        all_exec_cnt: int,
+    ) -> int:
+        """处理单轮加速执行的退出原因, 返回更新后的累计执行指令数."""
         total_harts = len(self.harts)
         if result.exit_hart_id >= total_harts:
             return all_exec_cnt
         exit_hart = self.harts[result.exit_hart_id]
         if result.exit_reason in (EXIT_ECALL, EXIT_MMIO):
-            all_exec_cnt += self._handle_native_sys_exit(exit_hart, result.exit_instr)
+            all_exec_cnt += self._handle_native_sys_exit(
+                exit_hart, result.exit_instr
+            )
         elif result.exit_reason == EXIT_NOT_MAINRAM:
             all_exec_cnt += self._native_exec_outside_ram_fetch(exit_hart)
         elif result.exit_reason == EXIT_TRAP:

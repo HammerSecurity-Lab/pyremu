@@ -8,6 +8,7 @@
 import pytest
 
 from pyremu.emulator import Emulator
+from pyremu.memory.bus import Bus
 from pyremu.memory.cache_base import CacheBase
 from pyremu.memory.l2cache import L2Cache, MESIState
 from pyremu.platform import PlatformConfig
@@ -361,7 +362,8 @@ class TestL2FlushAll:
         """
         l2.read(0x1000, 8)
         l2.write(0x1000, b"\xc0\xff\xee\x00\x00\x00\x00\x00")
-        # flush_all: 写回脏行, 状态由 M 变为 E; invalidate_all: 丢弃 E 行 (无回写)
+        # flush_all: 写回脏行, 状态由 M 变为 E;
+        # invalidate_all: 丢弃 E 行 (无回写)
         assert l2.flush_all() == 1
         l2.invalidate_all()
 
@@ -391,7 +393,8 @@ class TestL2FlushAll:
 class TestL2TagIndex:
     """有效行的 tag 索引: 填入时登记, 逐出与失效时移除.
 
-    flush_all 与 invalidate_all 只遍历该索引, 索引漏登记会使脏行丢失或残留有效行.
+    flush_all 与 invalidate_all 只遍历该索引,
+    索引漏登记会使脏行丢失或残留有效行.
     """
 
     @pytest.fixture
@@ -488,3 +491,39 @@ class TestL2SizeZero:
         assert emu.harts[0].pc == 0x80000004
         emu.step()
         assert emu.harts[0].pc == 0x80000008
+
+
+# ============================================================
+#  设备直接写入主存后缓存行的同步
+# ============================================================
+
+
+class TestL2DeviceWrite:
+    """设备直接写入主存后, 覆盖到的行与主存一致."""
+
+    ADDR = 0x8000_1000
+
+    @pytest.fixture
+    def bus(self) -> Bus:
+        l2 = L2Cache(size=16 * 1024, line_size=64, ways=2)
+        return Bus(ram_size=64 * 1024, ram_base=0x8000_0000, l2_cache=l2)
+
+    def test_read_loaded_line_reflects_device_write(self, bus):
+        """经缓存装入一行后设备直接写入, 读回必须为设备的取值."""
+        assert bus.read(self.ADDR, 16) == b"\x00" * 16
+        bus.main_mem.write(self.ADDR, b"\x5a" * 16)
+        assert bus.read(self.ADDR, 16) == b"\x5a" * 16
+
+    def test_dirty_bytes_survive_device_write_to_same_line(self, bus):
+        """同一行内设备写入之前经缓存写入的字节仍然可见."""
+        bus.write(self.ADDR, b"\x11" * 8)
+        bus.main_mem.write(self.ADDR + 32, b"\x22" * 16)
+        assert bus.read(self.ADDR, 8) == b"\x11" * 8
+        assert bus.read(self.ADDR + 32, 16) == b"\x22" * 16
+
+    def test_device_write_does_not_allocate_line(self, bus):
+        """设备写入未命中的地址不分配缓存行."""
+        assert len(bus.l2) == 0
+        bus.main_mem.write(self.ADDR, b"\x33" * 64)
+        assert len(bus.l2) == 0
+        assert bus.read(self.ADDR, 64) == b"\x33" * 64

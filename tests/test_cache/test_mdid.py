@@ -103,7 +103,9 @@ class TestMfenceDid:
         h.pc = 0x80000000
         trap_before = h.mcause_val
         h.exec_instr(_MFENCE_DID)
-        assert h.mcause_val == trap_before, f"mfence.did 不应触发 trap, mcause={h.mcause_val}"
+        assert h.mcause_val == trap_before, (
+            f"mfence.did 不应触发 trap, mcause={h.mcause_val}"
+        )
 
     def test_invalid_funct12_traps(self):
         """funct12 非法编码应触发 IllInstr (funct3=000, 未注册的 funct12)."""
@@ -189,7 +191,9 @@ class TestMfenceDid:
         l2 = emu.bus._l2
         assert l2 is not None
         entries = [e for e in l2.entries if e.valid]
-        assert len(entries) >= 2, f"应有至少 2 条 L2 有效条目, 实际 {len(entries)}"
+        assert len(entries) >= 2, (
+            f"应有至少 2 条 L2 有效条目, 实际 {len(entries)}"
+        )
         entries[0].mdid = 1
         entries[1].mdid = 0
 
@@ -199,10 +203,14 @@ class TestMfenceDid:
 
         # mdid=1 的被刷掉, mdid=0 的保留
         remaining_mdid = sum(1 for e in l2.entries if e.valid)
-        assert remaining_mdid >= 1, f"mdid=0 的 L2 条目应保留, 实际剩余 {remaining_mdid}"
+        assert remaining_mdid >= 1, (
+            f"mdid=0 的 L2 条目应保留, 实际剩余 {remaining_mdid}"
+        )
         # 验证 mdid=0 的仍在
         still_valid = [e for e in l2.entries if e.valid]
-        assert all(e.mdid == 0 for e in still_valid), "所有剩余条目的 mdid 应为 0"
+        assert all(e.mdid == 0 for e in still_valid), (
+            "所有剩余条目的 mdid 应为 0"
+        )
 
     # -- 广播: 多 hart --
 
@@ -316,12 +324,20 @@ class TestTLBAutoMdid:
 
         write_pte(L1_BASE, vpn2, make_pte(v=True, ppn=L2_BASE >> PAGE_SHIFT))
         write_pte(L2_BASE, vpn1, make_pte(v=True, ppn=L3_BASE >> PAGE_SHIFT))
-        write_pte(L3_BASE, vpn0, make_pte(v=True, r=True, w=True, x=True, ppn=target_ppn))
+        write_pte(
+            L3_BASE,
+            vpn0,
+            make_pte(v=True, r=True, w=True, x=True, ppn=target_ppn),
+        )
 
         h.mode = RiscvMode.S  # MMU 翻译仅在 S/U 模式生效
         h.satp_val = (8 << 60) | (L1_BASE >> PAGE_SHIFT)  # Sv39
-        # PMP: 1 条 NAPOT 规则覆盖全部地址空间 R+W+X, 否则 S 模式下页表遍历被拒绝
-        h.csrs["pmpcfg0"].val, h.csrs["pmpaddr0"].val = 0x1F, 0x003F_FFFF_FFFF_FFFF
+        # PMP: 1 条 NAPOT 规则覆盖全部地址空间 R+W+X,
+        # 否则 S 模式下页表遍历被拒绝
+        h.csrs["pmpcfg0"].val, h.csrs["pmpaddr0"].val = (
+            0x1F,
+            0x003F_FFFF_FFFF_FFFF,
+        )
 
         # 触发地址翻译, TLB 插入
         try:
@@ -354,7 +370,8 @@ class TestTLBAutoMdid:
 
         remaining_after_7 = len(h.dtlb)
         assert remaining_after_7 == 0, (
-            f"mfence.did(mdid=7) 应刷掉 mdid=7 的条目, 实际剩余 {remaining_after_7}"
+            f"mfence.did(mdid=7) 应刷掉 mdid=7 的条目, "
+            f"实际剩余 {remaining_after_7}"
         )
 
 
@@ -465,15 +482,27 @@ class TestL2AutoMdid:
         emu.bus.write(addr, b"X" * 64)
         _ = emu.bus.read(addr, 4)
 
-        entries = [e for e in l2.entries if e.valid and e.tag == (addr >> l2._line_shift)]
+        entries = [
+            e
+            for e in l2.entries
+            if e.valid and e.tag == (addr >> l2._line_shift)
+        ]
         assert len(entries) == 1, "应有一条 L2 条目"
-        assert entries[0].mdid == 1, f"新分配条目 mdid 应为 1, 实际 {entries[0].mdid}"
+        assert entries[0].mdid == 1, (
+            f"新分配条目 mdid 应为 1, 实际 {entries[0].mdid}"
+        )
 
         # 切换 hart mdid=2, 再次读取同一地址, 命中, mdid 应刷新为 2
         l2.current_mdid = 2
         _ = emu.bus.read(addr, 4)
-        entries = [e for e in l2.entries if e.valid and e.tag == (addr >> l2._line_shift)]
-        assert entries[0].mdid == 2, f"命中后 mdid 应刷新为 2, 实际 {entries[0].mdid}"
+        entries = [
+            e
+            for e in l2.entries
+            if e.valid and e.tag == (addr >> l2._line_shift)
+        ]
+        assert entries[0].mdid == 2, (
+            f"命中后 mdid 应刷新为 2, 实际 {entries[0].mdid}"
+        )
 
     def test_l2_write_hit_updates_mdid(self):
         """CPU store (<=8B) 命中 L2 缓存时更新 mdid.
@@ -489,20 +518,34 @@ class TestL2AutoMdid:
 
         # 先触发一次读以将缓存行加载到 L2 缓存
         _ = emu.bus.read(addr, 8)
-        entries = [e for e in l2.entries if e.valid and e.tag == (addr >> l2._line_shift)]
+        entries = [
+            e
+            for e in l2.entries
+            if e.valid and e.tag == (addr >> l2._line_shift)
+        ]
         assert len(entries) > 0, "读取应填充 L2"
 
         l2.current_mdid = 1
         emu.bus.write(addr, b"Y" * 8)
 
-        entries = [e for e in l2.entries if e.valid and e.tag == (addr >> l2._line_shift)]
+        entries = [
+            e
+            for e in l2.entries
+            if e.valid and e.tag == (addr >> l2._line_shift)
+        ]
         assert entries[0].mdid == 1
 
         # 切换 mdid, CPU store 命中
         l2.current_mdid = 3
         emu.bus.write(addr, b"Z" * 8)
-        entries = [e for e in l2.entries if e.valid and e.tag == (addr >> l2._line_shift)]
-        assert entries[0].mdid == 3, f"写命中后 mdid 应刷新为 3, 实际 {entries[0].mdid}"
+        entries = [
+            e
+            for e in l2.entries
+            if e.valid and e.tag == (addr >> l2._line_shift)
+        ]
+        assert entries[0].mdid == 3, (
+            f"写命中后 mdid 应刷新为 3, 实际 {entries[0].mdid}"
+        )
 
     def test_l2_auto_tag_then_selective_flush(self):
         """不同 mdid 的 hart 访问不同地址, 则 mfence.did 仅刷匹配的."""
@@ -636,7 +679,9 @@ class TestPmpsplitPmpIsolation:
         # 配置条目 5 (飞地范围): allow 0x2000, R+W, NAPOT 4KB
         addr_val_2 = (0x2000 >> 2) | ((1 << k_4k) - 1)
         pmp._csrs["pmpaddr5"] = FakeCSR(addr_val_2)
-        pmp._csrs["pmpcfg0"] = FakeCSR(pmp._csrs["pmpcfg0"].val | ((0b11000 | 0b0011) << 40))
+        pmp._csrs["pmpcfg0"] = FakeCSR(
+            pmp._csrs["pmpcfg0"].val | ((0b11000 | 0b0011) << 40)
+        )
 
         # Host 模式 (mdid=0): 两个条目都可见
         info_host = PmpAccessInfo(
@@ -660,7 +705,9 @@ class TestPmpsplitPmpIsolation:
         """pmpsplit >= num_entries -> 飞地无可用 PMP 条目, 全部拒绝."""
 
         pmp = Pmp({}, num_entries=8)
-        info = PmpAccessInfo(pa=0x1000, size=4, mode_val=0, mstatus_val=0, pmpsplit=8, mdid=1)
+        info = PmpAccessInfo(
+            pa=0x1000, size=4, mode_val=0, mstatus_val=0, pmpsplit=8, mdid=1
+        )
         assert not pmp.check(info), "pmpsplit=8 >= num_entries=8 -> 飞地全拒"
 
     def test_pmpsplit_zero_legacy_all_visible(self):
@@ -680,7 +727,9 @@ class TestPmpsplitPmpIsolation:
         pmp._csrs["pmpcfg0"] = FakeCSR(0b11000 | 0b0011)
 
         # pmpsplit=0 + mdid=1: 条目 0 仍可见
-        info = PmpAccessInfo(pa=0x5000, size=4, mode_val=0, mstatus_val=0, pmpsplit=0, mdid=1)
+        info = PmpAccessInfo(
+            pa=0x5000, size=4, mode_val=0, mstatus_val=0, pmpsplit=0, mdid=1
+        )
         assert pmp.check(info), "pmpsplit=0 时飞地应能看到全部条目"
 
     def test_host_always_sees_all_entries(self):
@@ -698,7 +747,9 @@ class TestPmpsplitPmpIsolation:
         pmp._csrs["pmpaddr0"] = FakeCSR(addr_val)
         pmp._csrs["pmpcfg0"] = FakeCSR(0b11000 | 0b0011)
 
-        info = PmpAccessInfo(pa=0x3000, size=4, mode_val=0, mstatus_val=0, pmpsplit=60, mdid=0)
+        info = PmpAccessInfo(
+            pa=0x3000, size=4, mode_val=0, mstatus_val=0, pmpsplit=60, mdid=0
+        )
         assert pmp.check(info), "host 总应能看到全部条目, 无视 pmpsplit"
 
 
@@ -741,7 +792,8 @@ class TestMultiEnclaveMdid:
         assert h.dtlb.lookup(0x300)[0], "mdid=3 的仍应保留"
 
     def test_multi_enclave_l2_isolation(self):
-        """4 个伪飞地访问不同地址, 各自 L2 缓存条目标不同 mdid, 按域刷新互不干扰."""
+        """4 个伪飞地访问不同地址, 各自 L2 缓存条目标不同 mdid, 按域刷新
+        互不干扰."""
         emu = make_test_emu(ram_size=8 * 1024 * 1024)
         l2 = emu.bus._l2
         assert l2 is not None
@@ -774,7 +826,8 @@ class TestMultiEnclaveMdid:
         assert 40 in remaining, "mdid=40 应保留"
 
     def test_same_vpn_different_mdid_overwrites(self):
-        """同 VPN 插入不同 mdid, 原地更新, 因为 TLB 以 tag 为键, mdid 仅用于刷新."""
+        """同 VPN 插入不同 mdid, 原地更新, 因为 TLB 以 tag 为键, mdid 仅用于
+        刷新."""
         tlb = TLB(size=8)
         tlb.insert(vpn=0x42, ppn=0x100, perm=7, mdid=1)
         tlb.insert(vpn=0x42, ppn=0x200, perm=7, mdid=2)
@@ -782,7 +835,9 @@ class TestMultiEnclaveMdid:
         # 同 VPN 对应同 tag, 原地更新, 只有一条有效条目
         entries = [e for e in tlb.entries if e.valid and e.tag == 0x42]
         assert len(entries) == 1, f"同 VPN 应原地更新, 实际 {len(entries)}"
-        assert entries[0].mdid == 2, f"更新后 mdid 应为 2, 实际 {entries[0].mdid}"
+        assert entries[0].mdid == 2, (
+            f"更新后 mdid 应为 2, 实际 {entries[0].mdid}"
+        )
         assert entries[0].ppn == 0x200, "更新后 ppn 应为 0x200"
 
     def test_mdid_zero_host_entries_isolated_from_enclave(self):
@@ -874,7 +929,9 @@ class TestPmpsplitMdidIntegration:
             pmpsplit=6,
             mdid=1,
         )
-        assert not pmp.check(info_a_host), "飞地不应看到 host 区间 (条目 0 < pmpsplit=6)"
+        assert not pmp.check(info_a_host), (
+            "飞地不应看到 host 区间 (条目 0 < pmpsplit=6)"
+        )
 
     def test_emulator_multi_hart_different_mdid(self):
         """多 hart 各自运行不同飞地, mdid + pmpsplit 独立配置."""
@@ -897,7 +954,8 @@ class TestPmpsplitMdidIntegration:
             assert h.pmpsplit_val == pmpsplit, f"Hart {hart_idx} pmpsplit"
 
     def test_pmpsplit_pmp_fault_on_enclave_access_host_region(self):
-        """通过 hart 执行 store 触发 trap, 验证 pmpsplit 阻止飞地访问 host 内存."""
+        """通过 hart 执行 store 触发 trap, 验证 pmpsplit 阻止飞地访问 host
+        内存."""
         hart = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=8))
         bus = Bus(ram_size=1024 * 1024, ram_base=0x8000_0000)
         hart.mem_read_phy = bus.read
@@ -926,7 +984,9 @@ class TestPmpsplitMdidIntegration:
 
         # 飞地写入自己的区域, 即条目 4 覆盖的区间
         hart.mem_write(0x8000_2000, b"\xaa\xbb")
-        assert hart.mcause_val == 0, f"飞地写自己的区域应成功: mcause={hart.mcause_val}"
+        assert hart.mcause_val == 0, (
+            f"飞地写自己的区域应成功: mcause={hart.mcause_val}"
+        )
 
         # 飞地写 host 区域, 落入 StAccessFault
         try:
@@ -934,5 +994,6 @@ class TestPmpsplitMdidIntegration:
         except AccessFaultError:
             pass
         assert hart.mcause_val == 7, (
-            f"飞地写 host 区域应 StAccessFault(7), 实际 mcause={hart.mcause_val}"
+            f"飞地写 host 区域应 StAccessFault(7), "
+            f"实际 mcause={hart.mcause_val}"
         )

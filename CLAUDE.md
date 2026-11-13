@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pyremu is a RISC-V emulator written in Python (CPython 3.14). It models a multi-hart in-order CPU core targeting the RV64 IMAFDC ISA with Zicsr, Zifencei, Zbb and Sstc, privilege levels (U/S/H/M/D), Sv39 MMU with TLB, L2 cache with MESI protocol, CLINT timer/IPI controller, PLIC and AIA (IMSIC + APLIC) interrupt controllers, memory-mapped peripherals (UART/SPI/I2C/GPIO/CRNG/watchdog/virtio-mmio block and network/termio), an FDT generator, and an interactive debugger (rvdb). The project is in active mid-stage development.
 
-**Implemented**: RV64 I (base integer), M (mul/div), A (atomics — LR/SC/AMO), F/D (single and double precision floating point, with `mstatus.FS` gating), C (compressed), Zicsr (CSR read/write), Zbb (bit manipulation), Zifencei, Sstc (`stimecmp`/`stimecmph`), FENCE/FENCE.I, ECALL/EBREAK/MRET/SRET, WFI (true pipeline stop with interrupt wake-up, TW trap), SFENCE.VMA, Sv39 address translation (4 KiB pages + 2 MiB superpages), trap delegation (medeleg/mideleg) to S-mode, PMP (NAPOT/NA4/TOR, M-mode bypass, MPRV), configurable PMA (ram_base + device MMIO routing), PLIC and AIA (IMSIC M/S files, APLIC S/M domains), virtio-mmio transport with block and network devices (loopback backend), terminal I/O bridge (termio), watchdog and CRNG devices, FDT/DTB generation, a full RV64 disassembler (I/M/A/C/Zicsr/privileged), an interactive debugger with rich TUI + prompt_toolkit REPL (disasm, stack backtrace, multi-step, command repeat, snapshot/rollback), a platform configuration system (dataclass-based presets + JSON/TOML/YAML deserialization).  
+**Implemented**: RV64 I (base integer), M (mul/div), A (atomics — LR/SC/AMO), F/D (single and double precision floating point, with `mstatus.FS` gating), C (compressed), Zicsr (CSR read/write), Zbb (bit manipulation), Zifencei, Sstc (`stimecmp`/`stimecmph`), FENCE/FENCE.I, ECALL/EBREAK/MRET/SRET, WFI (true pipeline stop with interrupt wake-up, TW trap), SFENCE.VMA, Sv39 address translation (4 KiB pages, 2 MiB and 1 GiB superpages, hardware A/D bit update), trap delegation (medeleg/mideleg) to S-mode, PMP (NAPOT/NA4/TOR, locked entries enforced in M-mode, MPRV), configurable PMA (ram_base + device MMIO routing), PLIC and AIA (IMSIC M/S files, APLIC S/M domains), virtio-mmio transport with block and network devices (loopback backend), terminal I/O bridge (termio), watchdog and CRNG devices, FDT/DTB generation, a full RV64 disassembler (I/M/A/C/Zicsr/privileged), an interactive debugger with rich TUI + prompt_toolkit REPL (disasm, stack backtrace, multi-step, command repeat, snapshot/rollback), a platform configuration system (dataclass-based presets + JSON/TOML/YAML deserialization).  
 
 **Not yet implemented**: RVV 1.0 Vector extension (opcode 0x57, ~200 条指令: vsetivli/vsetvl/vector load/store/arithmetic/permute), H extension (两阶段地址翻译与 IMSIC guest interrupt file, 见 [docs/aia-imsic-hypervisor-plan.md](docs/aia-imsic-hypervisor-plan.md)).
 
@@ -107,6 +107,7 @@ pyremu/
     gpio.py                 # GPIO 控制器 (in/out/dir)
     watchdog.py             # 看门狗
     crng.py                 # 随机数发生器
+    power_ctrl.py           # 关机与复位请求设备
     termio.py               # 终端 I/O 桥接 (宿主 stdin/stdout 与 UART 之间)
 
   interrupt/                # 中断子系统
@@ -131,6 +132,7 @@ pyremu/
     regname.py              # GPR/CSR 名称查找, 独立于 core.registers 以断开循环导入
     isa.py                  # ISA 字符串解析, 扩展名到开关与 misa 取值的编码
     tick.py                 # 时钟辅助 — yield_cpu 让出 CPU
+    counter.py              # 顺序编号计数器 — 调用返回自增前的取值
     dev_tree/               # 设备树: 解析、读取、回写与生成
       parser/               # 内置 DTS 解析器 (BSD-3-Clause, 由 Zephyr 的 dtlib.py 拆分)
       chip.py               # 从芯片 DTS 读取平台参数 (ChipDt / ChipPeriph / DtRegion)
@@ -189,6 +191,7 @@ Device (memory/bus.py) — ABC, read(offset, size) / write(offset, data)
 ├── GPIO         — 通用 I/O
 ├── HartWatchdog — 看门狗
 ├── CRNG         — 随机数发生器
+├── PowerCtrl    — 关机与复位请求设备
 ├── VirtIOBlock  — virtio-mmio 块设备
 └── VirtIONet    — virtio-mmio 网卡
 
@@ -260,7 +263,7 @@ hart.mem_read(va, size) / hart.mem_write(va, data)
       -> hart.dtlb.lookup(vpn)  -> hit: 返回 PA
       -> miss: translate_va() -> sv39_walk(root_ppn, va) -> 3 级页表遍历
               L1 (VPN[2]) -> L2 (VPN[1]) -> L3 (VPN[0])
-              支持 4 KiB 叶子页和 2 MiB 超级页
+              支持 4 KiB 叶子页, 2 MiB 与 1 GiB 超级页
               -> 结果插入 TLB
       -> 翻译失败 -> deliver_trap(InstrPageFault / LdPageFault / StPageFault, ...)
   -> PMP 检查 -> PMA 检查
@@ -305,7 +308,8 @@ hart.mem_read(va, size) / hart.mem_write(va, data)
 
 > 连续执行 (run/continue) 无指令配额与连续 trap 兜底 (与 QEMU 一致): 死循环 /
 > 非法指令 trap loop 不会自动暂停 hart, 由停止条件 (断点命中 / semihosting 停机 /
-> 全部 hart halted / 时钟源超时) 或外部设备暂停事件 (Ctrl+Q) 终止执行.
+> 全部 hart halted / 时钟源超时 / 关机与复位请求设备收到请求) 或外部设备暂停事件
+> (Ctrl+Q) 终止执行.
 
 **trap_def.py** 提供: `TrapType` 枚举 (14 异常 + 10 中断), `trap_cause_code(trap) -> int`, `trap_is_interrupt(trap) -> bool`, `trap_cause_name(mcause_val) -> str` (mcause 值 -> 可读名称), 以及中断优先级 `INT_PRIORITY`、硬件中断源占用的 mip 位 `HW_MIP_MASK` 与 semihosting 序列常数.
 
@@ -430,6 +434,22 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 - STATUS 的 bit0 恒为 1, 表示熵源就绪
 - ID 只读, 取值 0x43524E47
 
+### 关机与复位请求设备
+
+[pyremu/peripheral/power_ctrl.py](pyremu/peripheral/power_ctrl.py) 接收受调试程序的关机与复位请求.
+
+- 寄存器: CTRL (0x00), 写入 0x5555 请求关机, 写入 0x7777 请求复位
+- 其余取值以及其他偏移的写入被忽略; 本设备只写不读, 任何偏移读出为 0
+- 请求一经置位即保持, 由 `PowerCtrl.request` 读出
+- 请求置位时, 设备置位加速执行引擎的停止标志并置位唤醒事件, 使正在运行的一轮尽快退出到
+  Python 侧; 全部 hart 处于 WFI 等待时, 唤醒事件使该轮不再阻塞
+- 连续执行随后停止, 停止原因为 `RunStopReason.SHUTDOWN` 或 `RunStopReason.REBOOT`,
+  调试器据此报告并返回 REPL
+- 设备树中该设备声明为 `compatible = "syscon"`, 其下 `poweroff` 与 `reboot` 两个子节点分别为
+  `syscon-poweroff` 与 `syscon-reboot`, 以偏移 0 与上述取值指向该节点, 由 OpenSBI 或 Linux
+  的同名驱动经 regmap 写入
+- 基址取 0 即不注册该设备, 设备树中也不生成节点
+
 ### 终端 I/O 桥接 (termio)
 
 [pyremu/peripheral/termio.py](pyremu/peripheral/termio.py) 在宿主 stdin/stdout 与 UART 之间
@@ -440,6 +460,7 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 | 设备 | 默认基址 | 大小 |
 |------|---------|------|
+| 关机与复位请求设备 | 0x0010_0000 | 4 KiB |
 | CLINT | 0x0200_0000 | 64 KiB |
 | UART0 | 0x1000_0000 | 4 KiB |
 | SPI0  | 0x1000_1000 | 4 KiB |
@@ -741,7 +762,7 @@ csrw medeleg, t0
 
 - **函数签名**: 左括号 `(` 和返回类型 `) -> Type:` 各自独占一行, 参数逐行缩进.
 - **注释**: 架构/设计原理/"为什么"使用中文; 行内注释可使用任一语言.
-- **行宽**: 95 字符 (ruff line-length = 95).
+- **行宽**: 80 字符 (ruff line-length = 80).
 - **Imports**: isort 排序, `combine-as-imports = true`. 所有导入必须在文件开头, 禁止在函数内部 import.
 - **ruff 规则**: F, E, N, I, W, PL, PERF (忽略 E731 单行 lambda, PLR2004 魔数比较).
 - **禁止导入私有符号**: 不 `from module import _PrivateName`, 也不以 `module._private` 的形式跨模块取私有属性;

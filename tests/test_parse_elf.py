@@ -128,7 +128,9 @@ class TestParseElf:
         paths = get_abs_filename_arr_from_dir(elf_dir)
         assert paths is not None and len(paths) > 0, "bins/elf/ 下未找到文件"
         # 仅保留魔数为 ELF 的文件 (排除 .S 源码和 .txt 等)
-        return [str(p) for p in paths if is_file(p) and detect_format(p) == "elf"]
+        return [
+            str(p) for p in paths if is_file(p) and detect_format(p) == "elf"
+        ]
 
     def test_detect_elf_on_real_file(self, elf_paths):
         """真实 ELF 文件应被识别为 elf."""
@@ -141,7 +143,9 @@ class TestParseElf:
         assert len(elf_paths) > 0, "未找到真实 ELF 文件"
         for p in elf_paths:
             img = parse_firmware(p)
-            assert img is not None, f"parse_firmware({Path(p).name}) returned None"
+            assert img is not None, (
+                f"parse_firmware({Path(p).name}) returned None"
+            )
             assert isinstance(img, FirmwareImage)
             assert img.format == "elf"
 
@@ -180,8 +184,12 @@ class TestParseElf:
                 continue
             has_linked = True
             # 入口地址应落在某个段内
-            code_addrs = {(seg.vaddr, seg.vaddr + seg.memsz) for seg in img.segments}
-            assert any(start <= img.entry_point < end for start, end in code_addrs), (
+            code_addrs = {
+                (seg.vaddr, seg.vaddr + seg.memsz) for seg in img.segments
+            }
+            assert any(
+                start <= img.entry_point < end for start, end in code_addrs
+            ), (
                 f"{Path(p).name}: entry 0x{img.entry_point:x} "
                 f"不在任何段内, 段范围: {code_addrs}"
             )
@@ -198,7 +206,11 @@ class TestFirmwareDataClasses:
     """验证数据类的字段和构造."""
 
     def test_segment_fields(self):
-        seg = FirmwareSegment(vaddr=0x1000, data=b"\x13\x00\x00\x00", memsz=0x1000)
+        seg = FirmwareSegment(
+            vaddr=0x1000,
+            data=b"\x13\x00\x00\x00",
+            memsz=0x1000,
+        )
         assert seg.vaddr == 0x1000
         assert seg.data == b"\x13\x00\x00\x00"
         assert seg.memsz == 0x1000

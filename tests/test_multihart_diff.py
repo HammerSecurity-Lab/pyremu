@@ -24,7 +24,9 @@ from tests.conftest import make_test_emu
 
 def make_hart(hid: int, bus: Bus, clint: CLINT, pmp: Pmp) -> HartWithRegs:
     """创建配置就绪的 hart (HartWithRegs 而非 decoder.Hart)."""
-    h = HartWithRegs(id=hid, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=64))
+    h = HartWithRegs(
+        id=hid, ratified_hart_attrs=RatifiedHartAttrs(pmp_entries=64)
+    )
     h.mem_read_phy = bus.read
     h.mem_write_phy = bus.write
     h.bus = bus
@@ -77,7 +79,11 @@ class TestSatpIsolation:
 
     def test_satp_native_roundtrip(self):
         """Rust batch marshal/unmarshal 后 satp 不串扰."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
         h0.satp_val = 0x8000000000080000
@@ -128,7 +134,11 @@ class TestMipMieIsolation:
 
     def test_mip_mie_native_roundtrip(self):
         """经 Rust batch marshal/unmarshal 后 mip/mie 不串扰."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
 
@@ -165,7 +175,11 @@ class TestCrossHartMsip:
 
     def test_msip_native_roundtrip(self):
         """Rust batch 中 MSIP 状态经 marshal/unmarshal 保持一致."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         set_msip(emu.clint, 1, 1)
         emu.step()
@@ -180,10 +194,15 @@ class TestCrossHartMsip:
         mip.MSIP 为 0, 则该新 IPI 被一并清除, 发送方永远自旋在 OpenSBI tlb_sync
         等待确认, 形成 TLB-shootdown 死锁。
         """
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=64 * 1024 * 1024,
+        )
         emu = Emulator(cfg, bootargs="")
 
-        # 旧 IPI: batch 前 CLINT MSIP[1] 已挂起 (旧代码 _pre_speedup_msip[1] == 1)
+        # 旧 IPI: 加速执行前 CLINT MSIP[1] 已挂起,
+        # 旧代码 _pre_speedup_msip[1] 为 1
         emu.clint._msip[1] = 1
 
         def _stub_batch(*_args, **_kwargs):
@@ -194,7 +213,9 @@ class TestCrossHartMsip:
             emu._clint_msip_arr[1] = 1
             emu._speedup_hart_states[1].mip &= ~(1 << 3)
 
-        with mock.patch("pyremu.emu.native.run_parallel", side_effect=_stub_batch):
+        with mock.patch(
+            "pyremu.emu.native.run_parallel", side_effect=_stub_batch
+        ):
             emu._speedup_for_cmd_step(emu.harts)
 
         assert emu.clint._msip[1] == 1, (
@@ -239,7 +260,11 @@ class TestTrapStateIsolation:
 
     def test_trap_delivery_isolated_native(self):
         """Rust batch 中 H0 有中断时 H1 (WFI 等待) 状态不漂移."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
 
@@ -285,7 +310,11 @@ class TestWfiCrossHartWake:
 
     def test_wfi_native_batch_wake(self):
         """Rust batch 中 WFI hart 应被 CLINT MSIP 唤醒."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
 
@@ -328,7 +357,11 @@ class TestSfenceVmaBroadcast:
             assert not found, f"H{h.id} dtlb 未清空"
 
     def test_tlb_native_roundtrip(self):
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
 
@@ -375,7 +408,11 @@ class TestMultiStepConsistency:
 
     def test_repeated_steps_no_state_drift(self):
         """10 次 step, 不活跃 Hart 1 的状态应完全不变."""
-        cfg = PlatformConfig(num_harts=2, ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
         emu = Emulator(cfg)
         h0, h1 = emu.harts
 
@@ -469,7 +506,9 @@ class TestHardwareMipClear:
         clint._mtimecmp[0] = 100
         clint._mtime = 200
         has_pending, mip_bits, _ = clint.check_interrupt(0)
-        assert has_pending and (mip_bits & (1 << 7)), "mtime >= mtimecmp 时 MTIP 应 pending"
+        assert has_pending and (mip_bits & (1 << 7)), (
+            "mtime >= mtimecmp 时 MTIP 应 pending"
+        )
 
         # Step 2: 投递中断
         delivered = h0.check_pending_interrupts()
@@ -477,7 +516,6 @@ class TestHardwareMipClear:
 
         # Step 3: 模拟 handler 清除定时器 (写入 mtimecmp=0)
         clint._mtimecmp[0] = 0
-        clint._notify_state_change()
 
         # Step 4: 恢复 MIE (模拟 mret)
         h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
@@ -561,7 +599,9 @@ class TestHardwareMipClear:
         assert not h1.check_pending_interrupts(), "清除后 Hart 1 不应重入"
 
         # Hart 0 不受影响
-        assert (h0._csr_read_raw("mip") & (1 << 3)) == 0, "Hart 0 的 MSIP 不应被污染"
+        assert (h0._csr_read_raw("mip") & (1 << 3)) == 0, (
+            "Hart 0 的 MSIP 不应被污染"
+        )
 
 
 class TestMsipClearViaMemWritePhy:
@@ -633,7 +673,9 @@ class TestMsipClearViaMemWritePhy:
         # mret 恢复 MIE
         h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
 
-        assert not h0.check_pending_interrupts(), "mem_write_phy 清零 MSIP 后不应再投递"
+        assert not h0.check_pending_interrupts(), (
+            "mem_write_phy 清零 MSIP 后不应再投递"
+        )
 
     def test_msip_clear_preserves_mtip(self):
         """清零 MSIP 时不应影响 MTIP 等其他中断位."""
@@ -651,7 +693,6 @@ class TestMsipClearViaMemWritePhy:
         h0.mem_write_phy(0x02000000, (1).to_bytes(4, "little"))
         clint._mtimecmp[0] = 100
         clint._mtime = 200
-        clint._notify_state_change()
 
         # 验证两者都 pending
         _, mip_bits, _ = clint.check_interrupt(0)
@@ -668,7 +709,9 @@ class TestMsipClearViaMemWritePhy:
         h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
 
         # MSIP 不再投递, 但 MTIP 仍应 pending
-        assert h0.check_pending_interrupts(), "清零 MSIP 后 MTIP 仍应 pending, 应投递 MTIP"
+        assert h0.check_pending_interrupts(), (
+            "清零 MSIP 后 MTIP 仍应 pending, 应投递 MTIP"
+        )
 
     def test_msip_double_set_clear_viamem_write_phy(self):
         """连续两次 MSIP 置位后清零, 每次清零后都不应重入."""
@@ -686,14 +729,17 @@ class TestMsipClearViaMemWritePhy:
         for round_num in range(3):
             # 置位
             h0.mem_write_phy(0x02000000, (1).to_bytes(4, "little"))
-            assert h0.check_pending_interrupts(), f"第{round_num}轮: 应投递 MSIP"
+            assert h0.check_pending_interrupts(), (
+                f"第{round_num}轮: 应投递 MSIP"
+            )
 
             # 清零
             h0.mem_write_phy(0x02000000, (0).to_bytes(4, "little"))
             h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
 
             assert not h0.check_pending_interrupts(), (
-                f"第{round_num}轮: 清零后不应重入 (mip={h0._csr_read_raw('mip'):#x})"
+                f"第{round_num}轮: 清零后不应重入 "
+                f"(mip={h0._csr_read_raw('mip'):#x})"
             )
 
     def test_msip_clear_must_go_through_bus_not_skip(self):
@@ -714,7 +760,6 @@ class TestMsipClearViaMemWritePhy:
 
         # 通过 CLINT 直接写 (不走 Bus)
         clint._msip[0] = 1
-        clint._notify_state_change()
         assert h0.check_pending_interrupts(), "应投递 MSIP"
         assert h0.mem_write_phy, "null function as mem_write_phy"
         # handler: 通过 mem_write_phy 清零 (走 Bus 路由)
@@ -728,7 +773,9 @@ class TestMsipClearViaMemWritePhy:
 
         # 恢复 MIE 后不应再投递
         h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
-        assert not h0.check_pending_interrupts(), "mem_write_phy 清零 CLINT 后不应重入"
+        assert not h0.check_pending_interrupts(), (
+            "mem_write_phy 清零 CLINT 后不应重入"
+        )
 
 
 class TestCrossHartMemWritePhyIpi:
@@ -741,7 +788,9 @@ class TestCrossHartMemWritePhyIpi:
         bus.add_device(0x02000000, clint)
         h0 = make_hart(0, bus, clint, make_pmp())
         h1 = make_hart(1, bus, clint, make_pmp())
-        assert h0.mem_write_phy and h1.mem_write_phy, "null function as mem_write_phy"
+        assert h0.mem_write_phy and h1.mem_write_phy, (
+            "null function as mem_write_phy"
+        )
         for h in [h0, h1]:
             h.mode = RiscvMode.M
             h.mstatus_val |= MSTATUS_MIE
@@ -821,11 +870,20 @@ class TestMsipClearBothPaths:
 
         # 触发 MSIP
         emu.clint._msip[0] = 1
-        emu.clint._notify_state_change()
 
+        # 单条指令的次序: WFI 取中断 -> handler 的 lui -> handler 的 sw 写 0.
+        # 投递本身不改变硬件源, 处理程序写 0 之后 mip.MSIP 才随之清零.
+        emu.step()
+        assert emu.clint._msip[0] == 1, (
+            f"[{use_native}] 投递不改变 CLINT 的 MSIP, "
+            f"实际={emu.clint._msip[0]}"
+        )
+        emu.step()
         emu.step()
 
-        assert emu.clint._msip[0] == 0, f"[{use_native}] MSIP 投递后 clint._msip[0] 应为 0"
+        assert emu.clint._msip[0] == 0, (
+            f"[{use_native}] MSIP 投递后 clint._msip[0] 应为 0"
+        )
         assert (h._csr_read_raw("mip") & (1 << 3)) == 0, (
             f"[{use_native}] MSIP 投递后 mip.MSIP 应为 0"
         )
@@ -840,29 +898,30 @@ class TestMsipClearBothPaths:
         emu.bus.write_ram_direct(0x8000000C, (0x10500073).to_bytes(4, "little"))
 
         emu.clint._msip[0] = 1
-        emu.clint._notify_state_change()
 
         emu.step()
 
-        assert not h._halted, f"[{use_native}] MSIP 投递后不应 halted (风暴检测触发了?)"
+        assert not h._halted, (
+            f"[{use_native}] MSIP 投递后不应 halted (风暴检测触发了?)"
+        )
 
 
-class TestWfiWakeupMsipBypass:
-    """WFI 唤醒: CLINT MSIP 硬件中断线应绕过 mie.MSIE.
+class TestWfiWakeupMsipNeedsMsie:
+    """WFI 唤醒: 挂起的中断还须在 mie 中使能.
 
-    真实硬件上 MSIP 是独立物理中断线, WFI 唤醒不依赖 mie.MSIE.
-    mie.MSIE 仅控制该中断是否被 *投递* (trap delivery).
-    此行为与 Rust native batch ``exec.rs`` line 368-392 一致.
+    RISC-V 特权规范 §3.6.1: 任一挂起且已使能的中断使 WFI 恢复执行, 与
+    mstatus.MIE 无关; mie 中未使能的挂起中断不构成唤醒来源. MSIP 挂起而
+    mie.MSIE 为 0 时 hart 继续等待, 由受调试程序置位 MSIE 后才被唤醒.
     """
 
     @staticmethod
     def _setup_msip_handler(emu: Emulator):
-        """MSIP handler @ mtvec=0x80000000, M-mode + MIE=1, MSIE=0 (刻意清零).
+        """MSIP 陷态处理函数 @ 0x80000000: 写 0 到 CLINT MSIP 后 mret.
 
-        真实硬件 handler 必须在 MRET 前写 0 到 CLINT MSIP 撤销中断线。
+        hart 处于 M 模式且 mstatus.MIE=1, mie 由调用方设置.
         """
         h = emu.harts[0]
-        # lui  t0, 0x02000  -> t0 = 0x02000000 (CLINT base)
+        # lui  t0, 0x02000  -> t0 = 0x02000000 (CLINT 基址)
         # sw   x0, 0(t0)    -> CLINT MSIP[hart0] = 0
         # mret
         emu.bus.write_ram_direct(0x80000000, (0x020002B7).to_bytes(4, "little"))
@@ -870,14 +929,12 @@ class TestWfiWakeupMsipBypass:
         emu.bus.write_ram_direct(0x80000008, (0x30200073).to_bytes(4, "little"))
         h.csrs["mtvec"].val = 0x80000000
         h.mode = RiscvMode.M
-        h.mstatus_val |= MSTATUS_MIE  # 全局 MIE=1
-        # 刻意清零 MSIE (bit 3), 验证 WFI 唤醒绕过此位
-        set_mie(h, 0)  # MSIE=0, all other source enables = 0
-        h.pc = 0x8000000C  # 用户代码起点 (handler 占 12 bytes)
+        h.mstatus_val |= MSTATUS_MIE
+        h.pc = 0x8000000C  # 用户代码起点 (处理函数占 12 字节)
 
     @pytest.mark.parametrize("use_native", [False, True])
-    def test_wfi_wakeup_msip_active_msie_zero(self, use_native):
-        """CLINT MSIP=1 且 mie.MSIE=0 时 wake_hart_from_wfi 应返回 True."""
+    def test_wfi_keeps_waiting_with_msie_zero(self, use_native):
+        """CLINT MSIP=1 且 mie.MSIE=0 时 wake_hart_from_wfi 返回 False."""
         emu = make_test_emu(ram_size=1024 * 1024)
         h = emu.harts[0]
         h.mode = RiscvMode.M
@@ -890,16 +947,16 @@ class TestWfiWakeupMsipBypass:
 
         h.sync_pending_interrupts()
         result = h.wake_hart_from_wfi()
-        assert result, (
+        assert not result, (
             f"[{'native' if use_native else 'python'}] "
-            "CLINT MSIP=1 但 MSIE=0: wake_hart_from_wfi 应返回 True"
+            "CLINT MSIP=1 但 MSIE=0: wake_hart_from_wfi 应返回 False"
         )
-        assert not h._waiting, "WFI 等待标志应已清除"
-        assert h._wfi_woken, "wfi_woken 应被置位"
+        assert h._waiting, "WFI 等待标志应保持"
+        assert not h._wfi_woken, "未唤醒时 wfi_woken 不应置位"
 
     @pytest.mark.parametrize("use_native", [False, True])
-    def test_wfi_wakeup_msip_bypass_sets_msie(self, use_native):
-        """MSIE=0 时同步挂起中断应置位 MSIE 以供中断投递."""
+    def test_sync_writes_mip_without_changing_mie(self, use_native):
+        """同步硬件中断源只写 mip, 不改变 mie.MSIE."""
         emu = make_test_emu(ram_size=1024 * 1024)
         h = emu.harts[0]
         h.mode = RiscvMode.M
@@ -909,56 +966,55 @@ class TestWfiWakeupMsipBypass:
         h._waiting = True
 
         h.sync_pending_interrupts()
-        h.wake_hart_from_wfi()
 
-        assert (h._csr_read_raw("mie") & (1 << 3)) != 0, (
-            f"[{'native' if use_native else 'python'}] 同步挂起中断后 mie.MSIE 应被置位"
+        assert (h._csr_read_raw("mie") & (1 << 3)) == 0, (
+            f"[{'native' if use_native else 'python'}] 同步之后 MSIE 应仍为 0"
         )
+        assert (h.mip_val & (1 << 3)) != 0, "MSIP 挂起应写入 mip"
 
-    def test_wfi_wakeup_msip_bypass_delivers_interrupt(self):
-        """MSIE=0 时 MSIP 仍触发 M-mode trap, handler 清 CLINT 后 mret, WFI 退出.
-
-        不走 emu.step(), 因为会触发加速执行批次死循环.  纯 Python 路径直接
-        模拟 WFI 唤醒与 handler 清 MSIP 行为, 与同文件其他测试一致.
-        """
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_msip_wakes_and_traps_after_msie_set(self, use_native):
+        """置位 MSIE 之后 MSIP 唤醒 hart 并投递到 M 模式陷态处理函数."""
         emu = make_test_emu(ram_size=1024 * 1024)
         self._setup_msip_handler(emu)
         h = emu.harts[0]
-
-        h.mode = RiscvMode.S
-        h.pc = 0x8000000C
+        set_mie(h, 0)
         set_msip(emu.clint, 0, 1)
         h._waiting = True
 
-        # WFI 绕过 MSIE 唤醒
         h.sync_pending_interrupts()
-        assert h.wake_hart_from_wfi(), "MSIE=0 时 MSIP 应触发 WFI 唤醒"
+        assert not h.wake_hart_from_wfi(), "MSIE=0 时不应唤醒"
+
+        h._csr_write_raw("mie", 1 << 3)
+        h.sync_pending_interrupts()
+        assert h.wake_hart_from_wfi(), "MSIE=1 时 MSIP 应唤醒"
         assert not h._waiting
 
-        # 模拟 handler: 清 CLINT MSIP, 同步到 mip
-        emu.clint._msip[0] = 0
-        h._csr_write_raw("mip", h._csr_read_raw("mip") & ~(1 << 3))
+        assert h.check_pending_interrupts(), "MSIP 应投递到 M 模式"
+        assert h.pc == 0x80000000, "pc 应跳到 mtvec"
+        mcause = h.mcause_val
+        assert mcause >> 63 == 1, "mcause 的中断位应为 1"
+        assert (mcause & 0x7FFF_FFFF) == 3, "mcause 的中断码应为 MSIP"
+        assert emu.clint._msip[0] == 1, "投递不改变 CLINT 的 MSIP"
 
-        assert emu.clint._msip[0] == 0, "MSIP 投递后 CLINT MSIP 应清零"
-        assert (h._csr_read_raw("mip") & (1 << 3)) == 0, "mip.MSIP 应为 0"
-
-    @pytest.mark.parametrize("use_native", [True])
-    def test_wfi_wakeup_msie_zero_no_spurious_halt(self, use_native):
-        """MSIE=0 + MSIP trap -> handler -> mret -> WFI 退出, 不应 halted."""
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_wfi_wakeup_msie_enabled_no_spurious_halt(self, use_native):
+        """MSIE=1 时 MSIP 唤醒并投递, 处理函数清除中断源, 不应 halted."""
         emu = make_test_emu(ram_size=1024 * 1024)
         self._setup_msip_handler(emu)
         h = emu.harts[0]
 
-        # WFI @ 0x8000000C — handler mret 后执行, 进入等待并退出 batch
+        # WFI @ 0x8000000C — 处理函数 mret 之后执行, 进入等待并退出批次
         emu.bus.write_ram_direct(0x8000000C, (0x10500073).to_bytes(4, "little"))
 
-        h.mode = RiscvMode.S
-        h.pc = 0x8000000C
+        set_mie(h, 1 << 3)  # MSIE=1
         set_msip(emu.clint, 0, 1)
 
         emu.step()
 
-        assert not h._halted, "[native] MSIE=0 WFI 绕过唤醒后不应当触发 halted"
+        assert not h._halted, (
+            f"[{'native' if use_native else 'python'}] MSIP 唤醒不应 halted"
+        )
 
     def test_wfi_wakeup_with_mie_msie_also_works(self):
         """mie.MSIE=1 的正常路径不受影响."""

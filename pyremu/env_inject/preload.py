@@ -62,15 +62,21 @@ class Preloader:
         """
         emu = self._emu
         if addr is None:
-            # 默认注入位置: 自 RAM 窗口 [ram_base, ram_base + ram_size) 的上界往下
-            # RAM_PRELOAD_OFFSET 字节, 该存储位置在设备树的默认位置之下, 见 mk/memory.mk.
+            # 默认注入位置: 自 RAM 窗口 [ram_base, ram_base + ram_size) 的
+            # 上界往下 RAM_PRELOAD_OFFSET 字节, 该存储位置在设备树的默认
+            # 位置之下, 见 mk/memory.mk.
             addr = (
-                emu.bus.ram_base + emu.bus.ram_size - configs_gen.RAM_PRELOAD_OFFSET
+                emu.bus.ram_base
+                + emu.bus.ram_size
+                - configs_gen.RAM_PRELOAD_OFFSET
             ) & ~0xF
 
         bus = emu.bus
         start, end = addr, addr + len(code)
-        if not (bus.is_ram_range(start, len(code)) or bus.is_rom_range(start, len(code))):
+        if not (
+            bus.is_ram_range(start, len(code))
+            or bus.is_rom_range(start, len(code))
+        ):
             raise ValueError(
                 f"载荷的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 窗口"
                 f" [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
@@ -85,9 +91,12 @@ class Preloader:
                 f" [0x{dtb_addr:x}, 0x{dtb_addr + emu.dtb_size:x}) 重叠"
             )
         initrd = emu.initrd
-        if initrd is not None and ranges_overlap(start, end, initrd.start, initrd.end):
+        if initrd is not None and ranges_overlap(
+            start, end, initrd.start, initrd.end
+        ):
             raise ValueError(
-                f"载荷的区间范围 [0x{start:x}, 0x{end:x}) 与 initramfs 的区间范围"
+                f"载荷的区间范围 [0x{start:x}, 0x{end:x}) 与"
+                f" initramfs 的区间范围"
                 f" [0x{initrd.start:x}, 0x{initrd.end:x}) 重叠"
             )
 

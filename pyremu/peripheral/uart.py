@@ -22,7 +22,8 @@ TX: 固件写入的字节存入 _tx_buf 列表 (调试时可检查);
 RX: 可通过 preload() 预填入数据; RXDATA 读取返回队首字节;
     RX buffer 为空时返回 UART_RXFIFO_EMPTY (bit31=1), 与 SiFive 硬件一致.
 
-中断线: IP 与 IE 按位与非零时经中断控制器拉高该设备的中断源, 见 _publish_state().
+中断线: IP 与 IE 按位与非零时经中断控制器拉高该设备的中断源,
+见 _publish_state().
 """
 
 from __future__ import annotations
@@ -75,7 +76,8 @@ class UART(Device):
         self,
         base: int = 0x1000_0000,
         size: int = 0x1000,
-        tx_callback=None,  # (str) -> None: TXDATA 每字节回调 (默认直接 os.write stdout)
+        # (str) -> None: TXDATA 每字节回调 (默认直接 os.write stdout)
+        tx_callback=None,
         plic=None,  # PLIC: 用于 RX 中断通知 (None = 无中断)
         irq: int = 0,  # PLIC 中断源编号
     ) -> None:
@@ -95,7 +97,8 @@ class UART(Device):
         self._tx_buf: list[int] = []  # 已发送字节 (调试用)
         # RX FIFO — 固定 8 字节
         self._rx_fifo: list[int] = []  # 待接收字节 (len <= RX_FIFO_SIZE)
-        self._rx_lock = threading.Lock()  # daemon reader 线程与主线程共享 _rx_fifo
+        # daemon reader 线程与主线程共享 _rx_fifo
+        self._rx_lock = threading.Lock()
 
         # 当前 MMIO 写者 hart ID — 由 wrap_phy_write 返回的写入口在 hart
         # 写 UART MMIO 地址时标记, 仅用于 hart 日志文件分流归档.
@@ -118,7 +121,8 @@ class UART(Device):
         # 环形缓冲区空出槽位时的通知回调 — 由 TermIO 搬运期间绑定.
         self._on_rx_room: Callable[[], None] | None = None
 
-        # 每 hart 日志文件, 可选: 调用 set_hart_log_dir 后各 hart 的输出另存为 hart<N>.log
+        # 每 hart 日志文件, 可选: 调用 set_hart_log_dir 后各 hart 的输出另存为
+        # hart<N>.log
         self._hart_log_dir: str | None = None
         self._hart_log_files: dict[int, IO] = {}
 
@@ -134,7 +138,8 @@ class UART(Device):
         self._console_echo = enabled
 
     def set_hart_log_dir(self, log_dir: str | None) -> None:
-        """启用每 hart 日志文件: 各 hart 的输出另存 <log_dir>/hart<N>.log (原始文本)。
+        """启用每 hart 日志文件:
+        各 hart 的输出另存 <log_dir>/hart<N>.log (原始文本)。
 
         None 关闭该功能。目录不存在则创建。文件在首次写入时惰性打开 (行缓冲)。
         """
@@ -234,7 +239,8 @@ class UART(Device):
         return bool(self._ip_value() & self._ie)
 
     def _publish_native_regs(self) -> None:
-        """把寄存器当前值同步到加速执行的上下文 FfiUartCtx, 未启用加速执行引擎时为空操作."""
+        """把寄存器当前值同步到加速执行的上下文 FfiUartCtx,
+        未启用加速执行引擎时为空操作."""
         ctx = self._ffi_ctx
         if ctx is None:
             return
@@ -297,12 +303,14 @@ class UART(Device):
         self._tx_buf.clear()
 
     def record_tx_byte(self, byte: int) -> None:
-        """把 TX 字节记入行缓冲, 供 TermIO 在加速执行引擎直写 stdout 时保持行缓冲完整.
+        """把 TX 字节记入行缓冲, 供 TermIO 在加速执行引擎直写 stdout 时
+        保持行缓冲完整.
 
-        与 ``_write_reg`` 的 TXDATA 路径不同, 此方法仅追加到 ``_tx_buf``, 不触发
-        ``_tx_callback`` 与 ``os.write``: 加速执行期间该字节已由 Rust 引擎写到
-        stdout, 再输出一遍会使控制台上出现重复字符. 供 TermIO 在读出 TX 环形缓冲区
-        时调用, 使 ``tx_data()`` 在加速执行与纯 Python 两条路径下返回一致的完整输出.
+        与 ``_write_reg`` 的 TXDATA 路径不同, 此方法仅追加到 ``_tx_buf``,
+        不触发 ``_tx_callback`` 与 ``os.write``: 加速执行期间该字节已由
+        Rust 引擎写到 stdout, 再输出一遍会使控制台上出现重复字符. 供 TermIO
+        在读出 TX 环形缓冲区时调用, 使 ``tx_data()`` 在加速执行与纯 Python
+        两条路径下返回一致的完整输出.
         """
         self._tx_buf.append(byte)
 

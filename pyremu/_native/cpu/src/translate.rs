@@ -11,15 +11,13 @@
 //! - MXR: mstatus 的 bit 19, 为 1 时 X=1 且 R=0 的页可以被读取, 不影响
 //!   写入与取指.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-
-use crate::mmu::{pte_parse, sv39_decompose_va};
+use crate::mem;
+use crate::mmu::{pte_assemble_pa, pte_parse, sv39_decompose_va};
 use crate::pmp::{pmp_ok, PmpCtx};
 use crate::state::{riscv_mode, HartState, TlbEntry, CFG_NO_TLB, TLB_ENTRIES};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-// ============================================================
 //  页表遍历的上下文
-// ============================================================
 
 /// 地址翻译与 LR/SC 共用的上下文.
 pub struct WalkCtx {
@@ -54,9 +52,7 @@ pub enum TranslateFault {
 	AccessFault,
 }
 
-// ============================================================
 //  访问类别
-// ============================================================
 
 /// 访问类别的位: 读权限、写权限、执行权限.
 ///
@@ -178,9 +174,7 @@ fn tlb_probe_counted(
 	probe
 }
 
-// ============================================================
 //  LR/SC 辅助函数
-// ============================================================
 
 /// 设置本 hart 的 LR. `pa` 为 0 表示没有预留.
 #[inline]
@@ -211,15 +205,13 @@ pub(crate) fn lr_clear_all(ctx: &WalkCtx) {
 	}
 }
 
-// ============================================================
 //  RAM 读取与写入, 使用 Acquire 与 Release 保证并发安全
-// ============================================================
 
 /// 从 RAM 的物理地址 `pa` 读取 `size` 个字节, 按小端序组织.
 /// 地址对齐的 4 字节与 8 字节读取使用 Acquire 保证并发安全.
 #[inline]
 pub(crate) fn ram_read(ctx: &WalkCtx, pa: u64, size: u8) -> u64 {
-	let off = crate::mem::ram_offset_inline(
+	let off = mem::ram_offset(
 		pa,
 		size as u32,
 		ctx.ram_base,
@@ -272,7 +264,7 @@ pub(crate) fn ram_read(ctx: &WalkCtx, pa: u64, size: u8) -> u64 {
 /// LR 预留, 避免 ABA 情形.
 #[inline]
 pub(crate) fn ram_write(ctx: &WalkCtx, pa: u64, val: u64, size: u8) -> bool {
-	let off = crate::mem::ram_offset_inline(
+	let off = mem::ram_offset(
 		pa,
 		size as u32,
 		ctx.ram_base,
@@ -319,9 +311,7 @@ pub(crate) fn ram_write(ctx: &WalkCtx, pa: u64, val: u64, size: u8) -> bool {
 	true
 }
 
-// ============================================================
 //  页表遍历的 RAM 访问
-// ============================================================
 
 /// 计算 RAM 内的偏移; 地址超出范围时返回 None.
 #[inline]
@@ -380,9 +370,7 @@ fn write_pte_cas(ctx: &WalkCtx, pa: u64, expected: u64, new_val: u64) -> bool {
 		.is_ok()
 }
 
-// ============================================================
 //  页表项标志位常量
-// ============================================================
 
 #[allow(dead_code)]
 pub(crate) const PTE_V: u64 = 1 << 0;
@@ -395,9 +383,7 @@ const PTE_D: u64 = 1 << 7;
 
 const SATP_MODE_SV39: u64 = 8;
 
-// ============================================================
 //  Sv39 三级页表遍历的辅助函数
-// ============================================================
 
 /// 读取一个页表项, 读取之前先经 PMP 检查.
 ///
@@ -499,17 +485,20 @@ fn walk_l1(
 	Ok(Some((raw, pte)))
 }
 
-/// 处理 L1 叶子页表项，检查权限, 置位 A 位与 D 位, 合成物理地址.
-fn walk_l1_leaf(
+/// 处理超级页叶子页表项, 检查权限, 置位 A 位与 D 位, 合成物理地址.
+///
+/// `level` 为 1 时对应 2 MiB 页, 为 2 时对应 1 GiB 页. 两种情形下物理页号的
+/// 低位都取自虚拟地址, 由 `pte_assemble_pa` 完成拼接.
+fn walk_superpage_leaf(
 	ctx: &WalkCtx,
 	state: &HartState,
 	pmp: &PmpCtx,
-	l1_addr: u64,
-	l1_raw: u64,
-	l1_ppn: u64,
+	pte_addr: u64,
+	raw: u64,
+	pte_ppn: u64,
 	perm: u8,
-	vpn0: u64,
-	offset: u64,
+	level: u8,
+	va: u64,
 	rwx: u8,
 ) -> Result<Option<TranslateResult>, TranslateFault> {
 	// MXR 置位时数据读取可以读取仅可执行的页, 由 check_pte_perm 在遍历之后判定,
@@ -519,47 +508,36 @@ fn walk_l1_leaf(
 	if perm as u64 & need_perm != need_perm {
 		return Ok(None);
 	}
-	let want_a = l1_raw & PTE_A == 0;
-	let want_d = has_write(rwx) && l1_raw & PTE_D == 0;
-	// PPN 的 bit 43 至 bit 9 取自页表项, bit 8 至 bit 0 取自虚拟地址的 vpn0
-	let ppn = (l1_ppn & 0xFFFF_FFFF_FFFF_FE00u64) | vpn0;
-	let pa = (ppn << 12) | offset;
+	let want_a = raw & PTE_A == 0;
+	let want_d = has_write(rwx) && raw & PTE_D == 0;
+	let pa = pte_assemble_pa(pte_ppn, va, level);
 	if !want_a && !want_d {
-		return Ok(Some(TranslateResult {
-			pa: pa & 0xFFFF_FFFF_FFFF_FFFF,
-			perm,
-			level: 1,
-		}));
+		return Ok(Some(TranslateResult { pa, perm, level }));
 	}
 
-	let mut new_raw = l1_raw;
+	let mut new_raw = raw;
 	if want_a {
 		new_raw |= PTE_A;
 	}
 	if want_d {
 		new_raw |= PTE_D;
 	}
-	if !write_pte_cas_checked(state, pmp, ctx, l1_addr, l1_raw, new_raw)? {
+	if !write_pte_cas_checked(state, pmp, ctx, pte_addr, raw, new_raw)? {
 		// 比较失败说明其他 hart 已并发修改该页表项.
 		// 重新读取并重新校验, 避免使用陈旧的映射.
-		let raw2 = read_pte_checked(state, pmp, ctx, l1_addr)?;
+		let raw2 = read_pte_checked(state, pmp, ctx, pte_addr)?;
 		let pte2 = pte_parse(raw2);
 		if pte2.v == 0 || pte2.is_leaf == 0 || pte2.perm as u64 & need_perm != need_perm {
 			return Ok(None);
 		}
-		let ppn2 = (pte2.ppn & 0xFFFF_FFFF_FFFF_FE00u64) | vpn0;
-		let pa2 = (ppn2 << 12) | offset;
+		let pa2 = pte_assemble_pa(pte2.ppn, va, level);
 		return Ok(Some(TranslateResult {
-			pa: pa2 & 0xFFFF_FFFF_FFFF_FFFF,
+			pa: pa2,
 			perm: pte2.perm,
-			level: 1,
+			level,
 		}));
 	}
-	Ok(Some(TranslateResult {
-		pa: pa & 0xFFFF_FFFF_FFFF_FFFF,
-		perm,
-		level: 1,
-	}))
+	Ok(Some(TranslateResult { pa, perm, level }))
 }
 
 /// 由有效的 L1 指针读取 L0 叶子页表项, 返回 4 KiB 页的翻译结果, 无效时返回 None.
@@ -622,15 +600,13 @@ fn walk_l0(
 	}))
 }
 
-// ============================================================
 //  Sv39 页表遍历的入口
-// ============================================================
 
 /// 完成一次 Sv39 页表遍历, 并置位硬件维护的 A 位与 D 位.
 ///
-/// 命中 4 KiB 页或 2 MiB 超级页时返回 `Ok(Some(TranslateResult))`; 遇到无效或
-/// 不存在的页表项时返回 `Ok(None)`; 读取页表项或置位 A 位、D 位的写入被 PMP
-/// 拒绝时返回 `Err(TranslateFault::AccessFault)`.
+/// 命中 4 KiB 页、2 MiB 超级页或 1 GiB 超级页时返回 `Ok(Some(TranslateResult))`;
+/// 遇到无效或不存在的页表项时返回 `Ok(None)`; 读取页表项或置位 A 位、D 位的
+/// 写入被 PMP 拒绝时返回 `Err(TranslateFault::AccessFault)`.
 pub fn sv39_walk(
 	ctx: &WalkCtx,
 	state: &HartState,
@@ -646,10 +622,27 @@ pub fn sv39_walk(
 	let root_ppn = satp & 0xF_FFFF_FFFF;
 	let vpn = sv39_decompose_va(va);
 
-	let (_l2_raw, l2_pte) = match walk_l2(ctx, state, pmp, root_ppn, vpn.vpn2)? {
+	let (l2_raw, l2_pte) = match walk_l2(ctx, state, pmp, root_ppn, vpn.vpn2)? {
 		Some(v) => v,
 		None => return Ok(None),
 	};
+
+	// 根页表的叶子页表项对应 1 GiB 超级页
+	if l2_pte.is_leaf != 0 {
+		let l2_addr = (root_ppn << 12).wrapping_add(vpn.vpn2 * 8);
+		return walk_superpage_leaf(
+			ctx,
+			state,
+			pmp,
+			l2_addr,
+			l2_raw,
+			l2_pte.ppn,
+			l2_pte.perm,
+			2,
+			va,
+			rwx,
+		);
+	}
 
 	if l2_pte.is_ptr == 0 {
 		return Ok(None);
@@ -662,7 +655,7 @@ pub fn sv39_walk(
 
 	if l1_pte.is_leaf != 0 {
 		let l1_addr = (l2_pte.ppn << 12).wrapping_add(vpn.vpn1 * 8);
-		return walk_l1_leaf(
+		return walk_superpage_leaf(
 			ctx,
 			state,
 			pmp,
@@ -670,8 +663,8 @@ pub fn sv39_walk(
 			l1_raw,
 			l1_pte.ppn,
 			l1_pte.perm,
-			vpn.vpn0,
-			vpn.offset,
+			1,
+			va,
 			rwx,
 		);
 	}
@@ -679,9 +672,7 @@ pub fn sv39_walk(
 	walk_l0(ctx, state, pmp, l1_pte.ppn, vpn.vpn0, vpn.offset, rwx)
 }
 
-// ============================================================
 //  TLB 操作
-// ============================================================
 
 // 条目总数由 mk/processor.mk 的 TLB_ENTRIES 给出, 经 makefile 生成 configs_gen.rs,
 // 与 Python 侧 configs_gen.py 取自同一处配置, 两侧容量因此始终一致.
@@ -690,9 +681,7 @@ const fn tlb_sz() -> usize {
 	TLB_ENTRIES
 }
 
-// ============================================================
 //  组相联结构
-// ============================================================
 
 /// 组相联的路数. 条目数组按组划分: 第 s 组的第 w 路位于 s + w * TLB_SETS.
 const TLB_WAYS: usize = 4;
@@ -873,9 +862,7 @@ pub fn tlb_flush_vpn(tlb: &mut [TlbEntry], vpn: u64) {
 	}
 }
 
-// ============================================================
 //  translate_va 的辅助函数: 有效特权级与权限检查
-// ============================================================
 
 /// 计算地址翻译使用的有效特权级.
 ///
@@ -944,12 +931,18 @@ fn check_pte_perm(perm: u8, eff_mode: u8, mstatus: u64, is_write: bool, is_execu
 #[inline]
 fn reconstruct_tlb_pa(entry: &TlbEntry, va: u64) -> u64 {
 	let offset = va & 0xFFF;
-	let pa = if entry.level == 1 {
+	let pa = match entry.level {
+		// 1 GiB 超级页: PPN[17:0] 取自虚拟地址的 vpn1 与 vpn0
+		2 => {
+			let ppn = (entry.ppn & 0xFFFF_FFFF_FFFC_0000) | ((va >> 12) & 0x3_FFFF);
+			(ppn << 12) | offset
+		}
 		// 2 MiB 超级页: PPN[8:0] 取自虚拟地址的 vpn0
-		let ppn = (entry.ppn & 0xFFFF_FFFF_FFFF_FE00) | ((va >> 12) & 0x1FF);
-		(ppn << 12) | offset
-	} else {
-		(entry.ppn << 12) | offset
+		1 => {
+			let ppn = (entry.ppn & 0xFFFF_FFFF_FFFF_FE00) | ((va >> 12) & 0x1FF);
+			(ppn << 12) | offset
+		}
+		_ => (entry.ppn << 12) | offset,
 	};
 	pa & 0xFFFF_FFFF_FFFF_FFFF
 }
@@ -966,9 +959,7 @@ fn fault_code(is_execute: bool, is_write: bool) -> u64 {
 	}
 }
 
-// ============================================================
 //  带 SFENCE.VMA 保护的 TLB 查询
-// ============================================================
 
 /// TLB 查询结果.
 enum TlbProbeResult {
@@ -1022,9 +1013,7 @@ fn tlb_probe(
 	}
 }
 
-// ============================================================
 //  地址翻译的主入口
-// ============================================================
 
 /// 把虚拟地址翻译为物理地址.
 ///
@@ -1127,18 +1116,18 @@ pub fn translate_va(
 
 impl TranslateResult {
 	/// 合成写入 TLB 的页号.
+	///
+	/// 超级页条目抹去取自虚拟地址的低位, 由 `reconstruct_tlb_pa` 在命中时补回.
 	fn ppn_for_tlb(&self, _vpn: u64) -> u64 {
-		if self.level == 1 {
-			(self.pa >> 12) & 0xFFFF_FFFF_FFFF_FE00
-		} else {
-			self.pa >> 12
+		match self.level {
+			2 => (self.pa >> 12) & 0xFFFF_FFFF_FFFC_0000,
+			1 => (self.pa >> 12) & 0xFFFF_FFFF_FFFF_FE00,
+			_ => self.pa >> 12,
 		}
 	}
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -1608,6 +1597,69 @@ mod tests {
 			walk_with_mstatus(&ctx, satp, va, rwx_write(), mxr).is_none(),
 			"store to an X-only superpage must stay denied when MXR is set"
 		);
+	}
+
+	/// 根页表的叶子页表项必须按 1 GiB 超级页翻译, 而不是视为无效.
+	///
+	/// 根表项只带 V 与 R/W/X 时, 修复前直接返回 `Ok(None)`, 取指在 satp 生效的
+	/// 下一条指令处产生 InstrPageFault.
+	#[test]
+	fn sv39_walk_accepts_1g_root_leaf() {
+		let va = 0x8020_1234u64;
+		let vpn = sv39_decompose_va(va);
+		let mut ram = vec![0u8; 0x1000];
+		let satp = 8u64 << 60; // Sv39, 根页表的 PPN 为 0
+
+		let root_off = (vpn.vpn2 * 8) as usize;
+		let root_val = ((0x80000u64) << 10) | PTE_R | PTE_W | PTE_X | PTE_V;
+		ram[root_off..root_off + 8].copy_from_slice(&root_val.to_le_bytes());
+
+		let ctx = WalkCtx {
+			ram: ram.as_mut_ptr(),
+			ram_size: ram.len() as u64,
+			ram_base: 0,
+			shadow_base: 0,
+			shadow_size: 0,
+			tlb_flush_cnt: std::ptr::null(),
+			lr_reserved: std::ptr::null_mut(),
+			num_harts: 1,
+		};
+
+		let result = walk_with_no_pmp(&ctx, satp, va, rwx_read())
+			.expect("a root leaf must translate as a 1 GiB page");
+		assert_eq!(result.level, 2, "root leaf must be reported as level 2");
+		assert_eq!(
+			result.pa, 0x8020_1234u64,
+			"1 GiB page must be identity mapped"
+		);
+
+		// 同一 1 GiB 页内另一个 4 KiB 页的地址同样落在根表项上.
+		let other = walk_with_no_pmp(&ctx, satp, 0x803f_f000, rwx_read())
+			.expect("any address inside the 1 GiB page must translate");
+		assert_eq!(other.pa, 0x803f_f000u64);
+
+		// 置位 A 位之后的根表项仍为叶子项.
+		let raw = u64::from_le_bytes(ram[root_off..root_off + 8].try_into().unwrap());
+		assert_ne!(raw & PTE_A, 0, "A bit should be set on the root leaf");
+	}
+
+	/// 1 GiB 超级页的 TLB 条目抹去 PPN 的低 18 位, 命中时按虚拟地址补回.
+	#[test]
+	fn tlb_entry_of_1g_page_reconstructs_pa() {
+		let mut entry = TlbEntry::empty();
+		entry.ppn = 0x80000;
+		entry.level = 2;
+		entry.valid = 1;
+		assert_eq!(reconstruct_tlb_pa(&entry, 0x8020_1234), 0x8020_1234u64);
+		assert_eq!(reconstruct_tlb_pa(&entry, 0x81ff_f000), 0x81ff_f000u64);
+
+		// 写入 TLB 的页号抹去虚拟地址给出的低 18 位.
+		let result = TranslateResult {
+			pa: 0x8020_1234,
+			perm: 0x1E,
+			level: 2,
+		};
+		assert_eq!(result.ppn_for_tlb(0), 0x80000);
 	}
 
 	/// 遍历阶段要求的权限位: 数据读取只在 MXR 清除时要求 R 位; 写入恒要求

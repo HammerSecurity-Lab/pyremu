@@ -5,8 +5,8 @@
 
 """中断控制器框架测试.
 
-覆盖: 中断源的优先级次序与 mip 位掩码 / 中断状态版本号的取模递增 /
-``InterruptController`` 的抽象方法集合与子类实现要求.
+覆盖: 中断源的优先级次序与 mip 位掩码 / ``InterruptController`` 的抽象
+方法集合与子类实现要求.
 """
 
 import pytest
@@ -15,7 +15,6 @@ from pyremu.interrupt.controller import (
     INT_SOURCE_MIP_MASK,
     InterruptController,
     IntSource,
-    IntStateVersion,
 )
 
 # 优先级自高到低依次为 MEI、MSI、MTI、SEI、SSI、STI
@@ -45,7 +44,6 @@ ABSTRACT_METHODS = {
     "tick",
     "set_mtimecmp",
     "get_mtimecmp",
-    "get_next_timer_wakeup",
 }
 
 
@@ -55,7 +53,10 @@ class StubController(InterruptController):
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple]] = []
 
-    def check_interrupt(self, hart_id: int) -> tuple[bool, int, IntSource | None]:
+    def check_interrupt(
+        self,
+        hart_id: int,
+    ) -> tuple[bool, int, IntSource | None]:
         self.calls.append(("check_interrupt", (hart_id,)))
         return (False, 0, None)
 
@@ -77,10 +78,6 @@ class StubController(InterruptController):
 
     def get_mtimecmp(self, hart_id: int) -> int:
         self.calls.append(("get_mtimecmp", (hart_id,)))
-        return 0
-
-    def get_next_timer_wakeup(self, hart_id: int) -> int:
-        self.calls.append(("get_next_timer_wakeup", (hart_id,)))
         return 0
 
 
@@ -112,43 +109,14 @@ class TestIntSource:
         assert len(set(bits)) == len(bits)
 
 
-class TestIntStateVersion:
-    """中断状态版本号."""
-
-    def test_initial_value_is_zero(self):
-        """构造后版本号为 0."""
-        assert IntStateVersion().value == 0
-
-    def test_bump_increments_by_one(self):
-        """每次递增把版本号加一."""
-        version = IntStateVersion()
-        version.bump()
-        assert version.value == 1
-        version.bump()
-        assert version.value == 2
-
-    def test_value_stays_within_modulus(self):
-        """递增后版本号落在 0 到 MODULUS - 1 的区间内, 到达 MODULUS 时回到 0."""
-        modulus = IntStateVersion.MODULUS
-        version = IntStateVersion()
-        for _ in range(modulus):
-            version.bump()
-        assert version.value == 0
-
-    def test_two_instances_do_not_share_state(self):
-        """两个实例各自计数, 互不影响."""
-        first = IntStateVersion()
-        second = IntStateVersion()
-        first.bump()
-        assert (first.value, second.value) == (1, 0)
-
-
 class TestInterruptControllerInterface:
     """抽象基类的接口约束."""
 
     def test_abstract_methods_are_the_expected_set(self):
         """抽象方法的集合与中断控制器对外提供的接口一致."""
-        assert InterruptController.__abstractmethods__ == frozenset(ABSTRACT_METHODS)
+        assert InterruptController.__abstractmethods__ == frozenset(
+            ABSTRACT_METHODS
+        )
 
     def test_cannot_be_instantiated_directly(self):
         """抽象基类不能直接实例化."""
@@ -175,7 +143,6 @@ class TestInterruptControllerInterface:
         ctrl.tick()
         ctrl.set_mtimecmp(0, 100)
         assert ctrl.get_mtimecmp(0) == 0
-        assert ctrl.get_next_timer_wakeup(0) == 0
         assert [name for name, _ in ctrl.calls] == [
             "check_interrupt",
             "send_ipi",
@@ -184,7 +151,6 @@ class TestInterruptControllerInterface:
             "tick",
             "set_mtimecmp",
             "get_mtimecmp",
-            "get_next_timer_wakeup",
         ]
 
     def test_base_implementations_do_nothing(self):
@@ -200,7 +166,6 @@ class TestInterruptControllerInterface:
         assert InterruptController.tick(ctrl) is None
         assert InterruptController.set_mtimecmp(ctrl, 0, 0) is None
         assert InterruptController.get_mtimecmp(ctrl, 0) is None
-        assert InterruptController.get_next_timer_wakeup(ctrl, 0) is None
 
     def test_default_tick_argument_is_one_cycle(self):
         """tick 的默认参数为一个周期."""

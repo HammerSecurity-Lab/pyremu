@@ -119,7 +119,8 @@ class TestSemihostingEbreak:
         assert hart.mcause_val == 0, "不得投递断点 trap"
 
     def test_sys_write_oob_buffer_returns_minus1(self, sh, capfd):
-        """缓冲为 S-mode VA (超出 RAM) -> -1, 不输出 — 与 native 越界语义一致."""
+        """缓冲为 S-mode VA (超出 RAM) -> -1, 不输出 —
+        与 native 越界语义一致."""
         hart, bus = sh
         self._place_ebreak(bus)
         param = 0x80002000
@@ -157,7 +158,11 @@ class TestSemihostingEbreak:
         assert getattr(hart, "_semihosting_sys_exit", False) is True
         assert hart.mcause_val == 0, "SYS_EXIT 不得投递断点 trap"
 
-    def test_marker_ebreak_traps_when_semihosting_disabled(self, sh, monkeypatch):
+    def test_marker_ebreak_traps_when_semihosting_disabled(
+        self,
+        sh,
+        monkeypatch,
+    ):
         """PYREMU_HAS_SEMIHOSTING=0 时 marker ebreak 按断点 trap 投递.
 
         固件的 semihosting 探测依赖该 trap 判定宿主不支持, 故该序列不得被

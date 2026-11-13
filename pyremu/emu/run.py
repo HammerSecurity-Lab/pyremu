@@ -18,6 +18,7 @@ from pyremu.core.mem_check_aux import (
     MemoryAccessError,
 )
 from pyremu.core.trap_def import TrapType
+from pyremu.peripheral.power_ctrl import PowerRequest
 from pyremu.utils.mask import mask64
 from pyremu.utils.tick import yield_cpu
 
@@ -25,16 +26,20 @@ CYCLES_PER_INSTR = cfg_int("NS_PER_INSTR") * CPU_FREQ_HZ // 1_000_000_000
 
 
 class RunStopReason(IntEnum):
-    """run() 的停止原因, 由边界检查或引擎退出映射写入 ``Emulator._run_stop_reason``.
+    """run() 的停止原因, 由边界检查或引擎退出映射写入
+    ``Emulator._run_stop_reason``.
 
     设备暂停事件由外部置位 stop_flag 表示, 不属于本枚举列出的停止: 该标志保留给
-    调用方消费, 此时的停止原因为 NONE.
+    调用方消费, 此时的停止原因为 NONE. 关机与复位请求同样置位该标志, 停止原因
+    另行取 ``_power_stop_reason()``.
     """
 
     NONE = 0  # 设备暂停事件 / 全部 halted / WFI 空闲 / 正常结束
     TIMEOUT = 1  # 时钟源超时 (单轮加速执行边界复核)
     BREAKPOINT = 2  # 断点命中 (引擎 EXIT_BREAKPOINT)
     EBREAK = 3  # 固件执行停机序列 (semihosting SYS_EXIT, 引擎 EXIT_EBREAK)
+    SHUTDOWN = 4  # 受调试程序请求关机
+    REBOOT = 5  # 受调试程序请求复位
 
 
 class TimeoutError(RuntimeError):
@@ -72,13 +77,14 @@ class RunOps:
     def _advance_mtime_instr(self, instr_delta: int) -> None:
         """按指令条数推进 mtime, 每条指令计 NS_PER_INSTR=20ns.
 
-        仅纯 Python 的 step 路径使用; 加速执行路径由 Rust 的 `advance_clock_source`
-        按同一个 NS_PER_INSTR 换算推进. 换算与时钟源流逝的时间无关:
+        仅纯 Python 的 step 路径使用; 加速执行路径由 Rust 的
+        `advance_clock_source` 按同一个 NS_PER_INSTR 换算推进. 换算与时钟源
+        流逝的时间无关:
 
             tick 数 = 指令条数 * timebase_freq * NS_PER_INSTR / 1e9
 
-        divmod 得到的余数留到下次累加, 使 step 路径每次只执行一条指令时, 不会因整除
-        截断而长期丢失 tick.
+        divmod 得到的余数留到下次累加, 使 step 路径每次只执行一条指令时,
+        不会因整除截断而长期丢失 tick.
         """
         if self.clint is None or instr_delta <= 0:
             return
@@ -156,7 +162,8 @@ class RunOps:
 
         sleep_sec = self._wfi_wait_bound_sec(active)
         if sleep_sec is not None and abs(sleep_sec) <= 1e-9:
-            # 截止时间已到或不足 1 纳秒时不进入等待, 让定时器在下一轮加速执行中触发
+            # 截止时间已到或不足 1 纳秒时不进入等待,
+            # 让定时器在下一轮加速执行中触发
             return
 
         tb = self._cfg.timebase_freq
@@ -206,6 +213,9 @@ class RunOps:
         Returns:
             本轮执行的指令数.
         """
+        # 关机或复位请求置位后不再执行指令, 直到该请求被撤销.
+        if self.power_request is not None:
+            return 0
         active = [h for h in self.harts if not h._halted]
         random.shuffle(active)
         all_exec_cnt = 0
@@ -226,7 +236,8 @@ class RunOps:
 
             pc_before = hart.pc
 
-            # 取指校验: 先经 itlb 把虚拟地址翻译为物理地址, 再做 PMP 执行权限检查
+            # 取指校验: 先经 itlb 把虚拟地址翻译为物理地址,
+            # 再做 PMP 执行权限检查
             ok, fetch_pa = hart.check_instruction_fetch(hart.pc)
             if not ok:
                 # trap 已在 check_instruction_fetch 内部投递
@@ -235,12 +246,15 @@ class RunOps:
             # 跨页取指: PC 距所在虚拟页末尾不足 2 字节, 即页内偏移不小于 0xFFE
             # 时, 4 字节取指跨越到下一个虚拟页. 虚拟页之间的物理页不保证连续,
             # 需分别经 MMU 翻译后从各物理地址读取各自字节.
-            _page_off = hart.pc & 0xFFF
-            if _page_off >= 0xFFE:
-                ok2, fetch_pa2 = hart.check_instruction_fetch(mask64(hart.pc + 2))
+            page_off = hart.pc & 0xFFF
+            if page_off >= 0xFFE:
+                ok2, fetch_pa2 = hart.check_instruction_fetch(
+                    mask64(hart.pc + 2)
+                )
                 if not ok2:
                     continue
-                instr_bytes = self.bus.read(fetch_pa, 2) + self.bus.read(fetch_pa2, 2)
+                low_half = self.bus.read(fetch_pa, 2)
+                instr_bytes = low_half + self.bus.read(fetch_pa2, 2)
             else:
                 instr_bytes = self.bus.read(fetch_pa, 4)
             instr = int.from_bytes(instr_bytes, "little", signed=False)
@@ -248,7 +262,9 @@ class RunOps:
             try:
                 advance = hart.exec_instr(instr)
             except NotImplementedError, MemoryAccessError:
-                hart.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
+                hart.deliver_trap(
+                    TrapType.IllInstr, tval=instr, is_interrupt=False
+                )
                 advance = 0
 
             # 顺序执行时由调用方推进 PC
@@ -287,16 +303,42 @@ class RunOps:
     def _semihosting_exit_py(self) -> bool:
         """消费 semihosting SYS_EXIT 停机标记.
 
-        ``trap_ebreak`` 检测到停机序列, 即 a0 为 0x18 后接 slli、ebreak、srai 三条
-        指令, 时置 ``hart._semihosting_sys_exit``; 此处消费该标记并返回 True, 由
-        ``run()`` 置 RunStopReason.EBREAK 停止, 与加速执行引擎的 EXIT_EBREAK
-        一致. 否则固件停机序列退化为 WFI 自旋, 纯 Python 的 run() 永不返回.
+        ``trap_ebreak`` 检测到由 a0 为 0x18 后接 slli、ebreak、srai 三条指令
+        构成的停机序列时, 置 ``hart._semihosting_sys_exit``; 此处消费该标记
+        并返回 True, 由 ``run()`` 置 RunStopReason.EBREAK 停止, 与加速执行
+        引擎的 EXIT_EBREAK 一致. 否则固件停机序列退化为 WFI 自旋,
+        纯 Python 的 run() 永不返回.
         """
-        hit = any(getattr(h, "_semihosting_sys_exit", False) for h in self.harts)
+        hit = any(
+            getattr(h, "_semihosting_sys_exit", False) for h in self.harts
+        )
         if hit:
             for h in self.harts:
                 h._semihosting_sys_exit = False
         return hit
+
+    @property
+    def power_request(self) -> PowerRequest | None:
+        """受调试程序经关机与复位请求设备给出的请求; 没有请求时返回 None.
+
+        请求一经置位即保持, 由 :meth:`PowerCtrl.clear_request` 撤销; 置位期间
+        step() 与 run() 都不执行指令.
+        """
+        if self.power_ctrl is None:
+            return None
+        return self.power_ctrl.request
+
+    def _power_stop_reason(self) -> RunStopReason | None:
+        """关机与复位请求设备给出的停止原因; 没有请求时返回 None.
+
+        请求一经置位即保持, 下一次连续执行在同一处停止.
+        """
+        request = self.power_request
+        if request is PowerRequest.SHUTDOWN:
+            return RunStopReason.SHUTDOWN
+        if request is PowerRequest.REBOOT:
+            return RunStopReason.REBOOT
+        return None
 
     def run(
         self,
@@ -311,11 +353,12 @@ class RunOps:
         - 固件执行停机序列, 即 semihosting SYS_EXIT, 全部 hart 停止
         - 断点命中, 引擎以 EXIT_BREAKPOINT 退出
         - 全部 hart 停机
+        - 受调试程序经关机与复位请求设备请求关机或复位
         - 超过 *timeout*
 
         全部 hart 处于 WFI 等待时 Python 侧阻塞等待唤醒. 执行中暂停由外部设备经
-        :meth:`notify_processor` 置 stop_flag: 引擎逐指令检查并即时退出, 状态保留
-        在跨轮保留的数组中, 该标志留给调用方消费, 不属于上述停止条件.
+        :meth:`notify_processor` 置 stop_flag: 引擎逐指令检查并即时退出,
+        状态保留在跨轮保留的数组中, 该标志留给调用方消费, 不属于上述停止条件.
 
         Args:
             timeout: 超时秒数, 默认 1800, 即 30 分钟; 取 0 表示禁用.
@@ -335,12 +378,18 @@ class RunOps:
         self._run_stop_reason = RunStopReason.NONE
 
         # 超时直接依据时钟源 time.monotonic() 判定, 不依赖 mtime 的推进速率.
-        self._timeout_deadline = time.monotonic() + timeout if timeout > 0 else 0.0
+        if timeout > 0:
+            self._timeout_deadline = time.monotonic() + timeout
+        else:
+            self._timeout_deadline = 0.0
         do_yield = yield_every > 0
         instr_start = self._total_instrs
         last_yield = instr_start
 
         while True:
+            # 请求一经置位就不再执行指令, 再次调用时在此直接停止.
+            if self._power_stop_reason() is not None:
+                break
             active = [h for h in self.harts if not h._halted]
             if not active:
                 break
@@ -353,6 +402,9 @@ class RunOps:
                 yield_cpu(yield_interval)
                 last_yield = self._total_instrs
 
+        stop_reason = self._power_stop_reason()
+        if stop_reason is not None:
+            self._run_stop_reason = stop_reason
         self._native_flush_uart()
         return self._cycle
 
@@ -361,7 +413,10 @@ class RunOps:
 
         截止时刻取 0 表示禁用超时, 此时不检查.
         """
-        if abs(self._timeout_deadline) <= 1e-9 or time.monotonic() < self._timeout_deadline:
+        if (
+            abs(self._timeout_deadline) <= 1e-9
+            or time.monotonic() < self._timeout_deadline
+        ):
             return
         self._run_stop_reason = RunStopReason.TIMEOUT
         raise TimeoutError(
@@ -382,7 +437,8 @@ class RunOps:
                 )
             # 设备暂停事件的标志保留给调用方消费; 断点命中与固件停机若不在
             # 此返回, 重入单轮加速执行会立即再次命中.
-            return self._native_stop_flag.value != 0 or self._run_stop_reason in (
+            has_stop_flag = self._native_stop_flag.value != 0
+            return has_stop_flag or self._run_stop_reason in (
                 RunStopReason.BREAKPOINT,
                 RunStopReason.EBREAK,
             )

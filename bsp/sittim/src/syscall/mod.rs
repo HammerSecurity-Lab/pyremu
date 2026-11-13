@@ -32,9 +32,7 @@ use crate::trap_frame::TrapGprs;
 pub use errno::*;
 use types::*;
 
-// ---------------------------------------------------------------
 //  Syscall numbers  (prefixed SYSNUM_ per smode_entry convention)
-// ---------------------------------------------------------------
 
 pub const SYSNUM_GETCWD: u64 = 17;
 pub const SYSNUM_DUP: u64 = 23;
@@ -125,9 +123,7 @@ pub const SYSNUM_WAIT4: u64 = 260;
 pub const SYSNUM_PRLIMIT64: u64 = 261;
 pub const SYSNUM_GETRANDOM: u64 = 278;
 
-// ---------------------------------------------------------------
 //  入口：syscall_handler  (per smode_entry/trap_handler.c)
-// ---------------------------------------------------------------
 
 /// 系统调用分发。返回的值写入 gprs.a0。
 ///

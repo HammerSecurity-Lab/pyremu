@@ -23,7 +23,10 @@ SYM_HELP_ROWS = (  # 帮助文本集中在此处: 每行给出子命令用法与
     ("chdir <绝对路径>", "记录候选目录; 省略参数时显示当前目录"),
     ("pwd", "显示所有符号表共用的候选目录"),
     ("ls", "列出候选目录中的普通文件并编号"),
-    ("load <#n|文件名> [pa:<addr>|va:<addr>]", "加载符号文件, 校验内容后登记为模块"),
+    (
+        "load <#n|文件名> [pa:<addr>|va:<addr>]",
+        "加载符号文件, 校验内容后登记为模块",
+    ),
     ("detail [地址|pc|符号名]", "列出已加载模块, 或列出覆盖某地址的模块"),
     ("rm <序号|文件名>", "移除符号模块"),
     ("info", "显示外部符号文件信息"),
@@ -109,7 +112,9 @@ class SymCmdOps(SharedAttrs):
         for key in sorted_keys:
             tbl.add_row(f"{key}...", str(groups[key]))
         self._console.print(tbl)
-        self._console.print("[dim]输入 sym <prefix> 查看具体符号 (如 sym a, sym f, sym _)[/]")
+        self._console.print(
+            "[dim]输入 sym <prefix> 查看具体符号 (如 sym a, sym f, sym _)[/]"
+        )
 
     @staticmethod
     def _filter_symbol_entries(
@@ -119,7 +124,9 @@ class SymCmdOps(SharedAttrs):
         """按前缀筛选固件符号, 按地址升序返回 (名称, 地址)."""
         lowered = filter_str.lower()
         entries = [
-            (name, addr) for name, addr in syms.items() if name.lower().startswith(lowered)
+            (name, addr)
+            for name, addr in syms.items()
+            if name.lower().startswith(lowered)
         ]
         entries.sort(key=lambda item: item[1])
         return entries
@@ -133,7 +140,9 @@ class SymCmdOps(SharedAttrs):
         prefix_len = len(filter_str)
         subgroups: dict[str, int] = {}
         for name, _addr in entries:
-            next_key = name if len(name) <= prefix_len else name[: prefix_len + 1]
+            next_key = (
+                name if len(name) <= prefix_len else name[: prefix_len + 1]
+            )
             subgroups[next_key] = subgroups.get(next_key, 0) + 1
 
         def _calc_order(x: str) -> tuple[int, str]:
@@ -144,7 +153,10 @@ class SymCmdOps(SharedAttrs):
 
         sorted_keys = sorted(subgroups.keys(), key=_calc_order)
         tbl = Table(
-            title=f"符号: '{filter_str}' ({len(entries)} 项, {len(sorted_keys)} 子组)",
+            title=(
+                f"符号: '{filter_str}' ({len(entries)} 项, "
+                f"{len(sorted_keys)} 子组)"
+            ),
             border_style="blue",
             expand=True,
         )
@@ -153,12 +165,16 @@ class SymCmdOps(SharedAttrs):
         for key in sorted_keys:
             if not key:
                 continue
-            tbl.add_row(f"{filter_str}[bold]{key[prefix_len:]}[/]...", str(subgroups[key]))
+            tbl.add_row(
+                f"{filter_str}[bold]{key[prefix_len:]}[/]...",
+                str(subgroups[key]),
+            )
         self._console.print(tbl)
 
         second = sorted_keys[1] if len(sorted_keys) > 1 else sorted_keys[0]
         self._console.print(
-            f"[dim]输入 sym <prefix> 继续深入 (如 sym {sorted_keys[0]}, sym {second})[/]"
+            f"[dim]输入 sym <prefix> 继续深入 "
+            f"(如 sym {sorted_keys[0]}, sym {second})[/]"
         )
 
     def _print_symbol_rows(

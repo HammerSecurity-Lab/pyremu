@@ -3,7 +3,8 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""L2 cache stress tests — simulate firmware access patterns (DTB + BSS memset)."""
+"""L2 cache stress tests — simulate firmware access patterns (DTB + BSS
+memset)."""
 
 from pyremu.memory.l2cache import L2Cache
 from tests.conftest import make_test_ram
@@ -27,7 +28,9 @@ class TestCacheWriteAllocateThenRead:
 
         l2.write(0x1000, b"\xde\xad\xbe\xef")
         data = l2.read(0x1000, 4)
-        assert data == b"\xde\xad\xbe\xef", f"Expected 0xDEADBEEF, got {data.hex()}"
+        assert data == b"\xde\xad\xbe\xef", (
+            f"Expected 0xDEADBEEF, got {data.hex()}"
+        )
 
     def test_write_then_read_partial(self):
         """Write 8 bytes, then read 4 at offset 2."""
@@ -37,7 +40,9 @@ class TestCacheWriteAllocateThenRead:
 
         l2.write(0x1000, b"\x01\x02\x03\x04\x05\x06\x07\x08")
         data = l2.read(0x1002, 4)
-        assert data == b"\x03\x04\x05\x06", f"Expected 03040506, got {data.hex()}"
+        assert data == b"\x03\x04\x05\x06", (
+            f"Expected 03040506, got {data.hex()}"
+        )
 
     def test_write_multiple_same_line(self):
         """Multiple writes to the same cache line (at different offsets)."""
@@ -76,7 +81,8 @@ class TestCacheEvictionIntegrity:
         # Now re-read 0x0000 — should be a miss, load from RAM (writeback data)
         data = l2.read(0x0000, 8)
         assert data == b"\xfe\xed\xfa\xce\xca\xfe\xbe\xef", (
-            f"Dirty eviction failed: expected FEEDFACECAFEBEEF, got {data.hex()}"
+            f"Dirty eviction failed: expected FEEDFACECAFEBEEF, "
+            f"got {data.hex()}"
         )
 
     def test_many_writes_dont_corrupt_earlier_data(self):
@@ -90,14 +96,16 @@ class TestCacheEvictionIntegrity:
         l2.write(marker_addr, b"\xab" * 64)
 
         # Thrash: write to many addresses (simulates BSS memset),
-        # skipping the marker address so we test cache eviction+reload, not overwrite.
+        # skipping the marker address so we test cache eviction+reload,
+        # not overwrite.
         marker_end = marker_addr + 64
         for addr in range(0x0000, 0x10000, 64):
             if marker_addr <= addr < marker_end:
                 continue
             l2.write(addr, b"\x00" * 64)
 
-        # Verify marker data is still correct (should survive via writeback+reload)
+        # Verify marker data is still correct (should survive via
+        # writeback+reload)
         data = l2.read(marker_addr, 64)
         assert data == b"\xab" * 64, (
             f"Data corrupted after thrashing at {marker_addr:#x}: "
@@ -105,14 +113,16 @@ class TestCacheEvictionIntegrity:
         )
 
     def test_dtb_like_pattern(self):
-        """Simulate DTB + BSS memset pattern: write small data, then thrash cache."""
+        """Simulate DTB + BSS memset pattern: write small data, then thrash
+        cache."""
         ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=4)
         l2.set_ram_backend(rf, wf)
 
         # Simulate DTB data at the "top" of memory
         dtb_addr = 0x3F000
-        dtb_data = bytes([i & 0xFF for i in range(256)])  # 256 bytes of known pattern
+        # 256 bytes of known pattern
+        dtb_data = bytes([i & 0xFF for i in range(256)])
         for off in range(0, len(dtb_data), 8):
             chunk = dtb_data[off : off + 8]
             l2.write(dtb_addr + off, chunk)
@@ -138,7 +148,8 @@ class TestCacheEvictionIntegrity:
 
         # Setup: write DTB data
         dtb_addr = 0x30000
-        l2.write(dtb_addr, b"\x03\x00\x00\x00\x04\x00\x00\x00")  # FDT_PROP tag + len=4
+        # FDT_PROP tag + len=4
+        l2.write(dtb_addr, b"\x03\x00\x00\x00\x04\x00\x00\x00")
 
         # Interleave: read DTB, write BSS, repeat
         for addr in range(0x00000, 0x10000, 8):
@@ -167,7 +178,9 @@ class TestCrossCacheLineAccess:
 
         # Read back
         result = l2.read(addr, 16)
-        assert result == data, f"Cross-line write failed: {result.hex()} != {data.hex()}"
+        assert result == data, (
+            f"Cross-line write failed: {result.hex()} != {data.hex()}"
+        )
 
     def test_read_crossing_cache_line(self):
         """Read 8 bytes at offset 60 (4 bytes in line 0, 4 bytes in line 1)."""
@@ -182,7 +195,9 @@ class TestCrossCacheLineAccess:
         addr = 0x003C  # 0x3C = 60
         data = l2.read(addr, 8)
         expected = bytes([0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43])
-        assert data == expected, f"Cross-line read failed: {data.hex()} != {expected.hex()}"
+        assert data == expected, (
+            f"Cross-line read failed: {data.hex()} != {expected.hex()}"
+        )
 
     def test_cross_line_write_then_read_back(self):
         """Write across cache line boundary, thrash, then read back."""
@@ -196,7 +211,8 @@ class TestCrossCacheLineAccess:
         l2.write(addr, original)
 
         # Thrash the cache, but skip the lines containing our data
-        # The 32-byte write at 0x2030 spans lines [0x2000, 0x2040) and [0x2040, 0x2080)
+        # The 32-byte write at 0x2030 spans lines [0x2000, 0x2040) and
+        # [0x2040, 0x2080)
         skip_lines = {0x2000, 0x2040}
         for a in range(0x0000, 0x8000, 64):
             if a in skip_lines:
@@ -230,7 +246,8 @@ class TestCacheSetAliasing:
         addr_b = (0x200 << line_shift) | (set_idx << line_shift)
         assert self._get_set_index(l2, addr_a) == set_idx
         assert self._get_set_index(l2, addr_b) == set_idx
-        assert (addr_a >> line_shift) != (addr_b >> line_shift)  # different tags
+        # different tags
+        assert (addr_a >> line_shift) != (addr_b >> line_shift)
 
         # Write data to both
         l2.write(addr_a, b"\xaa" * 8)
@@ -241,7 +258,8 @@ class TestCacheSetAliasing:
         assert l2.read(addr_b, 8) == b"\xbb" * 8
 
     def test_set_overflow_evicts_lru(self):
-        """When more addresses than ways map to the same set, LRU evicts oldest."""
+        """When more addresses than ways map to the same set, LRU evicts
+        oldest."""
         ram, rf, wf = make_test_ram(256 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=4 * 1024, line_size=64, ways=2)  # 2 ways
         l2.set_ram_backend(rf, wf)
@@ -249,7 +267,8 @@ class TestCacheSetAliasing:
         set_idx = 5
         shift = l2._line_shift
 
-        # Write 3 addresses mapping to the same set (2 ways -> 3rd evicts oldest)
+        # Write 3 addresses mapping to the same set (2 ways; the 3rd evicts
+        # oldest)
         addrs = [
             (0x100 << shift) | (set_idx << shift),
             (0x200 << shift) | (set_idx << shift),
@@ -263,7 +282,9 @@ class TestCacheSetAliasing:
 
         # addrs[0] should be evicted and re-read from RAM (written back as M)
         data = l2.read(addrs[0], 8)
-        assert data == b"\x11" * 8, f"Evicted LRU data corrupted: got {data.hex()}"
+        assert data == b"\x11" * 8, (
+            f"Evicted LRU data corrupted: got {data.hex()}"
+        )
 
 
 class TestCacheWriteSizeVariants:
@@ -329,8 +350,10 @@ class TestCacheLargeScale:
     """Larger scale test simulating firmware-level access patterns."""
 
     def test_full_cache_thrash(self):
-        """Fill the entire cache multiple times, verify data integrity at checkpoints."""
-        ram, rf, wf = make_test_ram(1024 * 1024, has_bounds_check=True)  # 1 MiB RAM
+        """Fill the entire cache multiple times, verify data integrity at
+        checkpoints."""
+        # 1 MiB RAM
+        ram, rf, wf = make_test_ram(1024 * 1024, has_bounds_check=True)
         l2 = L2Cache(size=16 * 1024, line_size=64, ways=4)  # 64 sets × 4 ways
         l2.set_ram_backend(rf, wf)
 
@@ -359,6 +382,7 @@ class TestCacheLargeScale:
             for cp_addr, cp_data in checkpoints.items():
                 actual = l2.read(cp_addr, len(cp_data))
                 assert actual == cp_data, (
-                    f"Iteration {iteration}, checkpoint {cp_addr:#x} corrupted: "
+                    f"Iteration {iteration}, checkpoint {cp_addr:#x} "
+                    f"corrupted: "
                     f"expected {cp_data.hex()}, got {actual.hex()}"
                 )

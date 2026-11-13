@@ -5,7 +5,8 @@
 
 """磁盘映像格式解析的共用类型.
 
-各格式模块提供 ``FORMAT_NAME``、``probe`` 与 ``summary``, 由包入口按登记顺序调用.
+各格式模块提供 ``FORMAT_NAME``、``probe`` 与 ``summary``, 由包入口按登记顺序
+调用.
 """
 
 from dataclasses import dataclass
@@ -28,7 +29,8 @@ class DiskRegion:
 class DiskSummary:
     """与格式无关的布局摘要.
 
-    *block_unit* 是该格式分配单元的名称, 例如 ext4 的块, FAT 的簇与 btrfs 的扇区.
+    *block_unit* 是该格式分配单元的名称, 例如 ext4 的块, FAT 的簇与 btrfs 的
+    扇区.
     *free_blocks* 为该分配单元的空闲数量; 该格式的元数据不给出空闲数量时为 None.
     *properties* 是该格式自己的名值对, 按显示顺序排列.
     """

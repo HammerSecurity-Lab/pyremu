@@ -1,0 +1,11 @@
+# 有限元数值计算载荷
+#
+# 二维 Poisson 方程 P1 三角形有限元, 验证二阶收敛。刚度阵组装与求解
+# 使用 nalgebra crate 的稠密 DMatrix / DVector 与 Cholesky 分解。
+[package]
+name = "fem"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra = "0.34"

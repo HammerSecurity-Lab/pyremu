@@ -20,13 +20,30 @@ pub fn hang() -> ! {
 ///
 /// 陷态入口已将 sstatus.SIE 清 0, 若直接 WFI, host 后续
 /// 发来的终止请求会因 SIE=0 被
-/// 屏蔽, WFI 不唤醒, 在 Linux 侧表现为 rcu_sched stall 且
-/// NMI 无响应。因此这里重新打开全局中断并使能 SSIP 与 STIP, 让中断照常投递
+/// 屏蔽, WFI 不唤醒, 在 Linux 侧表现为 rcu_sched stall 且 NMI 无响应。
+/// 因此这里重新打开全局中断并使能 SSIP 与 STIP, 让中断照常投递
 /// 到 interrupt_dispatch
 fn fault_halt_enable_irq() -> ! {
 	csr::write_sie(csr::SSI | csr::STI);
 	csr::write_sstatus(csr::read_sstatus() | csr::SSTATUS_SIE);
 	hang();
+}
+
+/// 挂起并输出启动参数及失败原因
+pub fn fault_halt_boot(
+	enclave_id: u64,
+	base_pa: u64,
+	payload_size: u64,
+	end_pa: u64,
+	partition_num: u64,
+	features: u64,
+	msg: &str,
+) -> ! {
+	println!(
+		"early-boot id={} base={:016x} payload={:x} end={:016x} parts={} feats={:016x}\n",
+		enclave_id, base_pa, payload_size, end_pa, partition_num, features
+	);
+	fault_halt(msg)
 }
 
 /// 冻结挂起并输出陷态现场

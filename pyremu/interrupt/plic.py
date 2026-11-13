@@ -78,8 +78,9 @@ class PLIC(Device):
         # priority[i] 为 source i 的优先级; enable[c * num_enable_words + w] 为
         # context c 第 w 个使能字; threshold[c] 为 context c 的优先级阈值;
         # claimed[c] 为 context c 当前正在服务的中断源, 0 表示无.
+        enable_words = num_contexts * self.num_enable_words
         self.priority = (ctypes.c_uint8 * (num_sources + 1))()
-        self.enable = (ctypes.c_uint32 * (num_contexts * self.num_enable_words))()
+        self.enable = (ctypes.c_uint32 * enable_words)()
         self.threshold = (ctypes.c_uint8 * num_contexts)()
         self.claimed = (ctypes.c_uint32 * num_contexts)()
 
@@ -91,7 +92,9 @@ class PLIC(Device):
 
         # 计算设备区域大小 — 到最后一个 context + 4 KiB
         last_context_end = (
-            PLIC_CONTEXT_BASE + (num_contexts - 1) * PLIC_CONTEXT_STRIDE + 0x1000
+            PLIC_CONTEXT_BASE
+            + (num_contexts - 1) * PLIC_CONTEXT_STRIDE
+            + 0x1000
         )
         self.size = last_context_end
 
@@ -117,11 +120,11 @@ class PLIC(Device):
     def get_pending_mip(self, hart_id: int) -> int:
         """返回该 hart 的待处理外部中断 mip 位.
 
-        标准双 context 布局: context 2*hart_id 为 M 模式, 2*hart_id+1 为 S 模式。
-        分别检查两个 context 是否有优先级 > 阈值且使能且挂起的中断源:
-        - M-context 命中 -> MEIP (bit 11)
-        - S-context 命中 -> SEIP (bit 9)
-        两者可同时置位。
+        标准双 context 布局: 2*hart_id 为 M 模式, 2*hart_id+1 为 S 模式.
+        分别检查两个 context 是否有优先级高于阈值、使能且挂起的中断源:
+        - M context 命中时置 MEIP, 即 mip 的位 11
+        - S context 命中时置 SEIP, 即 mip 的位 9
+        两者可同时置位.
         """
         m_ctx = 2 * hart_id
         s_ctx = m_ctx + 1
@@ -138,7 +141,8 @@ class PLIC(Device):
     def _find_highest(self, context: int) -> int:
         """返回 context 中优先级最高且符合条件的中断源编号, 若无则返回 0.
 
-        条件: pending[i] AND enable[context][i] AND priority[i] > threshold[context]
+        条件: pending[i] AND enable[context][i] AND
+        priority[i] > threshold[context]
         有多个时取最高优先级; 同优先级取最小 source id (RISC-V spec §7.3).
 
         注意: 不检查 ``claimed`` 状态.  PLIC 规范中 pending 是 per-source
@@ -190,7 +194,9 @@ class PLIC(Device):
         # Source priorities (0x000000 - 0x000FFC)
         if offset < PLIC_PENDING_BASE:
             src = offset // PLIC_PRIORITY_STRIDE
-            return self.priority[src] & 0x7 if 1 <= src <= self.num_sources else 0
+            if 1 <= src <= self.num_sources:
+                return self.priority[src] & 0x7
+            return 0
 
         # Pending bits (0x001000 - 0x00107C)
         if offset < PLIC_ENABLE_BASE:

@@ -31,19 +31,24 @@ from pyremu.peripheral import (
     CRNG,
     GPIO,
     I2C,
+    PowerCtrl,
     SPI,
     TerminalIO,
     UART,
     VirtIOBlock,
     VirtIONet,
 )
-from pyremu.peripheral.virtio_net import DEFAULT_VIRTIO_NET_M_MAC, DEFAULT_VIRTIO_NET_S_MAC
+from pyremu.peripheral.virtio_net import (
+    DEFAULT_VIRTIO_NET_M_MAC,
+    DEFAULT_VIRTIO_NET_S_MAC,
+)
 from pyremu.peripheral.watchdog import HartWatchdog
 from pyremu.platform import InterruptMode, PlatformConfig
 
 
 class SetupOps:
-    """初始化步骤: 共享总线、中断控制器、外设、hart 与加速执行引擎的初始化状态."""
+    """初始化步骤: 共享总线、中断控制器、外设、hart 与加速执行引擎的
+    初始化状态."""
 
     @staticmethod
     def _create_bus(config: PlatformConfig) -> Bus:
@@ -61,12 +66,12 @@ class SetupOps:
     def _setup_interrupt_controllers(self, config: PlatformConfig) -> None:
         """按 interrupt_mode 创建并注册中断控制器.
 
-        ``self.plic`` / ``self.imsic`` / ``self.aplic`` 由 Emulator 的构造流程声明,
-        本函数仅填充当前模式对应的字段.
+        ``self.plic`` / ``self.imsic`` / ``self.aplic`` 由 Emulator 的
+        构造流程声明, 本函数仅填充当前模式对应的字段.
 
         - legacy: PLIC, 承担外部中断与外设有线路由
-        - AIA:    IMSIC 承担 MSI 中断, APLIC S 域与 APLIC M 域把有线中断转成 MSI;
-                  M 域实例登记在设备中断投递目标的中断源表下
+        - AIA:    IMSIC 承担 MSI 中断, APLIC S 域与 APLIC M 域把有线中断
+                  转成 MSI; M 域实例登记在设备中断投递目标的中断源表下
         """
         if config.interrupt_mode == InterruptMode.AIA:
             p = config.periph
@@ -95,12 +100,13 @@ class SetupOps:
                     is_mmode=True,
                 )
                 self.bus.add_device(aplic_m.base_addr, aplic_m)
-                # 该域没有软件写 MMIO 配置中断源路由: 中断源停留在 inactive 时
-                # set_irq 直接丢弃, 故在此预置网卡中断源的投递目标与使能. 投递
-                # identity 取外部中断起始值, 不取中断源编号本身: 中断源编号与
-                # M 文件上的软件中断 identity 取值可能相同, 该 identity 的
-                # pending 位由 IPI 快路径不经使能位直接投递, 网卡置位会被当作 IPI 认领.
-                # 未注册飞地侧网卡时不占用该中断源.
+                # 该域没有软件写 MMIO 配置中断源路由: 中断源停留在 inactive
+                # 时 set_irq 直接丢弃, 故在此预置网卡中断源的投递目标与使能.
+                # 投递 identity 取外部中断起始值, 不取中断源编号本身: 中断源
+                # 编号与 M 文件上的软件中断 identity 取值可能相同, 该
+                # identity 的 pending 位由 IPI 快路径不经使能位直接投递,
+                # 网卡置位会被当作 IPI 认领. 未注册飞地侧网卡时不占用该
+                # 中断源.
                 if p.virtio_net_m_base:
                     aplic_m.bind_source(p.virtio_net_m_irq, 0, IID_EXT_MIN)
                     self._irq_sink.bind(p.virtio_net_m_irq, aplic_m)
@@ -115,7 +121,7 @@ class SetupOps:
         self._irq_sink.set_fallback(self.plic)
 
     def _declare_device_slots(self) -> None:
-        """声明外设与看门狗的槽位, 由 ``_setup_peripherals`` 按配置填充.
+        """声明各外设, 由 ``_setup_peripherals`` 按配置填充.
 
         基址取 0 的设备保持在 None
         """
@@ -128,6 +134,7 @@ class SetupOps:
         self.virtio_net_m: VirtIONet | None = None
         self.watchdog: HartWatchdog | None = None
         self.crng: CRNG | None = None
+        self.power_ctrl: PowerCtrl | None = None
         self.boot_addr_reg: BootAddrReg | None = None
 
     def _setup_peripherals(self, config: PlatformConfig) -> None:
@@ -135,8 +142,9 @@ class SetupOps:
 
         ``self.uart`` / ``self.spi`` / ``self.i2c`` / ``self.gpio`` /
         ``self.virtio_blk`` / ``self.virtio_net_s`` / ``self.virtio_net_m`` /
-        ``self.watchdog`` 由 ``_declare_device_slots`` 声明, 本函数仅填充配置启用
-        的字段.
+        ``self.watchdog`` / ``self.crng`` / ``self.power_ctrl`` /
+        ``self.boot_addr_reg`` 由 ``_declare_device_slots`` 声明,
+        本函数仅填充配置启用的字段.
         """
         p = config.periph
         # 中断路由目标: AIA 模式为 APLIC, legacy 模式为 PLIC
@@ -164,8 +172,9 @@ class SetupOps:
         if p.virtio_blk_base and config.disk_image:
             self.virtio_blk = VirtIOBlock(
                 image_path=config.disk_image,
-                # 主存访问路径取自 MainMem 而不取 Bus: Bus 持有本设备, 设备再持有 Bus
-                # 的绑定方法会使二者之间形成环形引用, 见 Bus.main_mem.
+                # 主存访问路径取自 MainMem 而不取 Bus: Bus 持有本设备,
+                # 设备再持有 Bus 的绑定方法会使二者之间形成环形引用,
+                # 见 Bus.main_mem.
                 mem_read=self.bus.main_mem.read,
                 mem_write=self.bus.main_mem.write,
                 # 直接调 plic.set_irq 会略过通知加速执行引擎与唤醒 WFI 等待的
@@ -208,8 +217,20 @@ class SetupOps:
             self.bus.add_device(p.crng_base, self.crng)
             self._peripherals["crng"] = self.crng
 
+        if p.power_base:
+            # 关机与复位请求设备: 受调试程序写入请求值后, 执行循环据该请求停止.
+            # 只持有停止标志与唤醒事件, 不持有 Emulator 或它的绑定方法.
+            self.power_ctrl = PowerCtrl(
+                base=p.power_base,
+                stop_flag=self._native_stop_flag,
+                wake_event=self._wake_event,
+            )
+            self.bus.add_device(p.power_base, self.power_ctrl)
+            self._peripherals["power_ctrl"] = self.power_ctrl
+
         if p.boot_addr_base:
-            # 启动地址寄存器 每 hart 一个 64 位入口地址, 由引导只读存储器内的代码读取
+            # 启动地址寄存器每 hart 一个 64 位入口地址,
+            # 由引导只读存储器内的代码读取
             self.boot_addr_reg = BootAddrReg(
                 num_harts=config.num_harts,
                 base=p.boot_addr_base,
@@ -229,8 +250,8 @@ class SetupOps:
         中断经设备中断投递目标投递: 该目标除置位中断控制器外还通知加速执行引擎并
         唤醒 WFI 阻塞的 hart, 直接调控制器 set_irq 会略过这两步.
 
-        主存访问路径取自 MainMem 而不取 Bus: Bus 持有本设备, 设备再持有 Bus 的绑定
-        方法会使二者之间形成环形引用, 见 Bus.main_mem.
+        主存访问路径取自 MainMem 而不取 Bus: Bus 持有本设备, 设备再持有
+        Bus 的绑定方法会使二者之间形成环形引用, 见 Bus.main_mem.
         """
         net = VirtIONet(
             mem_read=self.bus.main_mem.read,
@@ -242,7 +263,8 @@ class SetupOps:
         return net
 
     def _create_harts(self, config: PlatformConfig) -> None:
-        """按配置创建全部 hart, 注入内存后端与中断控制器, 并原地填入 ``self.harts``.
+        """按配置创建全部 hart, 注入内存后端与中断控制器,
+        并原地填入 ``self.harts``.
 
         调用本步时 ``self.bus`` / ``self.clint`` / ``self.uart`` 与
         ``_setup_interrupt_controllers`` 填充的控制器字段均已就绪;
@@ -294,9 +316,9 @@ class SetupOps:
         )
         self.uart.termio = self._termio
         # 把 CPU 引擎停止标志的地址注入 termio 线程: Ctrl+Q 时由 termio 直接
-        # 置位, 不经 SIGINT 交给 Python 信号处理器再调用 notify_processor. 主线程
-        # 阻塞于 run_parallel 时信号处理器不执行, 直接置位使加速执行引擎的看门狗
-        # 仍能即时感知停止请求.
+        # 置位, 不经 SIGINT 交给 Python 信号处理器再调用 notify_processor.
+        # 主线程阻塞于 run_parallel 时信号处理器不执行, 直接置位使加速执行引擎
+        # 的看门狗仍能即时感知停止请求.
         termio_set_emu_stop_flag(ctypes.addressof(self._native_stop_flag))
 
     def _init_for_speedup_lib(self) -> None:
@@ -316,18 +338,19 @@ class SetupOps:
 
         num_harts = len(self.harts)
         self._speedup_hart_states = (HartState * num_harts)()
-        # 扩展开关是平台的静态属性, 在状态数组分配时写入一次; 逐轮编组不再重复写入.
+        # 扩展开关是平台的静态属性, 在状态数组分配时写入一次;
+        # 逐轮编组不再重复写入.
         for i, hart in enumerate(self.harts):
             hart.marshal_isa_exts(self._speedup_hart_states[i])
-        # IMSIC 的中断写入目标取引擎正在读取的这份 hart 状态数组, 与 PLIC 的
-        # pending 与 level 同理: 设备线程经 set_ip_number 注入的 eip
-        # 必须落在引擎正在读的这份数组上, 否则 AIA 模式下外部中断要等到轮边界
-        # _native_sync_plic_mip 才可见, 输入回显延迟以百毫秒计.
+        # IMSIC 的中断写入目标取引擎正在读取的这份 hart 状态数组, 与 PLIC
+        # 的 pending 与 level 同理: 设备线程经 set_ip_number 注入的 eip
+        # 必须落在引擎正在读的这份数组上, 否则 AIA 模式下外部中断要等到
+        # 轮边界经 _native_sync_plic_mip 才可见, 输入回显延迟以百毫秒计.
         if self.imsic is not None:
             self.imsic.bind_ffi_states(self._speedup_hart_states)
-        # TLB 刷新计数的两处存放位置: 全局计数由总线持有, 各 hart 上次见到的取值
-        # 由本数组持有. 两者跨 FFI 调用保留, 引擎据此在两次调用之间沿用既有的翻译
-        # 条目; 使条目失效的动作无论发生在哪一侧都计入该计数.
+        # TLB 刷新计数的两处存放位置: 全局计数由总线持有, 各 hart 上次见到的
+        # 取值由本数组持有. 两者跨 FFI 调用保留, 引擎据此在两次调用之间沿用
+        # 既有的翻译条目; 使条目失效的动作无论发生在哪一侧都计入该计数.
         self._tlb_flush_cnt_per_hart = (ctypes.c_uint64 * num_harts)()
         self._tlb_flush_cnt_before: int = self.bus.tlb_flush_cnt.value
 
@@ -337,8 +360,8 @@ class SetupOps:
         self._clint_msip_arr = (ctypes.c_uint8 * 0)()
 
         ram = self.bus._ram  # bytearray
-        # 首地址用 ctypes.addressof 取得; 取地址不用 ctypes.cast, 后者会与所转换的缓冲区
-        # 构成引用环.
+        # 首地址用 ctypes.addressof 取得; 取地址不用 ctypes.cast,
+        # 后者会与所转换的缓冲区构成引用环.
         self._native_ram_ptr = ctypes.addressof(ctypes.c_uint8.from_buffer(ram))
 
         self._pmp_num: int = 0

@@ -8,9 +8,7 @@ use crate::state::{riscv_mode, HartState};
 use std::sync::atomic::Ordering;
 
 use crate::trap::{deliver_trap, deliver_trap_mmode, mcause_val};
-// ============================================================
 //  mip 与 mie 的位掩码, 供 check_pending_interrupts 使用
-// ============================================================
 
 const MIE_MEIE: u64 = 1 << 11; // M 模式外部中断
 const MIE_SEIE: u64 = 1 << 9; // S 模式外部中断
@@ -20,13 +18,13 @@ const MIE_MSIE: u64 = 1 << 3; // M 模式软件中断
 const MIE_SSIE: u64 = 1 << 1; // S 模式软件中断
 
 pub(crate) use imsic::{
-	decode_imsic_addr, imsic_clear_ipi_on_trap, imsic_reg_read, imsic_reg_write,
-	imsic_topei_claim_iid, imsic_topei_peek, sync_imsic, sync_imsic_one,
-	try_handle_imsic_concurrent, try_handle_imsic_read_concurrent, IID_M_IPI, IID_S_IPI,
+	decode_imsic_addr, imsic_reg_read, imsic_reg_write, imsic_topei_claim_iid, imsic_topei_peek,
+	sync_imsic, sync_imsic_one, try_handle_imsic_concurrent, try_handle_imsic_read_concurrent,
+	IID_M_IPI, IID_S_IPI,
 };
 
 pub(crate) fn check_pending_interrupts(state: &HartState) -> Option<(u64, bool)> {
-	let pending = state.mip.load(Ordering::Acquire) & state.mie;
+	let pending = state.mip_value() & state.mie;
 	if pending == 0 {
 		return None;
 	}
@@ -76,7 +74,7 @@ pub(crate) fn check_pending_interrupts(state: &HartState) -> Option<(u64, bool)>
 /// 不使用 ``mip.MEIP``, 该位要到下一条指令边界执行 ``sync_imsic`` 才更新. 返回
 /// IID 3 时清除 ``mip.MSIP``, 使下一次读取 MTOPI 得不到同一 IPI.
 pub(crate) fn compute_mtopi(state: &mut HartState, _mtime: u64) -> (u64, u8) {
-	let mip_mie = state.mip.load(Ordering::Acquire) & state.mie;
+	let mip_mie = state.mip_value() & state.mie;
 
 	// 1. IMSIC M 文件有挂起的中断时返回 IID=11, 即 MEI; 此处不区分 IPI 与外部中断,
 	//    具体原因码在读取 MTOPEI 时给出.
@@ -107,7 +105,7 @@ pub(crate) fn compute_mtopi(state: &mut HartState, _mtime: u64) -> (u64, u8) {
 /// 返回 ``(value, 0)``, value 为 ``(IID << 16) | priority`` 或 0. 优先级依次为 SEI、
 /// SSI、STI, 对应 IID 9、1、5. 外部中断取自 IMSIC S 文件的 ``imsic_topei_peek``.
 pub(crate) fn compute_stopi(state: &mut HartState, mtime: u64) -> (u64, u8) {
-	let mip_mie = state.mip.load(Ordering::Acquire) & state.mie;
+	let mip_mie = state.mip_value() & state.mie;
 
 	// 1. IMSIC S 文件有挂起的中断时返回 IID=9, 即 SEI; 此处不区分 IPI 与外部中断,
 	//    具体原因码在读取 STOPEI 时给出.
@@ -150,7 +148,7 @@ pub(crate) fn compute_stopi(state: &mut HartState, mtime: u64) -> (u64, u8) {
 
 pub(crate) fn check_and_deliver_interrupt_concurrent(
 	state: &mut HartState,
-	clint: &ConcurrentClintCtx,
+	_clint: &ConcurrentClintCtx,
 ) -> bool {
 	if let Some((cause, is_m_mode)) = check_pending_interrupts(state) {
 		let code = mcause_val(cause, true);
@@ -159,20 +157,8 @@ pub(crate) fn check_and_deliver_interrupt_concurrent(
 		} else {
 			deliver_trap(state, code, 0);
 		}
-		/*
-			MSIP 是 CLINT 输出的电平中断. 投递陷态时只清 mip.MSIP, CLINT 的电平位保持为 1,
-			而该位是 sync_msip 在每条指令边界重新采样的来源: 电平仍为 1 时 mip.MSIP 重新置位,
-			同一 IPI 被再次投递, 接收方为同一次中断反复执行处理函数, 依赖它的同步流程无法
-			完成. 只清电平位: 并发到达的 IPI 由边沿计数记录, 在下一个指令边界重新置位 mip.MSIP.
-		*/
-		if cause == 3 {
-			let hid = state.mhartid as usize;
-			if hid < clint.num_harts as usize {
-				// 只清 bit 0 的电平位, 保留 bits 7:1 的边沿计数; ``store(0)`` 会
-				// 一并清除边沿计数, 故用 ``fetch_and(0xFE)``.
-				unsafe { &*clint.msip.add(hid) }.fetch_and(0xFE, Ordering::Release);
-			}
-		}
+		// CLINT 的 msip 与 mip 的挂起位由软件清除: 陷态处理函数向 CLINT 的 msip
+		// 写入 0, 或经 IMSIC 的 MTOPEI 与 STOPEI 回应中断. 进入陷态不改变这两者.
 		true
 	} else {
 		false
@@ -241,11 +227,10 @@ mod tests {
 		(clint, msip_ptr)
 	}
 
-	/// MSIP 投递后必须清除 CLINT 电平位, 不能只清 ``mip.MSIP``.
-	/// 电平位保持为 1 时, ``sync_msip`` 在下一个指令边界重新置位该中断, 同一 IPI 被
-	/// 重复投递. 接收方为同一次中断反复执行处理函数, 依赖它的同步流程无法完成.
+	/// MSIP 投递不改变 CLINT 电平位与 ``mip.MSIP``.
+	/// 该电平由陷态处理函数向 CLINT 的 msip 写入 0 撤销, 与真实硬件一致.
 	#[test]
-	fn msip_delivery_clears_clint_level_bit() {
+	fn msip_delivery_keeps_clint_level_bit() {
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		state.mhartid = 0;
 		state.mode = riscv_mode::M;
@@ -267,25 +252,23 @@ mod tests {
 		assert!(delivered, "MSIP 应被投递");
 		assert_eq!(
 			unsafe { &*msip_ptr }.load(Ordering::Acquire) & 1,
-			0,
-			"MSIP 投递后 CLINT 电平位必须清零 (否则 sync_msip 重新断言)"
+			1,
+			"MSIP 投递不得改变 CLINT 电平位"
 		);
 		assert_eq!(
 			state.mip.load(Ordering::Acquire) & (1 << 3),
-			0,
-			"MSIP 投递后 mip.MSIP 必须清零"
+			1 << 3,
+			"MSIP 投递不得清除 mip.MSIP"
 		);
 		assert_eq!(state.mode, riscv_mode::M, "应保持 M 模式");
 		assert_eq!(state.pc, 0x80000000, "应跳转 mtvec");
 	}
 
-	/// 投递 MSIP 后清除电平位时必须保留 bits 7:1 的边沿计数.
+	/// 投递 MSIP 不改变 msip 字节的 level 与 bits 7:1 的边沿计数.
 	/// 该字节由 Python 侧的 ``_native_marshal_clint`` 编码为 ``level | (edge << 1)``,
-	/// 边沿计数用于在加速执行边界之间检测 MSIP 变化. ``store(0)`` 会一并清除
-	/// 边沿计数, 因此改用 ``fetch_and(0xFE)``, 与 ``clint_write_msip_concurrent``
-	/// 写 0 时的处理一致.
+	/// 边沿计数用于在加速执行边界之间检测 MSIP 变化.
 	#[test]
-	fn msip_delivery_preserves_edge_counter() {
+	fn msip_delivery_leaves_msip_byte_unchanged() {
 		let mut state: HartState = unsafe { std::mem::zeroed() };
 		state.mhartid = 0;
 		state.mode = riscv_mode::M;
@@ -307,12 +290,7 @@ mod tests {
 
 		assert!(delivered, "MSIP 应被投递");
 		let raw = unsafe { &*msip_ptr }.load(Ordering::Acquire);
-		assert_eq!(raw & 1, 0, "投递后电平位 (bit 0) 必须清零");
-		assert_eq!(
-			raw >> 1,
-			3,
-			"投递后 edge counter (bits 7:1) 必须保留, 否则 Python 侧跨加速边界丢失 MSIP 跳变检测"
-		);
+		assert_eq!(raw, 0b111, "投递不得改变 msip 字节");
 	}
 
 	/// mideleg 的 bit 7 置位时, MTI 在 S 模式投递, 不投递到 M 模式: hart 处于 S 模式

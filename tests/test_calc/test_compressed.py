@@ -18,17 +18,29 @@ from tests.conftest import make_test_ram
 
 def _c0(funct3: int, rd_creg: int, rs1_creg: int, scatter: int) -> int:
     """构造 C0 象限指令 (低 2 位 = 00)."""
-    return ((funct3 & 0x7) << 13) | (scatter & 0x3FFF) | ((rd_creg & 0x7) << 2) | 0b00
+    return (
+        ((funct3 & 0x7) << 13)
+        | (scatter & 0x3FFF)
+        | ((rd_creg & 0x7) << 2)
+        | 0b00
+    )
 
 
 def _c1(funct3: int, rd: int, scatter: int) -> int:
     """构造 C1 象限指令 (低 2 位 = 01). rd 在 bits[11:7]."""
-    return ((funct3 & 0x7) << 13) | (scatter & 0x1FFF) | ((rd & 0x1F) << 7) | 0b01
+    return (
+        ((funct3 & 0x7) << 13) | (scatter & 0x1FFF) | ((rd & 0x1F) << 7) | 0b01
+    )
 
 
 def _c2(funct3: int, rd_rs1: int, scatter: int) -> int:
     """构造 C2 象限指令 (低 2 位 = 10). rd/rs1 在 bits[11:7]."""
-    return ((funct3 & 0x7) << 13) | (scatter & 0x1FFF) | ((rd_rs1 & 0x1F) << 7) | 0b10
+    return (
+        ((funct3 & 0x7) << 13)
+        | (scatter & 0x1FFF)
+        | ((rd_rs1 & 0x1F) << 7)
+        | 0b10
+    )
 
 
 # ============================================================
@@ -140,7 +152,13 @@ class TestCompressedC1:
             # 基本用例
             (10, 5, 3, _c2(0b000, 10, 3 << 2), 40),
             # RV64 6-bit shamt: shamt=48 -> shamt[5]=1, shamt[4:0]=16
-            (10, 0x1000, 48, _c2(0b000, 10, (16 << 2) | (1 << 12)), 0x1000_0000_0000_0000),
+            (
+                10,
+                0x1000,
+                48,
+                _c2(0b000, 10, (16 << 2) | (1 << 12)),
+                0x1000_0000_0000_0000,
+            ),
             # 回归: firmware fdt_ro_probe_ 0x07a2 (rd=a5, shamt=8)
             # 此前 bug 从 bit[7] 提取 shamt[5], 把 shamt=8 误算为 40
             (15, 0xFE, 8, 0x07A2, 0xFE00),
@@ -149,7 +167,13 @@ class TestCompressedC1:
             # shamt=31 (最大 5-bit shamt)
             (13, 1, 31, _c2(0b000, 13, 31 << 2), 0x80000000),
             # shamt=63 (最大 6-bit shamt): shamt[5]=1, shamt[4:0]=31
-            (12, 1, 63, _c2(0b000, 12, (31 << 2) | (1 << 12)), 0x80000000_00000000),
+            (
+                12,
+                1,
+                63,
+                _c2(0b000, 12, (31 << 2) | (1 << 12)),
+                0x80000000_00000000,
+            ),
         ],
     )
     def test_c_slli(self, rd, init, shamt, encoding, expected):
@@ -159,39 +183,51 @@ class TestCompressedC1:
         h.exec_instr(encoding)
         actual = h.gprs[rd]
         assert actual == expected, (
-            f"C.SLLI x{rd}, {shamt}: 0x{init:x} << {shamt} = 0x{expected:x}, got 0x{actual:x}"
+            f"C.SLLI x{rd}, {shamt}: 0x{init:x} << {shamt} = "
+            f"0x{expected:x}, got 0x{actual:x}"
         )
 
     def test_c_slli_high_reg_triggers_shamt5_bug(self):
-        """C.SLLI a5, 8: bit[7]=1 会触发错误 shamt[5] 提取 (此前 bug 算出 40)."""
+        """C.SLLI a5, 8: bit[7]=1 会触发错误 shamt[5] 提取
+        (此前 bug 算出 40)."""
         h = Hart(id=0)
         h.gprs[15] = 0xFE  # a5
         h.exec_instr(0x07A2)  # C.SLLI a5, 8
         assert h.gprs[15] == 0xFE00, f"a5 << 8 = 0xFE00, got 0x{h.gprs[15]:x}"
         # 验证寄存器没有高位污染 (若误移 40 位, 值会是 0xFE0000000000)
-        assert h.gprs[15] == 0xFE00, f"expected 0xFE00 (8-bit shift), got 0x{h.gprs[15]:x}"
+        assert h.gprs[15] == 0xFE00, (
+            f"expected 0xFE00 (8-bit shift), got 0x{h.gprs[15]:x}"
+        )
 
     def test_c_slli_chain_magic_assembly(self):
-        """模拟 fdt_ro_probe_ 的 FDT magic 拼装: slliw + slli + or + C.SLLI + C.OR + or."""
+        """模拟 fdt_ro_probe_ 的 FDT magic 拼装:
+        slliw + slli + or + C.SLLI + C.OR + or."""
         h = Hart(id=0)
         # a1 = (int32_t)((uint32_t)fdt[0] << 24)  -- slliw
         h.gprs[11] = 0xD0
         h.exec_instr(0x0185959B)  # slliw a1, a1, 24
-        assert h.gprs[11] & 0xFFFFFFFF == 0xD0000000, "slliw sign-extend from bit31"
+        assert h.gprs[11] & 0xFFFFFFFF == 0xD0000000, (
+            "slliw sign-extend from bit31"
+        )
         h.gprs[12] = 0x0D
         h.exec_instr(0x01061613)  # slli a2, a2, 16
         h.gprs[11] |= h.gprs[12]
         h.gprs[15] = 0xFE
         h.exec_instr(0x07A2)  # C.SLLI a5, 8
-        assert h.gprs[15] == 0xFE00, f"C.SLLI a5,8: expected 0xFE00, got 0x{h.gprs[15]:x}"
+        assert h.gprs[15] == 0xFE00, (
+            f"C.SLLI a5,8: expected 0xFE00, got 0x{h.gprs[15]:x}"
+        )
         h.gprs[13] = 0xED
         h.exec_instr(0x8EDD)  # C.OR a3, a5
-        assert h.gprs[13] == 0xFEED, f"C.OR a3,a5: expected 0xFEED, got 0x{h.gprs[13]:x}"
+        assert h.gprs[13] == 0xFEED, (
+            f"C.OR a3,a5: expected 0xFEED, got 0x{h.gprs[13]:x}"
+        )
         h.gprs[15] = h.gprs[11] | h.gprs[13]
         # 最终结果应匹配 FDT magic 0xD00DFEED
         expected = 0xFFFFFFFFD00DFEED
         assert h.gprs[15] == expected, (
-            f"Magic assembly: expected 0x{expected:016x}, got 0x{h.gprs[15]:016x}"
+            f"Magic assembly: expected 0x{expected:016x}, "
+            f"got 0x{h.gprs[15]:016x}"
         )
 
     # -- C.ADDI16SP (funct3=011, rd=2) --
@@ -289,8 +325,10 @@ class TestCompressedC0:
         "rd_creg, imm, expected_reg",
         [
             (0, 16, 8),  # nzuimm=16: [5:4]=01,[9:6]=0000,[3]=0,[2]=0
-            (0, 20, 8),  # nzuimm[3:2]=01  -> instr[5]=0,instr[6]=1  (bit swap 可检出)
-            (0, 24, 8),  # nzuimm[3:2]=10  -> instr[5]=1,instr[6]=0  (bit swap 可检出)
+            # nzuimm[3:2]=01 时 instr[5]=0, instr[6]=1, 位交换可检出
+            (0, 20, 8),
+            # nzuimm[3:2]=10 时 instr[5]=1, instr[6]=0, 位交换可检出
+            (0, 24, 8),
             (0, 28, 8),  # nzuimm[3:2]=11  -> instr[5]=1,instr[6]=1
             (1, 36, 9),  # rd=s1, nzuimm=36: [3:2]=01
             (6, 44, 14),  # rd=a5, nzuimm=44: [3:2]=11
@@ -317,7 +355,8 @@ class TestCompressedC0:
         hart.mem_write_phy(0x8008, test_val.to_bytes(4, "little"))
         hart.gprs[10] = 0x8000
         # uimm=8: [6]=0,[5:3]=001,[2]=0
-        # bits: [12:10]=001, [9:7]=010(rs1'=x10), [6]=0, [5]=0, [4:2]=000(rd'=x8)
+        # bits: [12:10]=001, [9:7]=010(rs1'=x10), [6]=0, [5]=0,
+        # [4:2]=000(rd'=x8)
         scatter = (1 << 10) | (2 << 7) | (0 << 6) | (0 << 5)
         instr = _c0(0b010, 0, 0, scatter)
         hart.exec_instr(instr)
@@ -378,7 +417,8 @@ class TestCompressedC0:
         instr = (0b011 << 13) | (2 << 10) | (4 << 7) | (2 << 5) | (6 << 2)
         hart.exec_instr(instr)
         assert hart.gprs[14] == test_val, (
-            f"偏移 144 的 C.LD: 期望 0x{test_val:016x}, 得到 0x{hart.gprs[14]:016x}"
+            f"偏移 144 的 C.LD: 期望 0x{test_val:016x}, "
+            f"得到 0x{hart.gprs[14]:016x}"
         )
 
     def test_c_sd_vs_c_sw_bit_layout(self, hart):
@@ -389,9 +429,12 @@ class TestCompressedC0:
         hart.gprs[12] = 0xAAAA
         instr_sd = (0b111 << 13) | (1 << 10) | (2 << 7) | (3 << 5) | (4 << 2)
         hart.exec_instr(instr_sd)
-        val_at_200 = int.from_bytes(hart.mem_read_phy(0x8000 + 200, 8), "little")
+        val_at_200 = int.from_bytes(
+            hart.mem_read_phy(0x8000 + 200, 8), "little"
+        )
         assert val_at_200 == 0xAAAA, (
-            f"C.SD 应在偏移 200, 实际写了偏移 {200 if val_at_200 == 0xAAAA else '?'}"
+            f"C.SD 应在偏移 200, "
+            f"实际写了偏移 {200 if val_at_200 == 0xAAAA else '?'}"
         )
 
         # C.SW: 相同 scatter, funct3=110 — 应计算出不同偏移 (uimm[2] 非零)
@@ -399,8 +442,13 @@ class TestCompressedC0:
         instr_sw = (0b110 << 13) | (1 << 10) | (2 << 7) | (3 << 5) | (4 << 2)
         hart.exec_instr(instr_sw)
         # = 1<<6 | 1<<3 | 1<<2 = 64 + 8 + 4 = 76
-        val_at_76 = int.from_bytes(hart.mem_read_phy(0x8000 + 76, 4), "little") & 0xFFFF_FFFF
-        assert val_at_76 == 0xBBBB, "C.SW 与 C.SD 应有不同偏移: C.SW->76, 实际写了偏移 ?"
+        val_at_76 = (
+            int.from_bytes(hart.mem_read_phy(0x8000 + 76, 4), "little")
+            & 0xFFFF_FFFF
+        )
+        assert val_at_76 == 0xBBBB, (
+            "C.SW 与 C.SD 应有不同偏移: C.SW->76, 实际写了偏移 ?"
+        )
         # 确认 C.SD 的偏移 200 处没有被 C.SW 覆写
         val_still = int.from_bytes(hart.mem_read_phy(0x8000 + 200, 8), "little")
         assert val_still == 0xAAAA, "C.SW 不应覆写 C.SD 的偏移 200 位置"
@@ -437,7 +485,14 @@ class TestCompressedC2:
         # C.LDSP: funct3=011, uimm=8, rd=10
         # uimm=8: imm[5]=0, imm[4:3]=01, imm[8:6]=000
         # bit[12]=0, bits[6:5]=01, bits[4:2]=000
-        instr = (0b011 << 13) | (0 << 12) | (10 << 7) | (0b01 << 5) | (0b000 << 2) | 0b10
+        instr = (
+            (0b011 << 13)
+            | (0 << 12)
+            | (10 << 7)
+            | (0b01 << 5)
+            | (0b000 << 2)
+            | 0b10
+        )
         hart.exec_instr(instr)
         assert hart.gprs[10] == test_val
 
@@ -469,11 +524,13 @@ class TestCompressedC2:
         test_val = 0x12345678
         hart.mem_write_phy(0x8000 + 40, test_val.to_bytes(4, "little"))
         # C.LWSP x10, 40(sp): encoding 0x5522 (llvm-mc verified)
-        # Spec: instr[3:2]=uimm[7:6]=00, instr[12]=uimm[5]=1, instr[6:4]=uimm[4:2]=010
+        # Spec: instr[3:2]=uimm[7:6]=00, instr[12]=uimm[5]=1,
+        # instr[6:4]=uimm[4:2]=010
         instr = 0x5522
         hart.exec_instr(instr)
         assert hart.gprs[10] == test_val, (
-            f"偏移 40 的 C.LWSP: 期望 0x{test_val:08x}, 得到 0x{hart.gprs[10]:08x}"
+            f"偏移 40 的 C.LWSP: 期望 0x{test_val:08x}, "
+            f"得到 0x{hart.gprs[10]:08x}"
         )
 
     def test_c_ldsp_large_offset(self, hart):
@@ -486,7 +543,8 @@ class TestCompressedC2:
         instr = (0b011 << 13) | (1 << 12) | (10 << 7) | (0b01 << 5) | 0b10
         hart.exec_instr(instr)
         assert hart.gprs[10] == test_val, (
-            f"偏移 40 的 C.LDSP: 期望 0x{test_val:016x}, 得到 0x{hart.gprs[10]:016x}"
+            f"偏移 40 的 C.LDSP: 期望 0x{test_val:016x}, "
+            f"得到 0x{hart.gprs[10]:016x}"
         )
 
     def test_c_sdsp_large_offset(self, hart):
@@ -552,17 +610,33 @@ class TestCompressedC2:
         hart.gprs[14] = 0x3E8
         # C.SUB: C1, funct3=4, bit12=0, bits[11:10]=11, bits[6:5]=00
         # rd/rs1=x15 (3-bit=7), rs2=x14 (3-bit=6)
-        instr = (0b100 << 13) | (0b11 << 10) | (7 << 7) | (0b00 << 5) | (6 << 2) | 0b01
+        instr = (
+            (0b100 << 13)
+            | (0b11 << 10)
+            | (7 << 7)
+            | (0b00 << 5)
+            | (6 << 2)
+            | 0b01
+        )
         hart.exec_instr(instr)
         expected = (0x804E0 - 0x3E8) & 0xFFFF_FFFF_FFFF_FFFF
-        assert hart.gprs[15] == expected, f"C.SUB: {hart.gprs[15]:#x} != {expected:#x}"
+        assert hart.gprs[15] == expected, (
+            f"C.SUB: {hart.gprs[15]:#x} != {expected:#x}"
+        )
 
     def test_c_or(self, hart):
         """C.OR x15, x14 -> x15 |= x14 (RV64C sf=3, bits[6:5]=10)."""
         hart.gprs[15] = 0xF0
         hart.gprs[14] = 0x0F
         # C.OR: C1, funct3=4, bit12=0, bits[11:10]=11, bits[6:5]=10
-        instr = (0b100 << 13) | (0b11 << 10) | (7 << 7) | (0b10 << 5) | (6 << 2) | 0b01
+        instr = (
+            (0b100 << 13)
+            | (0b11 << 10)
+            | (7 << 7)
+            | (0b10 << 5)
+            | (6 << 2)
+            | 0b01
+        )
         hart.exec_instr(instr)
         expected = (0xF0 | 0x0F) & 0xFFFF_FFFF_FFFF_FFFF
         assert hart.gprs[15] == expected
@@ -585,11 +659,19 @@ class TestCompressedC2:
         hart.gprs[15] = 0x8000000000140000
         # 构造一条 bit7=1 但 bit12=0 的 C.SRLI: shamt 应 = bits[6:2] = 7
         # (旧 bug: 使用 bit7 作为 shamt[5] 会得到 shamt=7|32=39)
-        instr = (0b100 << 13) | (0b00 << 10) | (7 << 7) | (1 << 7) | (0b00111 << 2) | 0b01
+        instr = (
+            (0b100 << 13)
+            | (0b00 << 10)
+            | (7 << 7)
+            | (1 << 7)
+            | (0b00111 << 2)
+            | 0b01
+        )
         hart.exec_instr(instr)
         expected = 0x8000000000140000 >> 7
         assert hart.gprs[15] == expected, (
-            f"bit7 被错误当作 shamt[5]: 期望 0x{expected:016x}, 实际 0x{hart.gprs[15]:016x}"
+            f"bit7 被错误当作 shamt[5]: 期望 0x{expected:016x}, "
+            f"实际 0x{hart.gprs[15]:016x}"
         )
 
     def test_c_andi_sf2_encoding(self, hart):
@@ -599,35 +681,49 @@ class TestCompressedC2:
         instr = (0b100 << 13) | (0b010 << 10) | (7 << 7) | (0b00001 << 2) | 0b01
         hart.exec_instr(instr)
         # 0x0100000000002800 & 1 = 0
-        assert hart.gprs[15] == 0, f"C.ANDI sf=2 编码错误: 期望 0, 实际 0x{hart.gprs[15]:x}"
+        assert hart.gprs[15] == 0, (
+            f"C.ANDI sf=2 编码错误: 期望 0, 实际 0x{hart.gprs[15]:x}"
+        )
 
     def test_c_srli_then_c_andi_chain(self, hart):
         """组合 srli+andi 提取 misa H-bit: 完整模拟 _start_warm 的检测逻辑."""
         # 模拟 misa = 0x8000000000140000 (H-bit=0)
         hart.gprs[15] = 0x8000000000140000
         # C.SRLI x15, 7
-        instr_srli = (0b100 << 13) | (0b00 << 10) | (7 << 7) | (0b00111 << 2) | 0b01
+        instr_srli = (
+            (0b100 << 13) | (0b00 << 10) | (7 << 7) | (0b00111 << 2) | 0b01
+        )
         hart.exec_instr(instr_srli)
         # 验证移位结果
         assert hart.gprs[15] == 0x0100000000002800, "C.SRLI 64-bit 移位错误"
         # C.ANDI x15, 1
-        instr_andi = (0b100 << 13) | (0b010 << 10) | (7 << 7) | (0b00001 << 2) | 0b01
+        instr_andi = (
+            (0b100 << 13) | (0b010 << 10) | (7 << 7) | (0b00001 << 2) | 0b01
+        )
         hart.exec_instr(instr_andi)
         # H-bit=0 -> 结果应为 0
-        assert hart.gprs[15] == 0, f"misa H-bit 检测失败: 期望 0, 实际 0x{hart.gprs[15]:x}"
+        assert hart.gprs[15] == 0, (
+            f"misa H-bit 检测失败: 期望 0, 实际 0x{hart.gprs[15]:x}"
+        )
 
     def test_c_srli_then_c_andi_h_ext_present(self, hart):
         """misa H-bit=1 场景: srli+andi 正确提取置位的 H 位."""
         # 模拟 misa bit7=1 (H 扩展存在)
         hart.gprs[15] = 0x8000000000140080  # bit7=1
         # C.SRLI x15, 7
-        instr_srli = (0b100 << 13) | (0b00 << 10) | (7 << 7) | (0b00111 << 2) | 0b01
+        instr_srli = (
+            (0b100 << 13) | (0b00 << 10) | (7 << 7) | (0b00111 << 2) | 0b01
+        )
         hart.exec_instr(instr_srli)
         # C.ANDI x15, 1
-        instr_andi = (0b100 << 13) | (0b010 << 10) | (7 << 7) | (0b00001 << 2) | 0b01
+        instr_andi = (
+            (0b100 << 13) | (0b010 << 10) | (7 << 7) | (0b00001 << 2) | 0b01
+        )
         hart.exec_instr(instr_andi)
         # H-bit=1 -> 结果应为 1
-        assert hart.gprs[15] == 1, f"H-bit=1 检测失败: 期望 1, 实际 {hart.gprs[15]}"
+        assert hart.gprs[15] == 1, (
+            f"H-bit=1 检测失败: 期望 1, 实际 {hart.gprs[15]}"
+        )
 
     # -- C2 reserved encodings (rd=0 for GPR loads) --
 
@@ -639,12 +735,14 @@ class TestCompressedC2:
         # 0x2072: C.FLDSP ft0, 280(sp) — libc 中实际出现的编码
         advance = hart.exec_instr(0x2072)
         assert advance == 2, "C.FLDSP ft0 应正常完成, 不应陷态"
-        assert hart._fpr_bits[0] == test_val, (
-            f"C.FLDSP ft0: 期望 0x{test_val:016x}, 得到 0x{hart._fpr_bits[0]:016x}"
+        assert hart.fpr_bits[0] == test_val, (
+            f"C.FLDSP ft0: 期望 0x{test_val:016x}, "
+            f"得到 0x{hart.fpr_bits[0]:016x}"
         )
 
     def test_c_lwsp_rd0_traps(self, hart):
-        """C.LWSP rd=0 是保留编码 (x0 不可做 load 目标), 必须触发 IllInstr 陷态."""
+        """C.LWSP rd=0 是保留编码 (x0 不可做 load 目标),
+        必须触发 IllInstr 陷态."""
         hart.csrs["mtvec"].val = 0x80000000
         # _c2(0b010, 0, 0x22): C.LWSP rd=0, uimm=8
         instr = _c2(0b010, 0, 0x22)
@@ -698,16 +796,23 @@ class TestFdtProbeScenario:
         h.gprs[1] = 0xCAFE  # ra
 
         # C.ADDI16SP sp, -112
-        # 编码 per RISC-V spec: nzimm[9:4] = nzimm[9]=bit12, nzimm[8:7]=bits[4:3],
-        # nzimm=-7 (0b111001 6-bit signed): bit12=1,bits[4:3]=0b11,bit5=0,bit2=0,bit6=1
-        addi16sp = _c1(0b011, 2, (1 << 12) | (0b11 << 3) | (0 << 5) | (0 << 2) | (1 << 6))
+        # 按 RISC-V 规范编码: nzimm[9:4] = nzimm[9]=bit12, nzimm[8:7]=bits[4:3],
+        # nzimm=-7 (0b111001 6-bit signed): bit12=1, bits[4:3]=0b11,
+        # bit5=0, bit2=0, bit6=1
+        addi16sp = _c1(
+            0b011,
+            2,
+            (1 << 12) | (0b11 << 3) | (0 << 5) | (0 << 2) | (1 << 6),
+        )
         h.exec_instr(addi16sp)
         assert h.gprs[2] == sp_top - 112, f"sp 偏移错误: {h.gprs[2]:#x}"
 
         # sd ra, 104(sp) — 手工 STORE 指令
         h.exec_instr(_make_sd(1, 2, 104))
         base = sp_top - 112
-        saved = int.from_bytes(bytes(ram[base + 104 : base + 112]), "little", signed=False)
+        saved = int.from_bytes(
+            bytes(ram[base + 104 : base + 112]), "little", signed=False
+        )
         assert saved == 0xCAFE, f"ra 未保存: {saved:#x}"
 
         # ld ra, 104(sp) — 手工 LOAD 指令
@@ -728,7 +833,11 @@ class TestFdtProbeScenario:
         h.gprs[19] = 0x87FF0000  # s3 = FDT (imafdc 用 s3 而非 s1)
 
         # C.ADDI16SP sp, -112
-        addi16sp = _c1(0b011, 2, (1 << 12) | (0b11 << 3) | (0 << 5) | (0 << 2) | (1 << 6))
+        addi16sp = _c1(
+            0b011,
+            2,
+            (1 << 12) | (0b11 << 3) | (0 << 5) | (0 << 2) | (1 << 6),
+        )
         h.exec_instr(addi16sp)
 
         # 保存 s0, s1, s3
@@ -957,9 +1066,11 @@ class TestCompressedFpAndReserved:
 
     def test_c_fld(self, hart):
         hart.mstatus_val |= FS_ON
-        hart.mem_write_phy(0x1000, (0x0123_4567_89AB_CDEF).to_bytes(8, "little"))
+        hart.mem_write_phy(
+            0x1000, (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        )
         hart.exec_instr(_c0(0b001, 0, 0, 0))
-        assert hart._fpr_bits[8] == 0x0123_4567_89AB_CDEF
+        assert hart.fpr_bits[8] == 0x0123_4567_89AB_CDEF
 
     def test_c_fld_marks_fs_dirty(self, hart):
         hart.mstatus_val = FS_ON
@@ -972,9 +1083,11 @@ class TestCompressedFpAndReserved:
 
     def test_c_fsd(self, hart):
         hart.mstatus_val |= FS_ON
-        hart._fpr_bits[8] = 0x0123_4567_89AB_CDEF
+        hart.fpr_bits[8] = 0x0123_4567_89AB_CDEF
         hart.exec_instr(_c0(0b101, 0, 0, 0))
-        assert hart.mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        assert hart.mem_read_phy(0x1000, 8) == (
+            (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        )
 
     def test_c_fsd_disabled(self, hart):
         _assert_ill_instr(hart, _c0(0b101, 0, 0, 0))
@@ -983,11 +1096,14 @@ class TestCompressedFpAndReserved:
         _assert_ill_instr(hart, _c2(0b001, 8, 0))
 
     def test_c_fsdsp(self, hart):
-        # bits[6:2] 为 rs2, 取值 8 选取 f8; uimm 由 bits[9:7] 与 bits[12:10] 构成, 全零.
+        # bits[6:2] 为 rs2, 取值 8 选取 f8; uimm 由 bits[9:7] 与
+        # bits[12:10] 构成, 全零.
         hart.mstatus_val |= FS_ON
-        hart._fpr_bits[8] = 0x0123_4567_89AB_CDEF
+        hart.fpr_bits[8] = 0x0123_4567_89AB_CDEF
         hart.exec_instr(_c2(0b101, 0, 8 << 2))
-        assert hart.mem_read_phy(0x1000, 8) == (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        assert hart.mem_read_phy(0x1000, 8) == (
+            (0x0123_4567_89AB_CDEF).to_bytes(8, "little")
+        )
 
     def test_c_fsdsp_disabled(self, hart):
         _assert_ill_instr(hart, _c2(0b101, 8, 0))

@@ -35,6 +35,7 @@ from pyremu.debug.types import HartSnapshot, ImageKind, MemWriteTracker
 from pyremu.debug.utils import hex_addr, read_va_bytes
 from pyremu.emulator import Emulator, RunStopReason, TimeoutError
 from pyremu.env_inject import Preloader
+from pyremu.peripheral.power_ctrl import PowerRequest
 from pyremu.utils.mask import mask64
 from pyremu.utils.parse_bin import FirmwareImage
 
@@ -118,7 +119,8 @@ class ExecutionOps(SharedAttrs):
         """执行一条指令并保存快照 (供后续回滚)."""
         h = self.hart
 
-        if h._halted:
+        # 关机或复位请求置位后不再执行指令, 原因由 cmd_step 报告.
+        if self._emu.power_request is not None or h._halted:
             return
 
         if h._waiting:
@@ -137,7 +139,11 @@ class ExecutionOps(SharedAttrs):
             pc_before = h.pc
             raw = read_va_bytes(self._emu.bus, h, h.pc, 4)
             if raw is None:
-                h.deliver_trap(TrapType.InstrPageFault, tval=h.pc, is_interrupt=False)
+                h.deliver_trap(
+                    TrapType.InstrPageFault,
+                    tval=h.pc,
+                    is_interrupt=False,
+                )
                 return
             instr = int.from_bytes(raw, "little", signed=False)
 
@@ -147,7 +153,11 @@ class ExecutionOps(SharedAttrs):
             try:
                 advance = h.exec_instr(instr)
             except NotImplementedError:
-                h.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
+                h.deliver_trap(
+                    TrapType.IllInstr,
+                    tval=instr,
+                    is_interrupt=False,
+                )
                 advance = 0
             if advance != 0 and h.pc == pc_before:
                 h.pc = mask64((h.pc + advance))
@@ -289,6 +299,16 @@ class ExecutionOps(SharedAttrs):
         if self._emu._native_stop_flag.value != 0:
             # Ctrl+Q 事件 — 全部 hart 已暂停, 消费标志后回到 REPL.
             self._emu._native_stop_flag.value = 0
+        if reason == RunStopReason.SHUTDOWN:
+            self._console.print(
+                "[dim]受调试程序请求关机 — 执行停止; 用 restart 重新运行[/]"
+            )
+            return False
+        if reason == RunStopReason.REBOOT:
+            self._console.print(
+                "[dim]受调试程序请求复位 — 执行停止; 用 restart 重新运行[/]"
+            )
+            return False
         if reason == RunStopReason.BREAKPOINT:
             if self._check_multi_hart_bp(include_addr=True):
                 return False
@@ -308,6 +328,12 @@ class ExecutionOps(SharedAttrs):
     #  运行命令
     # ----------------------------------------------------------
 
+    @staticmethod
+    def _power_request_message(request: PowerRequest) -> str:
+        """关机或复位请求置位时的提示文本."""
+        what = "关机" if request is PowerRequest.SHUTDOWN else "复位"
+        return f"受调试程序已请求{what}, 不再执行指令; 用 restart 重新运行"
+
     def cmd_step(self, count: int = 1) -> None:
         """单步或多步执行.
 
@@ -317,6 +343,10 @@ class ExecutionOps(SharedAttrs):
         """
         if count <= 0:
             self._err("步数须 > 0")
+            return
+        request = self._emu.power_request
+        if request is not None:
+            self._warn(self._power_request_message(request))
             return
         self._hart_paused.clear()
 
@@ -345,7 +375,9 @@ class ExecutionOps(SharedAttrs):
             if h._halted or h._waiting:
                 continue
             for bp in self._breakpoints:
-                if not (bp.kind == "addr" and self._bp_match_pc(h, h.pc, bp.value)):
+                if not (
+                    bp.kind == "addr" and self._bp_match_pc(h, h.pc, bp.value)
+                ):
                     continue
                 if bp not in bps_to_skip:
                     bps_to_skip.append(bp)
@@ -357,7 +389,9 @@ class ExecutionOps(SharedAttrs):
             self._breakpoints.remove(bp)
         # 同步更新 _bp_addrs, 否则 Rust 引擎仍会命中已移除的断点
         saved_bp_addrs = self._emu._bp_addrs
-        self._emu._bp_addrs = [a for a in saved_bp_addrs if a not in bp_values_to_skip]
+        self._emu._bp_addrs = [
+            a for a in saved_bp_addrs if a not in bp_values_to_skip
+        ]
         # 纯 Python 单步 (emu.step 全 hart 各一条) 精确跳过断点处指令,
         # 恢复断点后继续连续执行.
         try:
@@ -376,6 +410,10 @@ class ExecutionOps(SharedAttrs):
         self._run_loop()
 
     def cmd_run(self, n: int = 1) -> None:
+        request = self._emu.power_request
+        if request is not None:
+            self._warn(self._power_request_message(request))
+            return
         self._console.print(f"[dim]执行 {n} 条指令...[/]")
         self._hart_paused.clear()
         for _ in range(n):
@@ -412,6 +450,9 @@ class ExecutionOps(SharedAttrs):
         for i in range(cfg.num_harts):
             emu.clint._mtimecmp[i] = 0
             emu.clint._msip[i] = 0
+        # 撤销关机或复位请求, 否则新一轮运行在第一条指令之前就停止.
+        if emu.power_ctrl is not None:
+            emu.power_ctrl.clear_request()
 
         emu.harts = []
         attrs = RatifiedHartAttrs.from_platform(cfg.pmp_entries, cfg.isa)
@@ -459,7 +500,9 @@ class ExecutionOps(SharedAttrs):
                 preload_image.path, addr=preload_image.start
             )
             for h in emu.harts:
-                h.csrs["misa"].val = (2 << 62) | (1 << 18) | (1 << 20)  # MXL=RV64 + S + U
+                h.csrs["misa"].val = (
+                    (2 << 62) | (1 << 18) | (1 << 20)
+                )  # MXL=RV64 + S + U
                 h.csrs["mscratch"].val = cfg.ram_base + cfg.ram_size - 0x100000
             for h in emu.harts:
                 h.pc = preload_entry

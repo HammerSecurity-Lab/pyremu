@@ -111,9 +111,9 @@ pub unsafe extern "C" fn trap_dispatch(
 	hang::fault_halt_exc(gprs, scause, stval, sepc);
 }
 
-/// 将 U 模式同步异常 scause 换算为进程收到该异常时的默认信号编号 (Linux 语义),
-/// 使自毁退出码 128+sig 与真实 Linux 下同缺陷进程的退出码一致 (如 NULL 解引用
-/// 触发页错误, SIGSEGV=11, 退出码 139), 便于可信应用管理器按退出码推断故障类型。
+/// 将 U 模式同步异常 scause 换算为进程收到该异常时的默认信号编号,
+/// 使自毁退出码 128+sig 与真实 Linux 下同缺陷进程的退出码一致, 如 NULL 解引用
+/// 触发页错误, SIGSEGV=11, 退出码 139, 便于可信应用管理器按退出码推断故障类型。
 fn user_fault_signal(cause: u64) -> u64 {
 	match cause {
 		// 取指/访存地址错位
@@ -122,7 +122,7 @@ fn user_fault_signal(cause: u64) -> u64 {
 		0x2 => 4, // SIGILL
 		// 断点
 		0x3 => 5, // SIGTRAP
-		// 访问错误与三类页错误 (取指/读/写) 归并到段错误
+		// 访问错误与三类页错误并到段错误
 		_ => 11, // SIGSEGV
 	}
 }
@@ -147,18 +147,12 @@ pub fn get_trap_reason(cause: u64) -> &'static str {
 	}
 }
 
-// ---------------------------------------------------------------
 //  系统调用, 后续可按需扩展 syscall 号
-// ---------------------------------------------------------------
-
 fn syscall_dispatch(gprs: &mut TrapGprs) -> u64 {
 	syscall::syscall_handler(gprs)
 }
 
-// ---------------------------------------------------------------
 //  中断, 当前仅 timer
-// ---------------------------------------------------------------
-
 /// S 模式中断的原因编号, 取 `scause` 去掉最高位后的值。
 enum InterruptCause {
 	/// 监督级软件中断 (SSI): M 模式注入 `sip.SSIP`, 通知有 host 请求待处理。
@@ -192,7 +186,7 @@ fn interrupt_dispatch(cause: Option<InterruptCause>) {
 			sched::check_pending_requests();
 		}
 		Some(InterruptCause::SupervisorTimer) => {
-			// 定时器中断 — 重设定时器截止时间并记录当前时间片.
+			// 重设定时器截止时间并记录当前时间片.
 			let now: u64;
 			unsafe {
 				core::arch::asm!("csrr {0}, time", out(reg) now);

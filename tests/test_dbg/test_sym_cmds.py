@@ -63,7 +63,9 @@ def _make_sym_dbg():
 
     Debugger 构造时把当前工作目录取作模块目录, 用例置空以免列出真实目录.
     """
-    dbg, _emu, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, is_code_loaded=False)
+    dbg, _emu, buf = make_test_dbg_buffered(
+        ram_size=RAM_SIZE, is_code_loaded=False
+    )
     dbg._sym_mod_dir = None
     return dbg, buf
 
@@ -108,7 +110,9 @@ class TestChdirAndLs:
         assert dbg._sym_avail_items == []
         assert "候选目录设为" in buf.getvalue()
 
-    @pytest.mark.parametrize("target", ["..", "../../../../../../", "~", "build/elf"])
+    @pytest.mark.parametrize(
+        "target", ["..", "../../../../../../", "~", "build/elf"]
+    )
     def test_chdir_rejects_relative_path(self, target):
         """候选目录只接受绝对路径: 相对路径既不登记, 也不清空既有候选清单."""
         dbg, buf = _make_sym_dbg()
@@ -185,7 +189,9 @@ class TestChdirAndLs:
         dbg.cmd_sym("ls")
         assert "中没有普通文件" in buf.getvalue()
 
-    def test_unreadable_file_is_listed_as_unreadable(self, tmp_path, monkeypatch):
+    def test_unreadable_file_is_listed_as_unreadable(
+        self, tmp_path, monkeypatch
+    ):
         target = tmp_path / "secret.elf"
         target.write_bytes(b"\x00")
         monkeypatch.setattr(cmd_files, "is_file_readable", lambda path: False)
@@ -256,7 +262,9 @@ class TestLoadCommand:
             ("#1 pa:-1", "-1", None),
         ],
     )
-    def test_load_rejects_invalid_selection(self, tmp_path, arguments, expected, prepare):
+    def test_load_rejects_invalid_selection(
+        self, tmp_path, arguments, expected, prepare
+    ):
         dbg, buf = _make_sym_dbg()
         target = self._candidate(dbg, tmp_path)
         if prepare is not None:
@@ -274,7 +282,9 @@ class TestLoadCommand:
         dbg.cmd_sym("load #1")
         assert "文件不可读" in buf.getvalue()
 
-    def test_load_rejects_file_that_became_unreadable(self, tmp_path, monkeypatch):
+    def test_load_rejects_file_that_became_unreadable(
+        self, tmp_path, monkeypatch
+    ):
         dbg, buf = _make_sym_dbg()
         self._candidate(dbg, tmp_path)
         monkeypatch.setattr(cmd_files, "is_file_readable", lambda path: False)
@@ -293,7 +303,9 @@ class TestLoadCommand:
         dbg.cmd_sym("load #1 pa:10")
         assert recorded == {"space": "pa", "base": 0x10}
 
-    def test_load_by_number_forwards_address_and_registers(self, tmp_path, monkeypatch):
+    def test_load_by_number_forwards_address_and_registers(
+        self, tmp_path, monkeypatch
+    ):
         dbg, buf = _make_sym_dbg()
         target = self._candidate(dbg, tmp_path)
         recorded = {}
@@ -305,11 +317,17 @@ class TestLoadCommand:
 
         monkeypatch.setattr(cmd_files.loader, "load_symbol_module", fake_load)
         dbg.cmd_sym("load #1 va:0x40000000")
-        assert recorded == {"path": str(target), "space": "va", "base": 0x4000_0000}
+        assert recorded == {
+            "path": str(target),
+            "space": "va",
+            "base": 0x4000_0000,
+        }
         assert dbg._sym_mods == [mod] and dbg._pa_to_va[RAM_BASE] == 0x4000_0000
         assert "模块序号 1" in buf.getvalue()
 
-    def test_load_by_name_uses_link_address_by_default(self, tmp_path, monkeypatch):
+    def test_load_by_name_uses_link_address_by_default(
+        self, tmp_path, monkeypatch
+    ):
         dbg, _ = _make_sym_dbg()
         self._candidate(dbg, tmp_path)
         recorded = {}
@@ -325,7 +343,9 @@ class TestLoadCommand:
     def test_load_failure_does_not_register(self, tmp_path, monkeypatch):
         dbg, _ = _make_sym_dbg()
         self._candidate(dbg, tmp_path)
-        monkeypatch.setattr(cmd_files.loader, "load_symbol_module", lambda *args: None)
+        monkeypatch.setattr(
+            cmd_files.loader, "load_symbol_module", lambda *args: None
+        )
         dbg.cmd_sym("load #1")
         assert dbg._sym_mods == []
 
@@ -380,7 +400,9 @@ class TestModuleCommands:
         dbg._sym_mods.append(_mod(index=_FakeIndex(), is_verified=False))
         dbg.cmd_sym("detail")
         text = buf.getvalue()
-        assert "符号模块" in text and "未校验" in text and "/tmp/app.elf" in text
+        assert (
+            "符号模块" in text and "未校验" in text and "/tmp/app.elf" in text
+        )
 
     def test_detail_shows_both_bases(self):
         dbg, buf = _make_sym_dbg()
@@ -481,7 +503,10 @@ class TestModuleCommands:
         assert "/tmp/vmlinux" in text and "符号模块: 1 个" in text
 
     def test_base_text_marks_unknown_bases(self):
-        assert cmd_modules._base_text(_mod(pa_base=None, va_base=0x1000)) == "va 0x1000"
+        assert (
+            cmd_modules._base_text(_mod(pa_base=None, va_base=0x1000))
+            == "va 0x1000"
+        )
         assert cmd_modules._base_text(_mod(pa_base=None, va_base=None)) == "-"
 
 
@@ -514,7 +539,10 @@ class TestRegistry:
         dbg._sym_mods.append(_mod(path=str(tmp_path / "app.elf")))
         found = registry.find_module_by_path(dbg, str(tmp_path / "app.elf"))
         assert found is not None
-        assert registry.find_module_by_path(dbg, str(tmp_path / "other.elf")) is None
+        assert (
+            registry.find_module_by_path(dbg, str(tmp_path / "other.elf"))
+            is None
+        )
 
     def test_remove_legacy_modules_keeps_verified_modules(self, tmp_path):
         dbg, _ = _make_sym_dbg()
@@ -529,7 +557,9 @@ class TestRegistry:
         mod = _mod(verify_epoch=0)
         dbg._sym_mods.append(mod)
         dbg._instr_count = 1
-        monkeypatch.setattr(registry.loader, "verify_module", lambda *args: False)
+        monkeypatch.setattr(
+            registry.loader, "verify_module", lambda *args: False
+        )
         registry.refresh_modules(dbg)
         assert not mod.is_valid
         registry.refresh_modules(dbg)
@@ -556,7 +586,9 @@ class TestRegistry:
         mod = _mod(verify_epoch=0)
         dbg._sym_mods.append(mod)
         dbg._instr_count = 5
-        monkeypatch.setattr(registry.loader, "verify_module", lambda *args: True)
+        monkeypatch.setattr(
+            registry.loader, "verify_module", lambda *args: True
+        )
         registry.refresh_modules(dbg)
         assert mod.is_valid
         assert mod.verify_epoch == 5
@@ -566,7 +598,9 @@ class TestRegistry:
         valid = _mod()
         invalid = _mod(is_verified=True, is_valid=False)
         dbg._sym_mods.extend([valid, invalid])
-        monkeypatch.setattr(registry.loader, "verify_module", lambda *args: True)
+        monkeypatch.setattr(
+            registry.loader, "verify_module", lambda *args: True
+        )
         assert registry.lookup_modules(dbg) == [valid]
 
 
@@ -618,7 +652,9 @@ class TestQuotedArguments:
         assert cmd_files.QUOTE_HINT in buf.getvalue()
         assert dbg._sym_mods == []
 
-    def test_two_token_name_without_prefix_reports_address_usage(self, tmp_path):
+    def test_two_token_name_without_prefix_reports_address_usage(
+        self, tmp_path
+    ):
         dbg, buf, _target = self._named_candidate(tmp_path, "has space.elf")
         dbg.cmd_sym("load has space.elf")
         assert cmd_files.ADDR_USAGE in buf.getvalue()
@@ -701,7 +737,11 @@ class TestSymDispatch:
 
         monkeypatch.setattr(cmd_files.loader, "load_symbol_module", fake_load)
         dbg._dispatch(["sym", "load", "#1", "pa:0x80000000"])
-        assert recorded == {"path": str(target), "space": "pa", "base": RAM_BASE}
+        assert recorded == {
+            "path": str(target),
+            "space": "pa",
+            "base": RAM_BASE,
+        }
 
     def test_dispatch_uses_repl_rest_text(self, tmp_path, monkeypatch):
         target = tmp_path / "has space.elf"

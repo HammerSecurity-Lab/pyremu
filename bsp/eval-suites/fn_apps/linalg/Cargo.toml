@@ -1,0 +1,15 @@
+[package]
+name = "linalg"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# 矩阵维数互斥配置选项; 均未选择时默认取 2400.
+2mib = []
+4mib = []
+8mib = []
+16mib = []
+
+[dependencies]
+nalgebra = "0.34"

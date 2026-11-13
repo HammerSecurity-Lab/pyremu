@@ -17,7 +17,12 @@ import struct
 
 from pyremu.disk.base import DiskFormatError, DiskRegion, DiskSummary
 from pyremu.utils.mask import is_power_of_two_in
-from pyremu.utils.str_aux import bytes_to_utf8, flag_names, join_names, uuid_text
+from pyremu.utils.str_aux import (
+    bytes_to_utf8,
+    flag_names,
+    join_names,
+    uuid_text,
+)
 
 FORMAT_NAME = "btrfs"
 
@@ -91,10 +96,15 @@ class BtrfsSuperblock:
             ("节点大小", f"{self.nodesize} B"),
             ("条带大小", f"{self.stripesize} B"),
             ("校验和类型", _csum_name(self.csum_type)),
-            ("compat 特性", join_names(flag_names(self.compat_flags, COMPAT_FEATURES))),
+            (
+                "compat 特性",
+                join_names(flag_names(self.compat_flags, COMPAT_FEATURES)),
+            ),
             (
                 "ro_compat 特性",
-                join_names(flag_names(self.compat_ro_flags, COMPAT_RO_FEATURES)),
+                join_names(
+                    flag_names(self.compat_ro_flags, COMPAT_RO_FEATURES)
+                ),
             ),
             (
                 "incompat 特性",

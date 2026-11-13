@@ -218,14 +218,23 @@ def _enable_plic_m_context(plic: PLIC, irq: int) -> None:
     源使能位与优先级默认为 0, 两者都不满足投递条件, 故断言 MEIP 之前须先经公开的
     MMIO 写入路径配置这两项。
     """
-    plic.write(PLIC_PRIORITY_BASE + irq * PLIC_PRIORITY_STRIDE, (1).to_bytes(4, "little"))
-    word_off = PLIC_ENABLE_BASE + _PLIC_M_CONTEXT * PLIC_ENABLE_STRIDE + (irq // 32) * 4
+    plic.write(
+        PLIC_PRIORITY_BASE + irq * PLIC_PRIORITY_STRIDE,
+        (1).to_bytes(4, "little"),
+    )
+    word_off = (
+        PLIC_ENABLE_BASE
+        + _PLIC_M_CONTEXT * PLIC_ENABLE_STRIDE
+        + (irq // 32) * 4
+    )
     plic.write(word_off, (1 << (irq % 32)).to_bytes(4, "little"))
 
 
 def _plic_pending(plic: PLIC, irq: int) -> bool:
     """读取中断源的挂起位."""
-    word = int.from_bytes(plic.read(PLIC_PENDING_BASE + (irq // 32) * 4, 4), "little")
+    word = int.from_bytes(
+        plic.read(PLIC_PENDING_BASE + (irq // 32) * 4, 4), "little"
+    )
     return bool(word & (1 << (irq % 32)))
 
 
@@ -267,7 +276,9 @@ def _configure_queue(net: VirtIONet, index: int, qnum: int = 8) -> None:
     _mmio_write(net, VIRTIO_MMIO_QUEUE_READY, 1)
 
 
-def _write_chain(guest_ram: bytearray, index: int, chain: list[_Desc], first: int = 0) -> None:
+def _write_chain(
+    guest_ram: bytearray, index: int, chain: list[_Desc], first: int = 0
+) -> None:
     """自描述符表的第 *first* 项起依次写入一条描述符链."""
     desc_off, _, _ = _queue_offsets(index)
     for i, (buf_pa, buf_len, flags, next_idx) in enumerate(chain):
@@ -287,14 +298,18 @@ def _set_avail_idx(guest_ram: bytearray, index: int, idx: int) -> None:
     guest_ram[driver_off + 2 : driver_off + 4] = struct.pack("<H", idx)
 
 
-def _write_avail_entry(guest_ram: bytearray, index: int, ring_idx: int, head: int) -> None:
+def _write_avail_entry(
+    guest_ram: bytearray, index: int, ring_idx: int, head: int
+) -> None:
     """向第 *index* 条队列的可用环写入一项."""
     _, driver_off, _ = _queue_offsets(index)
     off = driver_off + 4 + ring_idx * 2
     guest_ram[off : off + 2] = struct.pack("<H", head)
 
 
-def _used_entry(guest_ram: bytearray, index: int, ring_idx: int) -> tuple[int, int]:
+def _used_entry(
+    guest_ram: bytearray, index: int, ring_idx: int
+) -> tuple[int, int]:
     """读已用环的第 *ring_idx* 项 (描述符链头索引, 设备写入字节数)."""
     _, _, device_off = _queue_offsets(index)
     off = device_off + 4 + ring_idx * 8
@@ -304,7 +319,9 @@ def _used_entry(guest_ram: bytearray, index: int, ring_idx: int) -> tuple[int, i
 def _used_idx(guest_ram: bytearray, index: int) -> int:
     """读第 *index* 条队列已用环的 idx."""
     _, _, device_off = _queue_offsets(index)
-    return struct.unpack("<H", bytes(guest_ram[device_off + 2 : device_off + 4]))[0]
+    return struct.unpack(
+        "<H", bytes(guest_ram[device_off + 2 : device_off + 4])
+    )[0]
 
 
 def _kick(net: VirtIONet, index: int) -> None:
@@ -324,7 +341,9 @@ def _make_frame(payload: bytes = b"payload", ethertype: int = 0x0800) -> bytes:
     return dst + src + ethertype.to_bytes(2, "big") + payload
 
 
-def _post_rx_buffer(guest_ram: bytearray, slot: int, buf_len: int = _RX_BUF_SIZE) -> int:
+def _post_rx_buffer(
+    guest_ram: bytearray, slot: int, buf_len: int = _RX_BUF_SIZE
+) -> int:
     """在接收队列上挂一个空缓冲区, 返回缓冲区物理地址."""
     buf_pa = _make_gpa(_RX_BUF_OFF + slot * 0x1000)
     _write_chain(
@@ -353,7 +372,12 @@ def _submit_tx(guest_ram: bytearray, frame: bytes, slot: int = 0) -> int:
     buf = bytes(VIRTIO_NET_HDR_SIZE) + frame
     off = _to_offset(buf_pa)
     guest_ram[off : off + len(buf)] = buf
-    _write_chain(guest_ram, VIRTIO_NET_TX_QUEUE, [(buf_pa, len(buf), 0, 0)], first=slot)
+    _write_chain(
+        guest_ram,
+        VIRTIO_NET_TX_QUEUE,
+        [(buf_pa, len(buf), 0, 0)],
+        first=slot,
+    )
     _write_avail_entry(guest_ram, VIRTIO_NET_TX_QUEUE, slot, slot)
     _set_avail_idx(guest_ram, VIRTIO_NET_TX_QUEUE, slot + 1)
     return buf_pa
@@ -396,7 +420,9 @@ class TestMmioRegisters:
             (VIRTIO_MMIO_QUEUE_NUM_MAX, 256),
         ],
     )
-    def test_readonly_register(self, net: VirtIONet, reg: int, expect: int) -> None:
+    def test_readonly_register(
+        self, net: VirtIONet, reg: int, expect: int
+    ) -> None:
         assert _mmio_read(net, reg) == expect
 
     def test_device_id_is_network_card(self, net: VirtIONet) -> None:
@@ -432,14 +458,16 @@ class TestFeatures:
         _mmio_write(net, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0)
         assert _mmio_read(net, VIRTIO_MMIO_DEVICE_FEATURES) == VIRTIO_NET_F_MAC
         _mmio_write(net, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1)
-        assert _mmio_read(net, VIRTIO_MMIO_DEVICE_FEATURES) == VIRTIO_F_VERSION_1 >> 32
+        assert _mmio_read(net, VIRTIO_MMIO_DEVICE_FEATURES) == (
+            VIRTIO_F_VERSION_1 >> 32
+        )
 
     def test_ring_features_not_declared(self, net: VirtIONet) -> None:
         """事件索引与间接描述符不得声明.
 
-        声明事件索引要求设备回写可用环的 avail_event 字段, 声明间接描述符要求遍历器
-        实现间接表, 二者本设备均未实现, 声明后驱动会走上设备不支持的路径而静默丢失
-        收发, 故两位置零。
+        声明事件索引要求设备回写可用环的 avail_event 字段,
+        声明间接描述符要求遍历器实现间接表, 二者本设备均未实现,
+        声明后驱动会走上设备不支持的路径而静默丢失收发, 故两位置零。
         """
         assert VIRTIO_F_RING_INDIRECT_DESC == 1 << 28
         assert VIRTIO_F_RING_EVENT_IDX == 1 << 29
@@ -465,7 +493,11 @@ class TestFeatures:
             VIRTIO_STATUS_FEATURES_OK,
             VIRTIO_STATUS_DRIVER_OK,
         ):
-            _mmio_write(net, VIRTIO_MMIO_STATUS, _mmio_read(net, VIRTIO_MMIO_STATUS) | bit)
+            _mmio_write(
+                net,
+                VIRTIO_MMIO_STATUS,
+                _mmio_read(net, VIRTIO_MMIO_STATUS) | bit,
+            )
         assert _mmio_read(net, VIRTIO_MMIO_STATUS) == (
             VIRTIO_STATUS_ACKNOWLEDGE
             | VIRTIO_STATUS_DRIVER
@@ -496,13 +528,15 @@ class TestConfigSpace:
     def test_mac_is_readable_bytewise(self, net: VirtIONet) -> None:
         """MAC 按驱动的读法逐段读出, 与设备给出的地址一致.
 
-        驱动读 MAC 时起始偏移为 0 的字段按 4 字节读, 其后两个字节按单字节读。单字节
-        读若不做读取宽度的截位, 以该偏移为起始的小端字 (如 0x00000100) 无法写入一个
-        字节, 表现为 OverflowError, 故本用例锁定该截位。
+        驱动读 MAC 时起始偏移为 0 的字段按 4 字节读, 其后两个字节按单字节读。
+        单字节读若不做读取宽度的截位, 以该偏移为起始的小端字 (如 0x00000100)
+        无法写入一个字节, 表现为 OverflowError, 故本用例锁定该截位。
         """
         assert _read_config_bytes(net, VIRTIO_NET_CFG_MAC, 6) == net.mac
         for i in range(6):
-            one = net.read(VIRTIO_MMIO_CONFIG_OFFSET + VIRTIO_NET_CFG_MAC + i, 1)
+            one = net.read(
+                VIRTIO_MMIO_CONFIG_OFFSET + VIRTIO_NET_CFG_MAC + i, 1
+            )
             assert one == bytes([net.mac[i]])
 
     def test_custom_mac(self, mem_read, mem_write) -> None:
@@ -516,10 +550,14 @@ class TestConfigSpace:
 
     def test_mac_length_validated(self, mem_read, mem_write) -> None:
         with pytest.raises(ValueError, match="6 字节"):
-            VirtIONet(mem_read=mem_read, mem_write=mem_write, mac=b"\x02\x00\x00")
+            VirtIONet(
+                mem_read=mem_read, mem_write=mem_write, mac=b"\x02\x00\x00"
+            )
 
     def test_link_status_reports_up(self, net: VirtIONet) -> None:
-        assert _read_config_u16(net, VIRTIO_NET_CFG_STATUS) == VIRTIO_NET_S_LINK_UP
+        assert _read_config_u16(net, VIRTIO_NET_CFG_STATUS) == (
+            VIRTIO_NET_S_LINK_UP
+        )
 
     def test_queue_pairs_and_mtu(self, net: VirtIONet) -> None:
         """未协商多队列, 队列对数为 1; MTU 为以太网上界."""
@@ -538,7 +576,9 @@ class TestConfigSpace:
 class TestTransmit:
     """发送方向测试."""
 
-    def test_tx_frame_reaches_backend(self, mem_read, mem_write, guest_ram) -> None:
+    def test_tx_frame_reaches_backend(
+        self, mem_read, mem_write, guest_ram
+    ) -> None:
         """设备切掉 virtio_net_hdr 后把帧原样交给后端."""
         backend = RecordingBackend()
         net = VirtIONet(mem_read=mem_read, mem_write=mem_write, backend=backend)
@@ -550,7 +590,9 @@ class TestTransmit:
 
         assert backend.frames == [frame]
 
-    def test_tx_writes_used_ring(self, net: VirtIONet, guest_ram: bytearray) -> None:
+    def test_tx_writes_used_ring(
+        self, net: VirtIONet, guest_ram: bytearray
+    ) -> None:
         """发送完成后回写已用环: 链头索引为 0, 设备写入字节数为 0."""
         _configure_queue(net, VIRTIO_NET_TX_QUEUE)
         _submit_tx(guest_ram, _make_frame())
@@ -559,7 +601,9 @@ class TestTransmit:
         assert _used_idx(guest_ram, VIRTIO_NET_TX_QUEUE) == 1
         assert _used_entry(guest_ram, VIRTIO_NET_TX_QUEUE, 0) == (0, 0)
 
-    def test_tx_short_buffer_rejected(self, mem_read, mem_write, guest_ram) -> None:
+    def test_tx_short_buffer_rejected(
+        self, mem_read, mem_write, guest_ram
+    ) -> None:
         """缓冲区短于 virtio_net_hdr 时按失败处理, 不交给后端."""
         backend = RecordingBackend()
         net = VirtIONet(mem_read=mem_read, mem_write=mem_write, backend=backend)
@@ -572,9 +616,13 @@ class TestTransmit:
         _kick(net, VIRTIO_NET_TX_QUEUE)
 
         assert backend.frames == []
-        assert _used_idx(guest_ram, VIRTIO_NET_TX_QUEUE) == 1, "失败的请求同样计入已用环"
+        assert _used_idx(guest_ram, VIRTIO_NET_TX_QUEUE) == 1, (
+            "失败的请求同样计入已用环"
+        )
 
-    def test_tx_short_frame_rejected(self, mem_read, mem_write, guest_ram) -> None:
+    def test_tx_short_frame_rejected(
+        self, mem_read, mem_write, guest_ram
+    ) -> None:
         """去掉首部后不足一个以太帧首部长度时按失败处理."""
         backend = RecordingBackend()
         net = VirtIONet(mem_read=mem_read, mem_write=mem_write, backend=backend)
@@ -592,7 +640,9 @@ class TestTransmit:
 
         assert backend.frames == []
 
-    def test_tx_chain_split_across_descriptors(self, mem_read, mem_write, guest_ram) -> None:
+    def test_tx_chain_split_across_descriptors(
+        self, mem_read, mem_write, guest_ram
+    ) -> None:
         """首部与帧分处两个描述符时按链顺序拼接."""
         backend = RecordingBackend()
         net = VirtIONet(mem_read=mem_read, mem_write=mem_write, backend=backend)
@@ -601,7 +651,9 @@ class TestTransmit:
         frame = _make_frame(b"split")
         hdr_pa = _make_gpa(_TX_BUF_OFF)
         body_pa = _make_gpa(_TX_BUF_OFF + 0x800)
-        guest_ram[_TX_BUF_OFF : _TX_BUF_OFF + VIRTIO_NET_HDR_SIZE] = bytes(VIRTIO_NET_HDR_SIZE)
+        guest_ram[_TX_BUF_OFF : _TX_BUF_OFF + VIRTIO_NET_HDR_SIZE] = bytes(
+            VIRTIO_NET_HDR_SIZE
+        )
         body_off = _to_offset(body_pa)
         guest_ram[body_off : body_off + len(frame)] = frame
 
@@ -629,7 +681,9 @@ class TestTransmit:
 class TestReceive:
     """接收方向测试."""
 
-    def test_frame_lands_in_posted_buffer(self, net: VirtIONet, guest_ram: bytearray) -> None:
+    def test_frame_lands_in_posted_buffer(
+        self, net: VirtIONet, guest_ram: bytearray
+    ) -> None:
         """已挂缓冲区时到达帧就地写入, 帧前带全零的 virtio_net_hdr."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         addrs = _post_rx_buffers(guest_ram, 1)
@@ -663,7 +717,9 @@ class TestReceive:
         _, written = _used_entry(guest_ram, VIRTIO_NET_RX_QUEUE, 0)
         assert _read_guest_frame(guest_ram, addrs[0], written) == frame
 
-    def test_frames_fill_buffers_in_order(self, net: VirtIONet, guest_ram: bytearray) -> None:
+    def test_frames_fill_buffers_in_order(
+        self, net: VirtIONet, guest_ram: bytearray
+    ) -> None:
         """多个到达帧按顺序填入各缓冲区."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         addrs = _post_rx_buffers(guest_ram, 3)
@@ -681,8 +737,8 @@ class TestReceive:
     def test_rx_queue_not_consumed_without_frame(self, net, guest_ram) -> None:
         """没有到达帧时通知设备不得消费可用项.
 
-        传输层的通用遍历把每个可用项都当作一条待处理的请求消费掉, 接收方向的缓冲区
-        必须留在可用环里等帧到达, 故收发两条队列的处理路径不同。
+        传输层的通用遍历把每个可用项都当作一条待处理的请求消费掉,
+        接收方向的缓冲区必须留在可用环里等帧到达, 故收发两条队列的处理路径不同。
         """
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         _post_rx_buffers(guest_ram, 2)
@@ -691,11 +747,13 @@ class TestReceive:
         assert _used_idx(guest_ram, VIRTIO_NET_RX_QUEUE) == 0
         assert net.mmio.queue_at(VIRTIO_NET_RX_QUEUE).last_avail_idx == 0
 
-    def test_head_descriptor_carries_frame(self, net: VirtIONet, guest_ram: bytearray) -> None:
+    def test_head_descriptor_carries_frame(
+        self, net: VirtIONet, guest_ram: bytearray
+    ) -> None:
         """一个缓冲区承载一个帧, 故只用链头描述符.
 
-        未协商拆分接收缓冲区时驱动每帧只挂一个缓冲区; 链头带下一个描述符时设备仍只写
-        链头指向的缓冲区, 后续描述符不被写入。
+        未协商拆分接收缓冲区时驱动每帧只挂一个缓冲区;
+        链头带下一个描述符时设备仍只写链头指向的缓冲区, 后续描述符不被写入。
         """
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         head_pa = _make_gpa(_RX_BUF_OFF)
@@ -704,7 +762,12 @@ class TestReceive:
             guest_ram,
             VIRTIO_NET_RX_QUEUE,
             [
-                (head_pa, _RX_BUF_SIZE, VRING_DESC_F_WRITE | VRING_DESC_F_NEXT, 1),
+                (
+                    head_pa,
+                    _RX_BUF_SIZE,
+                    VRING_DESC_F_WRITE | VRING_DESC_F_NEXT,
+                    1,
+                ),
                 (tail_pa, _RX_BUF_SIZE, VRING_DESC_F_WRITE, 0),
             ],
         )
@@ -717,12 +780,19 @@ class TestReceive:
         assert _used_idx(guest_ram, VIRTIO_NET_RX_QUEUE) == 1
         _, written = _used_entry(guest_ram, VIRTIO_NET_RX_QUEUE, 0)
         assert _read_guest_frame(guest_ram, head_pa, written) == frame
-        assert guest_ram[_to_offset(tail_pa) : _to_offset(tail_pa) + 4] == b"\x00" * 4
+        assert (
+            guest_ram[_to_offset(tail_pa) : _to_offset(tail_pa) + 4]
+            == b"\x00" * 4
+        )
 
-    def test_small_buffer_drops_frame_and_keeps_buffer(self, net, guest_ram) -> None:
+    def test_small_buffer_drops_frame_and_keeps_buffer(
+        self, net, guest_ram
+    ) -> None:
         """缓冲区放不下时丢弃该帧并保留缓冲区, 供后续较短的帧使用."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
-        addrs = [_post_rx_buffer(guest_ram, 0, buf_len=VIRTIO_NET_HDR_SIZE + 20)]
+        addrs = [
+            _post_rx_buffer(guest_ram, 0, buf_len=VIRTIO_NET_HDR_SIZE + 20)
+        ]
         _set_avail_idx(guest_ram, VIRTIO_NET_RX_QUEUE, 1)
         _kick(net, VIRTIO_NET_RX_QUEUE)
 
@@ -753,7 +823,9 @@ class TestReceive:
         assert net.rx_pending == VIRTIO_NET_RX_QUEUE_LIMIT
         assert net.rx_dropped == 5
 
-    def test_out_of_range_rx_head_keeps_avail_entry(self, net, guest_ram) -> None:
+    def test_out_of_range_rx_head_keeps_avail_entry(
+        self, net, guest_ram
+    ) -> None:
         """可用环中的链头索引越界时中止填充并保留该可用项, 遍历有界不自旋."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         buf_pa = _make_gpa(_RX_BUF_OFF)
@@ -775,14 +847,19 @@ class TestReceive:
         """接收缓冲区缺少可写标志时中止填充, 不写入该缓冲区."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         buf_pa = _make_gpa(_RX_BUF_OFF)
-        _write_chain(guest_ram, VIRTIO_NET_RX_QUEUE, [(buf_pa, _RX_BUF_SIZE, 0, 0)])
+        _write_chain(
+            guest_ram, VIRTIO_NET_RX_QUEUE, [(buf_pa, _RX_BUF_SIZE, 0, 0)]
+        )
         _write_avail_entry(guest_ram, VIRTIO_NET_RX_QUEUE, 0, 0)
         _set_avail_idx(guest_ram, VIRTIO_NET_RX_QUEUE, 1)
 
         net.deliver_frame(_make_frame(b"readonly"))
 
         assert _used_idx(guest_ram, VIRTIO_NET_RX_QUEUE) == 0
-        assert guest_ram[_to_offset(buf_pa) : _to_offset(buf_pa) + 4] == b"\x00" * 4
+        assert (
+            guest_ram[_to_offset(buf_pa) : _to_offset(buf_pa) + 4]
+            == b"\x00" * 4
+        )
 
 
 # ============================================================
@@ -793,7 +870,9 @@ class TestReceive:
 class TestLoopback:
     """回环后端语义测试."""
 
-    def test_transmitted_frame_returns_on_receive_queue(self, net, guest_ram) -> None:
+    def test_transmitted_frame_returns_on_receive_queue(
+        self, net, guest_ram
+    ) -> None:
         """默认后端是回环: 设备发出的帧回到自身的接收队列, 首部不改写."""
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
         _configure_queue(net, VIRTIO_NET_TX_QUEUE)
@@ -846,7 +925,9 @@ class TestInterrupt:
         )
         return net, plic
 
-    def test_receive_raises_irq(self, net_with_plic, guest_ram: bytearray) -> None:
+    def test_receive_raises_irq(
+        self, net_with_plic, guest_ram: bytearray
+    ) -> None:
         """帧到达后中断源置位, 且只在 M context 上产出 MEIP."""
         net, plic = net_with_plic
         _configure_queue(net, VIRTIO_NET_RX_QUEUE)
@@ -862,7 +943,9 @@ class TestInterrupt:
         assert mip & _MEIP, "M context 上应产出 MEIP"
         assert not mip & _SEIP, "S context 上不得产出 SEIP"
 
-    def test_transmit_raises_irq(self, net_with_plic, guest_ram: bytearray) -> None:
+    def test_transmit_raises_irq(
+        self, net_with_plic, guest_ram: bytearray
+    ) -> None:
         """发送完成同样置位中断源."""
         net, plic = net_with_plic
         _configure_queue(net, VIRTIO_NET_TX_QUEUE)
@@ -887,18 +970,23 @@ class TestInterrupt:
         assert not _plic_pending(plic, VIRTIO_NET_S_IRQ)
         assert not plic.get_pending_mip(0) & _MEIP
 
-    def test_no_irq_sink_no_crash(self, net: VirtIONet, guest_ram: bytearray) -> None:
+    def test_no_irq_sink_no_crash(
+        self, net: VirtIONet, guest_ram: bytearray
+    ) -> None:
         """未给出中断上报入口时完成不应报错, 中断状态仍照常置位."""
         _configure_queue(net, VIRTIO_NET_TX_QUEUE)
         _submit_tx(guest_ram, _make_frame())
         _kick(net, VIRTIO_NET_TX_QUEUE)
         assert _mmio_read(net, VIRTIO_MMIO_INTERRUPT_STATUS) & 1 == 1
 
-    def test_two_instances_do_not_share_irq(self, mem_read, mem_write, guest_ram) -> None:
+    def test_two_instances_do_not_share_irq(
+        self, mem_read, mem_write, guest_ram
+    ) -> None:
         """两张网卡取不同源号时中断线互不串扰.
 
-        PLIC 的挂起位按源号索引且全部 context 共用, 两张卡同号则一方拉高线时另一方
-        已使能的同一个源一并置位。本用例断言宿主侧的源号不同于飞地侧的源号,
+        PLIC 的挂起位按源号索引且全部 context 共用,
+        两张卡同号则一方拉高线时另一方已使能的同一个源一并置位。
+        本用例断言宿主侧的源号不同于飞地侧的源号,
         且一张卡拉高线时另一张卡的源保持不挂起。
         """
         assert VIRTIO_NET_M_IRQ != VIRTIO_NET_S_IRQ

@@ -62,7 +62,10 @@ def test_status_name_distinguishes_unverified_valid_and_invalid():
 def test_module_spaces_lists_known_bases():
     assert model.module_spaces(_mod(pa_base=0x1000, va_base=None)) == ("pa",)
     assert model.module_spaces(_mod(pa_base=None, va_base=0x1000)) == ("va",)
-    assert model.module_spaces(_mod(pa_base=0x1000, va_base=0x2000)) == ("pa", "va")
+    assert model.module_spaces(_mod(pa_base=0x1000, va_base=0x2000)) == (
+        "pa",
+        "va",
+    )
     assert model.module_spaces(_mod(pa_base=None, va_base=None)) == ()
 
 
@@ -125,7 +128,11 @@ class TestSelectModule:
             va_base=0x4000_0000,
             index=_FakeIndex(addrs={0x1100: "func"}),
         )
-        assert model.select_module([mod], 0x4000_0100) == (mod, model.SPACE_VA, "func")
+        assert model.select_module([mod], 0x4000_0100) == (
+            mod,
+            model.SPACE_VA,
+            "func",
+        )
 
     def test_wider_range_wins(self):
         narrow = _mod(
@@ -180,7 +187,11 @@ class TestSelectModule:
             va_base=0x8000_0000,
             index=_FakeIndex(addrs={0x1100: "main"}),
         )
-        assert model.select_module([mod], 0x8000_0100) == (mod, model.SPACE_PA, "main")
+        assert model.select_module([mod], 0x8000_0100) == (
+            mod,
+            model.SPACE_PA,
+            "main",
+        )
 
 
 # ============================================================
@@ -213,7 +224,10 @@ class TestNameToRuntimeAddr:
             va_base=0x4000_0000,
             index=_FakeIndex(names={"main": 0x1100}),
         )
-        assert model.name_to_runtime_addr([mod], "main") == (0x8000_0100, 0x4000_0100)
+        assert model.name_to_runtime_addr([mod], "main") == (
+            0x8000_0100,
+            0x4000_0100,
+        )
 
     def test_address_is_masked_to_64_bits(self):
         mod = _mod(
@@ -237,4 +251,7 @@ class TestNameToRuntimeAddr:
             index=_FakeIndex(names={"main": 0x1100}),
             file_name="wide.elf",
         )
-        assert model.name_to_runtime_addr([narrow, wide], "main") == (0x8000_0100, None)
+        assert model.name_to_runtime_addr([narrow, wide], "main") == (
+            0x8000_0100,
+            None,
+        )

@@ -52,7 +52,6 @@ class TestStoreImmediateOffset:
         assert val == 0xCAFEBABEDEADBEEF
 
     def test_sd_offset_32(self, emu):
-        """sd offset=32: imm[11:5]=1, 原 bug 会算出 offset=1 导致未对齐故障."""
         val, mcause = self._exec_sd(emu, 32)
         assert mcause == 0, f"unexpected trap mcause=0x{mcause:x}"
         assert val == 0xCAFEBABEDEADBEEF
@@ -70,10 +69,10 @@ class TestStoreImmediateOffset:
         assert val == 0xCAFEBABEDEADBEEF
 
     def test_sd_offset_2047(self, emu):
-        """sd offset=2047: 12-bit S-type 最大正偏移."""
+        """sd offset=2047: 12-bit S-type 最大正偏移, 未对齐访问按字节完成."""
         val, mcause = self._exec_sd(emu, 2047)
-        # 2047 未对齐 -> 预期 StAddrMisaligned
-        assert mcause == 0x6
+        assert mcause == 0, f"unexpected trap mcause=0x{mcause:x}"
+        assert val == 0xCAFEBABEDEADBEEF
 
 
 class TestAuipcSignExtension:
@@ -120,7 +119,7 @@ class TestAuipcSignExtension:
 
 
 class TestLoadAlignmentSizes:
-    """回归: handle_ld 对所有 load 类型统一读 8 字节导致虚假对齐故障."""
+    """各类载入按自身宽度从给定地址读取字节, 未对齐地址同样完成."""
 
     @pytest.fixture
     def emu(self):
@@ -163,14 +162,16 @@ class TestLoadAlignmentSizes:
         assert mcause == 0
         assert val == 0x4F4E4D4C
 
-    def test_lh_misaligned(self, emu):
-        """lh 从奇数地址 -> 应对齐故障."""
+    def test_lh_at_0x49(self, emu):
+        """lh 从奇数地址读取: 按字节完成, 不投递陷态."""
         val, mcause = self._exec_load(emu, 0x80000049, 0b001)  # funct3=lh
-        assert mcause == 0x4  # LdAddrMisaligned
+        assert mcause == 0, f"unexpected trap mcause=0x{mcause:x}"
+        assert val == 0x4A49  # 0x49 与 0x4A, little-endian
 
 
 class TestITypeShifts:
-    """回归: I-type 移位使用 funct6 (bits 31:26) 而非 funct7 — bit 25 属于 shamt."""
+    """I-type 移位使用 funct6 (bits 31:26) 而非 funct7, bit 25 属于
+    shamt."""
 
     @pytest.fixture
     def h(self):
@@ -291,7 +292,14 @@ class TestITypeShifts:
 
     def test_slli_bad_funct6_traps(self, h):
         """非法 funct6 应触发 IllInstr."""
-        bad = (0b111111 << 26) | (0 << 20) | (10 << 15) | (0b001 << 12) | (10 << 7) | 0b0010011
+        bad = (
+            (0b111111 << 26)
+            | (0 << 20)
+            | (10 << 15)
+            | (0b001 << 12)
+            | (10 << 7)
+            | 0b0010011
+        )
         advance = h.exec_instr(bad)
         assert advance == 0
         assert h.mcause_val != 0
@@ -342,7 +350,8 @@ class TestLdLinuxAddrChain:
 
         expected = (counter - 1) * 0xA0 + self.PC_AT_AUIPC + 0x1E000 + 0x542
         assert hart.gprs[9] == expected, (
-            f"counter={counter}: s1={hart.gprs[9]:#018x}, expected {expected:#018x}"
+            f"counter={counter}: s1={hart.gprs[9]:#018x}, "
+            f"expected {expected:#018x}"
         )
 
     @pytest.mark.parametrize(
@@ -412,7 +421,9 @@ class TestBranchEdgeCases:
             assert hart.pc == 0x3B0A, f"s2={s2_val}: should branch to 0x3b0a"
         else:
             # Fall-through: pc += advance (4 for non-taken 32-bit branch)
-            assert hart.pc == 0x3ABA, f"s2={s2_val}: should fall through to 0x3aba"
+            assert hart.pc == 0x3ABA, (
+                f"s2={s2_val}: should fall through to 0x3aba"
+            )
 
     # ---- BNE (s2 != s4 -> branch back) ----
     @pytest.mark.parametrize(
@@ -436,6 +447,10 @@ class TestBranchEdgeCases:
         hart.pc += advance
 
         if taken:
-            assert hart.pc == 0x3AD0, f"s2={s2_val} s4={s4_val}: should loop to 0x3ad0"
+            assert hart.pc == 0x3AD0, (
+                f"s2={s2_val} s4={s4_val}: should loop to 0x3ad0"
+            )
         else:
-            assert hart.pc == 0x3B0A, f"s2={s2_val} s4={s4_val}: should exit to 0x3b0a"
+            assert hart.pc == 0x3B0A, (
+                f"s2={s2_val} s4={s4_val}: should exit to 0x3b0a"
+            )

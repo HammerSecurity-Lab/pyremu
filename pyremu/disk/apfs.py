@@ -6,8 +6,8 @@
 """APFS 容器超级块解析.
 
 容器超级块位于映像起点, 按小端序存储, 给出块大小、块总数、检查点区域与特性位.
-卷名存放于各卷的超级块, 由 pyfsapfs 读取; 空闲块数由空间管理器维护, 本模块不读取该结构,
-因此摘要中该值为 None. 本模块只读映像, 不写入任何扇区.
+卷名存放于各卷的超级块, 由 pyfsapfs 读取; 空闲块数由空间管理器维护,
+本模块不读取该结构, 因此摘要中该值为 None. 本模块只读映像, 不写入任何扇区.
 """
 
 from dataclasses import dataclass, replace
@@ -99,10 +99,15 @@ class ApfsContainerSuperblock:
             ("空间管理器对象标识", f"{self.space_manager_oid:,}"),
             ("对象映射对象标识", f"{self.object_map_oid:,}"),
             ("回收器对象标识", f"{self.reaper_oid:,}"),
-            ("compat 特性", join_names(flag_names(self.compat_flags, COMPAT_FEATURES))),
+            (
+                "compat 特性",
+                join_names(flag_names(self.compat_flags, COMPAT_FEATURES)),
+            ),
             (
                 "ro_compat 特性",
-                join_names(flag_names(self.compat_ro_flags, COMPAT_RO_FEATURES)),
+                join_names(
+                    flag_names(self.compat_ro_flags, COMPAT_RO_FEATURES)
+                ),
             ),
             (
                 "incompat 特性",
@@ -124,11 +129,15 @@ def probe(path: str | Path) -> ApfsContainerSuperblock | None:
     """读取容器超级块并判定格式; 魔数不符时返回 None.
 
     Raises:
-        DiskFormatError: 布局字段自相矛盾, 映像短于声明的块总数, 或卷列表无法读取.
+        DiskFormatError: 布局字段自相矛盾, 映像短于声明的块总数,
+            或卷列表无法读取.
     """
     with Path(path).open("rb") as fp:
         raw = fp.read(SUPERBLOCK_SIZE)
-        if len(raw) < SUPERBLOCK_SIZE or raw[MAGIC_OFFSET : MAGIC_OFFSET + 4] != MAGIC:
+        if (
+            len(raw) < SUPERBLOCK_SIZE
+            or raw[MAGIC_OFFSET : MAGIC_OFFSET + 4] != MAGIC
+        ):
             return None
         superblock = _parse_superblock(raw)
         fp.seek(0, io.SEEK_END)
@@ -155,7 +164,11 @@ def _parse_superblock(raw: bytes) -> ApfsContainerSuperblock:
     file_system_oids = tuple(
         oid
         for index in range(MAX_FILE_SYSTEMS)
-        if (oid := struct.unpack_from("<Q", raw, FILE_SYSTEM_OID_OFFSET + index * 8)[0])
+        if (
+            oid := struct.unpack_from(
+                "<Q", raw, FILE_SYSTEM_OID_OFFSET + index * 8
+            )[0]
+        )
     )
 
     if not is_power_of_two_in(block_size, MIN_BLOCK_SIZE, MAX_BLOCK_SIZE):
@@ -166,9 +179,13 @@ def _parse_superblock(raw: bytes) -> ApfsContainerSuperblock:
         raise DiskFormatError(f"最大文件系统数 {max_file_systems} 超出上限")
     if len(file_system_oids) > max_file_systems:
         raise DiskFormatError("文件系统数大于最大文件系统数")
-    if not _is_within(checkpoint_desc_base, checkpoint_desc_blocks, block_count):
+    if not _is_within(
+        checkpoint_desc_base, checkpoint_desc_blocks, block_count
+    ):
         raise DiskFormatError("检查点描述区超出块总数")
-    if not _is_within(checkpoint_data_base, checkpoint_data_blocks, block_count):
+    if not _is_within(
+        checkpoint_data_base, checkpoint_data_blocks, block_count
+    ):
         raise DiskFormatError("检查点数据区超出块总数")
 
     return ApfsContainerSuperblock(
