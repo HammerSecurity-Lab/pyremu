@@ -5,12 +5,20 @@
 
 """配置读取辅助测试.
 
-覆盖: 环境变量与 configs_gen 默认值两者的优先次序 / 各类型的解析 / 环境变量是否被
-显式设置的判定 / force_config 上下文对 configs_gen 的临时覆盖与恢复.
+覆盖: 环境变量与 configs_gen 默认值两者的优先次序 / 各类型的解析 /
+环境变量是否被显式设置的判定 / force_config 上下文对 configs_gen 的临时
+覆盖与恢复.
 """
 
 from pyremu import configs_gen
-from pyremu.configs_aux import cfg_bool, cfg_float, cfg_int, cfg_is_set, cfg_str, force_config
+from pyremu.configs_aux import (
+    cfg_bool,
+    cfg_float,
+    cfg_int,
+    cfg_is_set,
+    cfg_str,
+    force_config,
+)
 
 ENV_NAME = "PYREMU_TEST_CFG_AUX"
 UNSET_NAME = "PYREMU_TEST_CFG_AUX_UNSET"

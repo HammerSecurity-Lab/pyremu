@@ -53,7 +53,7 @@ class CompressedInstrOps:
         mem = self.mem_read(addr, 8)
         if self.pc != saved_pc:
             return 0
-        self._fpr_bits[cf.rd] = int.from_bytes(mem, "little")
+        self.fpr_bits[cf.rd] = int.from_bytes(mem, "little")
         self._fp_mark_dirty()
         return 2
 
@@ -98,7 +98,7 @@ class CompressedInstrOps:
         if not self._fp_enabled():
             raise ValueError("C.FSD: FP disabled (mstatus.FS=Off)")
         addr = self._c0_mem_addr(cf)
-        data = self._fpr_bits[cf.rd].to_bytes(8, "little")
+        data = self.fpr_bits[cf.rd].to_bytes(8, "little")
         saved_pc = self.pc
         self.mem_write(addr, data)
         if self.pc != saved_pc:
@@ -200,7 +200,7 @@ class CompressedInstrOps:
         mem = self.mem_read(addr, 8)
         if self.pc != saved_pc:
             return 0
-        self._fpr_bits[cf.rd] = int.from_bytes(mem, "little")
+        self.fpr_bits[cf.rd] = int.from_bytes(mem, "little")
         self._fp_mark_dirty()
         return 2
 
@@ -229,7 +229,8 @@ class CompressedInstrOps:
         return 2
 
     def _c2_jump_or_mv(self, cf) -> int:
-        """funct3=100: C.JR / C.JALR / C.MV / C.ADD / C.EBREAK, 由 bit12 与 rs2 区分."""
+        """funct3=100: C.JR / C.JALR / C.MV / C.ADD / C.EBREAK, 由 bit12
+        与 rs2 区分."""
         rd_rs1 = cf.rd  # C.JR/C.JALR 的 rs1, C.MV/C.ADD 的 rd
         rs2 = cf.rs2
         if rd_rs1 == 0 and rs2 == 0:
@@ -253,7 +254,7 @@ class CompressedInstrOps:
         if not self._fp_enabled():
             raise ValueError("C.FSDSP: FP disabled (mstatus.FS=Off)")
         addr = self._sp_addr(cf.imm2)
-        data = self._fpr_bits[cf.rs2].to_bytes(8, "little")
+        data = self.fpr_bits[cf.rs2].to_bytes(8, "little")
         saved_pc = self.pc
         self.mem_write(addr, data)
         if self.pc != saved_pc:
@@ -340,7 +341,8 @@ class CompressedInstrOps:
         sf=00 -> C.SRLI  (shamt = {bit12, bits[6:2]}, 1-63 for RV64C)
         sf=01 -> C.SRAI  (shamt = {bit12, bits[6:2]}, 1-63 for RV64C)
         sf=10 -> C.ANDI (imm[5]=bit12, imm[4:0]=bits[6:2])
-        sf=11 bit12=0 -> C.SUB/C.XOR/C.OR/C.AND (bits[6:5]: 00=SUB,01=XOR,10=OR,11=AND)
+        sf=11 bit12=0 -> C.SUB/C.XOR/C.OR/C.AND
+            (bits[6:5]: 00=SUB,01=XOR,10=OR,11=AND)
         sf=11 bit12=1 -> C.SUBW/C.ADDW (bits[6:5]: 00=SUBW, 01=ADDW)
         """
         sf = cf.sf
@@ -370,4 +372,6 @@ class CompressedInstrOps:
         elif k == 0b01:
             self.gprs[rd_rs1] = sext32(mask32(v1 + v2))
         else:
-            raise NotImplementedError(f"C.SUBW/C.ADDW reserved bit[6:5]={k:#03b}")
+            raise NotImplementedError(
+                f"C.SUBW/C.ADDW reserved bit[6:5]={k:#03b}"
+            )

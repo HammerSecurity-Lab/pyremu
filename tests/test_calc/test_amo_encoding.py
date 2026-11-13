@@ -1,6 +1,7 @@
 """验证 amoadd.w.aqrl — OpenSBI atomic_sub_return 的底层指令.
 
-tlb_entry_process() 中的 atomic_sub_return() 编译为 amoadd.w.aqrl, 用于递减 tlb_sync.
+tlb_entry_process() 中的 atomic_sub_return() 编译为 amoadd.w.aqrl,
+用于递减 tlb_sync.
 若 .aq/.rl 位导致 funct5 提取错误, 则 AMO 操作会被错误路由或产生非法指令陷态.
 """
 
@@ -42,7 +43,9 @@ class TestAmoaddWFunct5:
         instr = _encode_amoadd_w(aq=aq, rl=rl)
         f = decode_fields(instr)
         funct5 = f.func7 >> 2  # Rust handler 的做法: func7 >> 2
-        assert funct5 == 0b00000, f"aq={aq} rl={rl}: funct5 expected 0 (AMOADD), got {funct5}"
+        assert funct5 == 0b00000, (
+            f"aq={aq} rl={rl}: funct5 expected 0 (AMOADD), got {funct5}"
+        )
 
     def test_func7_with_aqrl_is_0x03(self):
         """amoadd.w.aqrl 编码后 func7 = 0b0000011."""
@@ -58,7 +61,9 @@ class TestAmoaddWFunct5:
 
 @pytest.fixture
 def _m_mode_hart():
-    cfg = PlatformConfig(num_harts=1, ram_base=0x80000000, ram_size=64 * 1024 * 1024)
+    cfg = PlatformConfig(
+        num_harts=1, ram_base=0x80000000, ram_size=64 * 1024 * 1024
+    )
     emu = Emulator(cfg, bootargs="")
     hart = emu.harts[0]
     hart.mode = RiscvMode.M
@@ -106,7 +111,9 @@ class TestAmoaddWExecution:
         """不带 .aq/.rl 的 amoadd.w 与 .aqrl 功能等价."""
         emu, hart = _m_mode_hart
         instr = _encode_amoadd_w(rd=5, rs1=10, rs2=11, aq=0, rl=0)
-        old_val, new_val, rd_val = self._exec_amo(emu, hart, instr, 0x80001000, 0xFFFFFFFF)
+        old_val, new_val, rd_val = self._exec_amo(
+            emu, hart, instr, 0x80001000, 0xFFFFFFFF
+        )
         assert old_val == 1
         assert new_val == 0
         assert rd_val == 1
@@ -188,7 +195,8 @@ class TestAmoaddWFaultHandling:
     def test_amo_to_device_detected(self, _m_mode_hart):
         """对 MMIO 地址 (如 CLINT) 的 AMO 在 Python 路径下走 Bus 直通路径.
 
-        Python decoder 中的 handle_amo 随后调用 mem_write/read, 最终走 Bus.write/read,
+        Python decoder 中的 handle_amo 随后调用 mem_write/read,
+        最终走 Bus.write/read,
         对 device MMIO 直接读写设备寄存器 (而非触发 trap).
         这与原生 batch 不同 (原生 batch 中 device AMO 触发 EXIT_MMIO).
         此处仅验证 device 访问不会 panic/crash.

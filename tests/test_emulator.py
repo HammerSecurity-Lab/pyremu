@@ -6,6 +6,7 @@
 """模拟器集成测试: 执行循环、状态导出、固件装载与空闲等待."""
 
 import ctypes
+import os
 import threading
 import time
 
@@ -13,7 +14,7 @@ import pytest
 
 from pyremu.emu import run
 from pyremu.emulator import Emulator, TimeoutError
-from pyremu.peripheral.termio import TerminalIO
+from pyremu.peripheral.termio import TerminalIO, translate_host_keys
 from pyremu.peripheral.uart import UART, UART_IRQ
 from pyremu.platform import PeripheralConfig, PlatformConfig
 
@@ -62,7 +63,12 @@ class TestEmulatorExecution:
 
     def test_step_executes_all_harts(self):
         """step() 每个 hart 执行一条指令."""
-        emu = Emulator(num_harts=4, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=4,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         # 载入 NOP 指令 (ADDI x0, x0, 0 = 0x00000013)
         emu.load_code(0x1000, b"\x13\x00\x00\x00")
         initial_pc = emu.harts[0].pc
@@ -74,7 +80,12 @@ class TestEmulatorExecution:
 
     def test_pc_advances_per_step(self):
         """每条 ADDI x0,x0,0 后 PC 推进 4 字节."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         # 载入多条 NOP 保证有足够的指令
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
         assert emu.harts[0].pc == 0x1000
@@ -85,7 +96,12 @@ class TestEmulatorExecution:
 
     def test_hart_gpr_write_independent(self):
         """hart 间寄存器独立: hart 0 写 x5, 不影响 hart 1 的 x5."""
-        emu = Emulator(num_harts=4, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=4,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         # ADDI x5, x10, 0 -> x5 = x10 (每条 hart 的 x10 不同)
         # Instr: imm[11:0]=0, rs1=x10, funct3=000, rd=x5, op=0010011
         instr = (0 << 20) | (10 << 15) | (5 << 7) | 0b0010011
@@ -125,9 +141,9 @@ class TestEmulatorExecution:
         # 写 CSR 后读取
         h.csrs["mtvec"].val = 0x378
         assert h.read_csr_by_name("mtvec") == 0x378
-        # mstatus
+        # mstatus: UXL 为只读派生位, 读出值为 0x1800 加上 UXL=2
         h.csrs["mstatus"].val = 0x1800
-        assert h.read_csr_by_name("mstatus") == 0x1800
+        assert h.read_csr_by_name("mstatus") == 0x1800 | (2 << 32)
         # 不存在 -> 0
         assert h.read_csr_by_name("nonexistent") == 0
 
@@ -195,7 +211,9 @@ class TestEmulatorStoreMemory:
         # sw s1, 4(sp)
         instr1 = (0 << 25) | (9 << 20) | (2 << 15) | (2 << 12) | (0x23)
         # 手动构造 imm=4: bit 7=1, bits 8-11=0, bits 25-31=0
-        instr1 = (0 << 25) | (9 << 20) | (2 << 15) | (2 << 12) | (4 << 7) | (0x23)
+        instr1 = (
+            (0 << 25) | (9 << 20) | (2 << 15) | (2 << 12) | (4 << 7) | (0x23)
+        )
         h.exec_instr(instr1)
 
         data = emu.bus.read(base, 8)
@@ -215,7 +233,9 @@ class TestEmulatorStoreMemory:
 
         data = emu.bus.read(addr, 8)
         expected = (0xDEAD_BEEF_CAFE_BABE).to_bytes(8, "little")
-        assert data == expected, f"SD 写入失败: 期望 {expected.hex()}, 实际 {data.hex()}"
+        assert data == expected, (
+            f"SD 写入失败: 期望 {expected.hex()}, 实际 {data.hex()}"
+        )
 
     def test_store_at_ram_base_edge(self, emu):
         """SW 写入 RAM 基址 (ram_base) 边界, 确保不越界."""
@@ -238,7 +258,12 @@ class TestStepEdgeCases:
 
     def test_halted_hart_is_skipped(self):
         """已停止的 hart 在 step() 中被跳过."""
-        emu = Emulator(num_harts=2, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=2,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
         emu.harts[0]._halted = True
         executed = emu.step()
@@ -249,7 +274,12 @@ class TestStepEdgeCases:
 
     def test_not_implemented_error_delivers_ill_instr(self):
         """未实现的操作码触发 IllInstr 陷态, hart 不崩溃."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         # 构造一个未实现的自定义 opcode (bits[1:0]=11 保证 32-bit 编码)
         bad_instr = 0x7F | (10 << 7) | (10 << 15) | (10 << 20)
         emu.load_code(0x1000, bad_instr.to_bytes(4, "little"))
@@ -286,8 +316,14 @@ class TestRunTimeout:
 
     def test_timeout_raises_timeouterror(self):
         """非零 timeout 超时时抛出 TimeoutError."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=64 * 1024)
-        # nop @0x1000 + jal x0,-4 @0x1004 — 死循环 (跳回 0x1000), 依赖时钟源超时兜底.
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=64 * 1024,
+        )
+        # nop @0x1000 与 jal x0,-4 @0x1004 构成死循环, 跳回 0x1000,
+        # 依赖时钟源超时终止执行.
         # 不能用 jal x0,0 (跳自身): 停滞检测会将其误判为 trap 循环而提前 halt.
         emu.load_code(0x1000, b"\x13\x00\x00\x00\x6f\xf0\xdf\xff")
         with pytest.raises(TimeoutError) as exc_info:
@@ -301,7 +337,12 @@ class TestRunTimeout:
         回归: 判定写成 ``time.monotonic() < _timeout_deadline`` 时, 禁用超时的
         截止时刻 0 会让第一次检查即判定超时.
         """
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=64 * 1024)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=64 * 1024,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 5)
         emu._bp_addrs = [0x1000 + 4 * 5]
         emu.run(timeout=0)
@@ -309,7 +350,12 @@ class TestRunTimeout:
 
     def test_run_returns_int(self):
         """run() 返回执行的周期数 (int)."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=64 * 1024)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=64 * 1024,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 5)
         # 断点终止连续执行 (max_cycles 已移除), 使 run() 确定性返回.
         emu._bp_addrs = [0x1000 + 4 * 5]
@@ -318,7 +364,12 @@ class TestRunTimeout:
 
     def test_yield_every_zero_runs_full(self):
         """yield_every=0 时 run() 不限速执行到断点."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 5)
         emu._bp_addrs = [0x1000 + 4 * 5]
         cycles = emu.run(timeout=0, yield_every=0)
@@ -352,7 +403,12 @@ class TestEmulatorProperties:
 
     def test_cycle_and_total_instructions(self):
         """cycle 和 total_instructions 初始为 0, step() 后增长."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
         assert emu.cycle == 0
         assert emu.total_instructions == 0
@@ -364,7 +420,12 @@ class TestEmulatorProperties:
 
     def test_counter_csr_sync_per_step(self):
         """mcycle/cycle/minstret/instret/time CSR 每条指令后同步更新."""
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=0x2000)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x2000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
         h = emu.harts[0]
 
@@ -377,7 +438,8 @@ class TestEmulatorProperties:
         t1 = h.csrs["time"].val
         assert c1 > c0, f"mcycle 应递增: {c0} -> {c1}"
         assert i1 > i0, f"minstret 应递增: {i0} -> {i1}"
-        # mtime 按指令计数推进, 单条指令不足 1 tick, time 可不递增但须与 mtime 同步
+        # mtime 按指令计数推进, 单条指令不足 1 tick, time 可不递增但须与
+        # mtime 同步
         assert t1 == emu.clint.get_mtime(), (
             f"time CSR 应与 CLINT mtime 同步: {t1} vs {emu.clint.get_mtime()}"
         )
@@ -397,7 +459,9 @@ class TestEmulatorProperties:
         assert delta_i == 2, f"3 步后 minstret 差值应为 2, 实际 {delta_i}"
         # mtime 按指令计数推进, 2 条指令不足 1 tick, time 不递增.
         assert delta_t >= 0, f"time 差值不应为负: delta={delta_t}"
-        assert h.csrs["time"].val == emu.clint.get_mtime(), "time CSR 应与 CLINT mtime 同步"
+        assert h.csrs["time"].val == emu.clint.get_mtime(), (
+            "time CSR 应与 CLINT mtime 同步"
+        )
 
 
 class TestPlatformConfigTimebase:
@@ -461,7 +525,9 @@ class TestWfiIdleSleep:
         start = time.monotonic()
         emu._wfi_sleep_if_idle([hart], 1)
         elapsed = time.monotonic() - start
-        assert elapsed >= 0.15, f"陈旧事件不得阻止睡眠 (忙转), 实际 {elapsed:.3f}s"
+        assert elapsed >= 0.15, (
+            f"陈旧事件不得阻止睡眠 (忙转), 实际 {elapsed:.3f}s"
+        )
 
     def test_wfi_sleep_wakes_on_event_during_wait(self):
         """无定时器且无运行超时时等待不设上限, 睡眠期间的输入事件应即时唤醒.
@@ -484,7 +550,9 @@ class TestWfiIdleSleep:
         emu._wfi_sleep_if_idle([hart], 1)
         elapsed = time.monotonic() - start
         th.join()
-        assert elapsed < 0.15, f"睡眠中到达的事件应即时唤醒, 实际 {elapsed:.3f}s"
+        assert elapsed < 0.15, (
+            f"睡眠中到达的事件应即时唤醒, 实际 {elapsed:.3f}s"
+        )
 
     def test_wfi_idle_advances_mtime_without_timer(self, monkeypatch):
         """回归: 无定时器时全 hart 等待, mtime 仍按真实流逝时间推进.
@@ -617,14 +685,12 @@ class TestWfiIdleSleep:
 
     @pytest.mark.usefixtures("legacy_plic")
     def test_drain_rx_write_through_plic(self):
-        """回归: RX 排空必须经 irq_sink write-through 持久 PLIC 数组.
+        """RX 排空经 irq_sink 把中断写入 PLIC 持有的持久数组.
 
-        修复前 drain_rx 仅置 _ext_irq.pending, 不写 FFI 持久数组 (源挂起)。
-        batch 运行期间 Rust 内联 plic_recompute_mip 用 batch 起始的旧数组
-        (源挂起=0) 覆盖 SEIP -> UART 中断永远投递不出去, 受调试程序在 nohz 空闲
-        路径自旋冻结 (make emu-linux-sh 间歇性卡死)。修复后 drain 经
-        on_irq (= irq_sink) -> plic.set_irq 内联写穿 pending/
-        level, 使 batch 内 Rust 仲裁立即看到 UART 源挂起。
+        drain_rx 置 ext_irq 通知位, 并经 irq_sink 把 pending 与 level
+        写入共享数组, 使加速执行期间 Rust 内联 plic_recompute_mip 看到
+        UART 源挂起, 不覆盖 SEIP. RX 中断关闭时 irq_sink 收到电平 False,
+        共享数组清零.
         """
         emu = Emulator(num_harts=1)
         uart = emu.uart
@@ -662,23 +728,23 @@ class TestWfiIdleSleep:
 
     @pytest.mark.usefixtures("legacy_plic")
     def test_uart_read_empty_deasserts_level(self):
-        """回归: 受调试程序读空 RX FIFO 必须写穿 level=0, 防 Rust complete 重挂起风暴.
+        """受调试程序读空 RX FIFO 后, level 写成 0 并同步到加速执行引擎
+        读取的数组.
 
-        修复前 UART._publish_state 仅更新 Python PLIC 对象, 不写引擎读取的数组。
-        batch 运行期间受调试程序读空 FIFO 后, Rust 内联 plic_do_complete 读到陈旧
-        level=1 -> 重挂起 pending -> SEIP 再次置位 -> spurious 中断无限循环
-        (batch 永不结束, 等价冻结)。修复后 set_irq 写穿 pending/
-        level, complete 读到 level=0 不再重挂。
+        UART 发布状态时同时更新 Python 的 PLIC 对象与加速执行引擎读取的
+        数组, pending 与 level 一并写入. 加速执行期间 Rust 内联的
+        plic_do_complete 读到 level=0, 判定中断已处理完毕, 不再重新挂起
+        pending, SEIP 不再置位.
         """
         emu = Emulator(num_harts=1)
         uart = emu.uart
         assert uart is not None and uart._irq == UART_IRQ
         uart._ie = 1 << 1  # 使能 rxwm 中断, 即 IE 的 bit1
-        # 数据入队 -> set_irq 写穿: 引擎读取的数组同步置位
+        # 数据入队后 set_irq 同步置位引擎读取的数组
         uart.preload(b"AB")
         assert emu.plic.pending[UART_IRQ] == 1
         assert emu.plic.level[UART_IRQ] == 1
-        # 模拟受调试程序的中断服务程序逐个读出 FIFO 中的字节; 读空后电平写穿为 0
+        # 模拟受调试程序的中断服务程序逐个读出 FIFO 中的字节; 读空后电平写成 0
         uart.read(0x04, 1)
         assert emu.plic.pending[UART_IRQ] == 1, "还有数据时不得 deassert"
         uart.read(0x04, 1)
@@ -756,7 +822,9 @@ class TestSpeedupPmpBuffers:
         for hid, hart in enumerate(emu.harts):
             assert len(hart.pmp.flat_cfg) == n
             assert ctypes.addressof(hart.pmp.flat_cfg) == base_cfg + hid * n
-            assert ctypes.addressof(hart.pmp.flat_addr) == base_addr + hid * n * 8
+            assert (
+                ctypes.addressof(hart.pmp.flat_addr) == base_addr + hid * n * 8
+            )
 
     def test_engine_write_syncs_only_changed_hart(self):
         """引擎写入某个 hart 的切片之后只同步该 hart 的 CSR."""
@@ -781,3 +849,52 @@ class TestSpeedupPmpBuffers:
         hart.pmp.flat_cfg[0] = 0x1F
         emu._native_unmarshal_pmp()
         assert hart.csrs["pmpcfg0"].val == 0x1F
+
+
+class TestTermioHostKeys:
+    """宿主终端的 Home、End 与 Ctrl 加方向键的编码改写.
+
+    宿主终端按下这些键时给出 xterm 系列的多种编码, 受调试程序终端的 terminfo
+    只认其中一种; 修复前这些编码原样进入受调试程序, 按键没有任何作用.
+    """
+
+    def test_home_variants(self):
+        for seq in (b"\x1b[H", b"\x1bOH", b"\x1b[1~", b"\x1b[7~"):
+            assert translate_host_keys(seq) == b"\x1bOH"
+
+    def test_end_variants(self):
+        for seq in (b"\x1b[F", b"\x1bOF", b"\x1b[4~", b"\x1b[8~"):
+            assert translate_host_keys(seq) == b"\x1bOF"
+
+    def test_ctrl_arrows(self):
+        assert translate_host_keys(b"\x1b[1;5D") == b"\x1bb"
+        assert translate_host_keys(b"\x1b[5D") == b"\x1bb"
+        assert translate_host_keys(b"\x1bOd") == b"\x1bb"
+        assert translate_host_keys(b"\x1b[1;5C") == b"\x1bf"
+        assert translate_host_keys(b"\x1b[5C") == b"\x1bf"
+        assert translate_host_keys(b"\x1bOc") == b"\x1bf"
+        assert translate_host_keys(b"\x1b[1;5A") == b"\x1bOA"
+        assert translate_host_keys(b"\x1b[5A") == b"\x1bOA"
+        assert translate_host_keys(b"\x1b[1;5B") == b"\x1bOB"
+        assert translate_host_keys(b"\x1b[5B") == b"\x1bOB"
+
+    def test_other_sequences_unchanged(self):
+        for seq in (b"\x1b[A", b"\x1b[1;2D", b"\x1b[3~", b"\x1b", b"hello"):
+            assert translate_host_keys(seq) == seq
+
+    def test_mixed_text(self):
+        data = b"ab\x1b[Hcd\x1b[1;5D"
+        assert translate_host_keys(data) == b"ab\x1bOHcd\x1bb"
+
+    def test_preload_translates_stdin(self):
+        """Python 回退路径读入的按键同样改写后才进入 UART."""
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b"\x1b[1;5D")
+        uart = UART()
+        termio = TerminalIO(uart, threading.Event(), stdio_fds=(read_fd, -1))
+        try:
+            assert termio._preload_stdin_chunk()
+            assert bytes(uart._rx_fifo) == b"\x1bb"
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)

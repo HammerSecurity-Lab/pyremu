@@ -31,7 +31,13 @@ class AmoCase:
     is_64: bool = True
 
 
-def _make_amo_instr(op: AmoFunct5, width: AmoWidth, rd: int, rs1: int, rs2: int) -> int:
+def _make_amo_instr(
+    op: AmoFunct5,
+    width: AmoWidth,
+    rd: int,
+    rs1: int,
+    rs2: int,
+) -> int:
     """构造一条 AMO 指令字."""
     return (
         (op.value << 27)
@@ -127,13 +133,17 @@ class TestAMOArithmetic:
         # rd 应获得原始内存值
         actual_rd = hart.gprs[15] & mask
         assert actual_rd == (case.expected_rd & mask), (
-            f"{case.op.name}: rd expected {case.expected_rd:#x}, got {actual_rd:#x}"
+            f"{case.op.name}: rd expected {case.expected_rd:#x}, "
+            f"got {actual_rd:#x}"
         )
         # 内存应被更新为 result
         byte_len = 8 if case.is_64 else 4
-        new_mem = int.from_bytes(hart.mem_read_phy(case.addr, byte_len), "little")
+        new_mem = int.from_bytes(
+            hart.mem_read_phy(case.addr, byte_len), "little"
+        )
         assert new_mem == (case.expected_result & mask), (
-            f"{case.op.name}: mem expected {case.expected_result:#x}, got {new_mem:#x}"
+            f"{case.op.name}: mem expected {case.expected_result:#x}, "
+            f"got {new_mem:#x}"
         )
 
     def test_amoswap_d(self, hart):
@@ -410,7 +420,9 @@ class TestAMOSignExtend:
         hart.gprs[12] = 0
         neg_val_32 = (-1) & 0xFFFF_FFFF  # 0xFFFFFFFF
         hart.mem_write_phy(0x2000, neg_val_32.to_bytes(4, "little"))
-        instr = _make_amo_instr(AmoFunct5.ADD, AmoWidth.W, rd=15, rs1=10, rs2=12)
+        instr = _make_amo_instr(
+            AmoFunct5.ADD, AmoWidth.W, rd=15, rs1=10, rs2=12
+        )
         hart.exec_instr(instr)
         # rd 应得到符号扩展的 -1 (64-bit 全 F)
         assert hart.gprs[15] & 0xFFFF_FFFF_FFFF_FFFF == 0xFFFF_FFFF_FFFF_FFFF, (
@@ -422,7 +434,9 @@ class TestAMOSignExtend:
         hart.gprs[10] = 0x2000
         hart.gprs[12] = 0
         hart.mem_write_phy(0x2000, (0x7FFF_FFFF).to_bytes(4, "little"))
-        instr = _make_amo_instr(AmoFunct5.SWAP, AmoWidth.W, rd=15, rs1=10, rs2=12)
+        instr = _make_amo_instr(
+            AmoFunct5.SWAP, AmoWidth.W, rd=15, rs1=10, rs2=12
+        )
         hart.exec_instr(instr)
         assert hart.gprs[15] & 0xFFFF_FFFF_FFFF_FFFF == 0x7FFF_FFFF, (
             f"no sign-extend: expected 0x7FFFFFFF, got 0x{hart.gprs[15]:x}"
@@ -434,11 +448,14 @@ class TestAMOSignExtend:
         hart.gprs[12] = 1  # op=1 -> min(0x80000000, 1) = 0x80000000
         min_val = 0x8000_0000
         hart.mem_write_phy(0x2000, min_val.to_bytes(4, "little"))
-        instr = _make_amo_instr(AmoFunct5.MIN, AmoWidth.W, rd=15, rs1=10, rs2=12)
+        instr = _make_amo_instr(
+            AmoFunct5.MIN, AmoWidth.W, rd=15, rs1=10, rs2=12
+        )
         hart.exec_instr(instr)
         # rd 应为符号扩展的 0xFFFFFFFF_80000000
         assert hart.gprs[15] & 0xFFFF_FFFF_FFFF_FFFF == 0xFFFF_FFFF_8000_0000, (
-            f"sign-extend of 0x80000000: expected 0xFFFFFFFF80000000, got 0x{hart.gprs[15]:x}"
+            f"sign-extend of 0x80000000: expected 0xFFFFFFFF80000000, "
+            f"got 0x{hart.gprs[15]:x}"
         )
         # 内存应保持 INT32_MIN
         new_mem = int.from_bytes(hart.mem_read_phy(0x2000, 4), "little")
@@ -454,7 +471,9 @@ class TestReservationInvalidation:
         h.set_reservation(0x4000)
         assert h.reservation_valid
         h.deliver_trap(
-            __import__("pyremu.core.trap_def", fromlist=["TrapType"]).TrapType.IllInstr,
+            __import__(
+                "pyremu.core.trap_def", fromlist=["TrapType"]
+            ).TrapType.IllInstr,
             is_interrupt=False,
         )
         assert not h.reservation_valid
@@ -473,7 +492,9 @@ class TestEmulatorAMOCompetition:
     # fmt: on
     def test_lr_sc_competition(self, num_harts: int):
         """多个 hart 各做 LR 于不同地址; 某一 hart 写回时仅清除相关预留."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000
+        )
 
         # 每个 target hart 预留不同地址
         addrs = {tid: 0x2000 + tid * 16 for tid in range(1, min(num_harts, 4))}
@@ -504,7 +525,9 @@ class TestEmulatorAMOCompetition:
     # fmt: on
     def test_memory_shared_between_harts(self, num_harts: int):
         """所有 hart 通过共享内存通信: 任一 hart 写, 其余 hart 均可读."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000
+        )
 
         val = b"\xca\xfe\xba\xbe\x00\x00\x00\x00"
         emu.bus.write(0x5000, val)
@@ -519,7 +542,9 @@ class TestEmulatorAMOCompetition:
     @pytest.mark.parametrize("num_harts", [2, 8, 9, 10, 12, 16])
     def test_amo_add_across_harts(self, num_harts: int):
         """AMOADD.W: 多个 hart 对同一地址原子累加, 验证结果一致性."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000
+        )
 
         addr = 0x4000
         initial = (0).to_bytes(4, "little")
@@ -541,5 +566,6 @@ class TestEmulatorAMOCompetition:
         result = int.from_bytes(emu.bus.read(addr, 4), "little", signed=True)
         expected = num_harts * (num_harts + 1) // 2
         assert result == expected, (
-            f"AMO 累加结果: 期望 {expected}, 实际 {result} (num_harts={num_harts})"
+            f"AMO 累加结果: 期望 {expected}, 实际 {result} "
+            f"(num_harts={num_harts})"
         )

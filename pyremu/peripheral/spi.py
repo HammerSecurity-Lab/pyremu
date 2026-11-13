@@ -7,13 +7,14 @@
 SPI 主模式控制器.
 
 寄存器布局 (每寄存器 4 字节宽):
-  偏移    名称     读写    描述
-  ──────────────────────────────────────
-  0x00    CTRL     R/W    控制: bit0=EN, bit1=CPOL, bit2=CPHA, bit8:11=frame_len(0->8bit)
-  0x04    STATUS   R      状态: bit0=busy, bit1=rx_avail
-  0x08    TXDATA   W      发送数据 (写入后启动传输, 同时捕获到 RXDATA)
-  0x0C    RXDATA   R      接收数据 (上次传输的结果)
-  0x10    DIV      R/W    时钟除数 (sclk = coreclk / (2*(DIV+1)))
+  偏移   名称    读写  描述
+  ─────────────────────────────────
+  0x00   CTRL    R/W   控制: bit0=EN, bit1=CPOL, bit2=CPHA,
+                      bit8:11=frame_len(0->8bit)
+  0x04   STATUS  R     状态: bit0=busy, bit1=rx_avail
+  0x08   TXDATA  W     发送数据 (写入后启动传输, 同时捕获到 RXDATA)
+  0x0C   RXDATA  R     接收数据 (上次传输的结果)
+  0x10   DIV     R/W   时钟除数 (sclk = coreclk / (2*(DIV+1)))
 
 传输模型: 瞬时完成 — 写 TXDATA 立即将数据镜像到 RXDATA,
 模拟全双工 shift 寄存器操作. 实际固件使用时轮询 STATUS.busy=0

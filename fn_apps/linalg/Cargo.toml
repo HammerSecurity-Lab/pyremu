@@ -1,7 +1,0 @@
-[package]
-name = "linalg"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-nalgebra = "0.34"

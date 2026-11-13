@@ -20,9 +20,7 @@ from functools import partial
 from pyremu.configs_gen import PMP_ENTRIES, PYREMU_AIA, PYREMU_H_EXT
 from pyremu.utils.regname import init_csr_map, init_gpr_map
 
-# ============================================================
 #  通用寄存器基类
-# ============================================================
 
 
 class Reg:
@@ -43,9 +41,8 @@ class FPR:
         self.val: int = val
 
 
-# ============================================================
 #  GPR / FPR 预构建列表 & 工厂函数
-# ============================================================
+
 
 _gpr_builder = partial(Reg, val=0)
 _gpr = [
@@ -120,9 +117,7 @@ _fpr = [
 ]
 
 
-# ============================================================
 #  CSR 访问权限 & 特权级控制
-# ============================================================
 
 
 class CsrAccess(Enum):
@@ -155,7 +150,12 @@ class CSR(Reg):
     """控制和状态寄存器."""
 
     def __init__(
-        self, access: CsrAccess, xlen: int = 64, implemented: bool = True, *args, **kwargs
+        self,
+        access: CsrAccess,
+        xlen: int = 64,
+        implemented: bool = True,
+        *args,
+        **kwargs,
     ):
         self.access = access
         self.xlen = xlen
@@ -189,9 +189,8 @@ class CSR(Reg):
         return self
 
 
-# ============================================================
 #  CSR 构建器 & 完整地址库
-# ============================================================
+
 
 _UmodeCSR = partial(CSR, access=CsrAccess.u_rw)
 _SmodeCSR = partial(CSR, access=CsrAccess.s_rw)
@@ -480,6 +479,39 @@ def csr_addr_from_name(name: str) -> int | None:
     return None
 
 
+# 仅 RV32 存在的 CSR. RV64 上读写这些地址均触发 IllInstr, 包括计数器高半部分.
+RV32_ONLY_CSR_ADDRS: frozenset[int] = (
+    frozenset(range(0xB80, 0xBA0)) | frozenset(range(0xC80, 0xCA0))
+) | frozenset(
+    {
+        0x114,  # sieh
+        0x154,  # siph
+        0x15D,  # stimecmph
+        0x193,  # spmpenh
+        0x214,  # vsieh
+        0x254,  # vsiph
+        0x25D,  # vstimecmph
+        0x310,  # mstatush
+        0x312,  # medelegh
+        0x313,  # midelegh
+        0x314,  # mieh
+        0x318,  # mvienh
+        0x319,  # mviph
+        0x31A,  # menvcfgh
+        0x354,  # miph
+        0x612,  # hedelegh
+        0x613,  # hidelegh
+        0x618,  # hvienh
+        0x61A,  # henvcfgh
+        0x655,  # hviph
+        0x656,  # hviprio1h
+        0x657,  # hviprio2h
+        0x721,  # mcyclecfgh
+        0x722,  # minstretcfgh
+    }
+)
+
+
 # 每个特权级可读取的 CsrAccess 值集合
 # 逻辑: 固件只能访问当前或更低特权级的 CSR; 更高特权级的 CSR 引发 IllInstr.
 _CSR_ACCESSIBLE: dict[int, frozenset[CsrAccess]] = {
@@ -551,7 +583,9 @@ class CsrAccessError(Exception):
     def __init__(self, csr_id: int, reason: str) -> None:
         self.csr_id = csr_id
         self.reason = reason
-        super().__init__(f"CSR access violation: addr=0x{csr_id:03x}, reason={reason}")
+        super().__init__(
+            f"CSR access violation: addr=0x{csr_id:03x}, reason={reason}"
+        )
 
 
 def check_csr_access(
@@ -565,9 +599,12 @@ def check_csr_access(
     *is_write* 为 True 时额外检查 rw 权限.
 
     Raises:
-        CsrAccessError: 特权级不足 (privilege)、写入只读 CSR (readonly) 或未知 CSR (unknown).
+        CsrAccessError: 特权级不足 (privilege)、写入只读 CSR (readonly) 或
+        未知 CSR (unknown).
     """
     csr_id &= 0xFFF
+    if csr_id in RV32_ONLY_CSR_ADDRS:
+        raise CsrAccessError(csr_id, "rv32-only")
     if csr_id not in csr_bank:
         raise CsrAccessError(csr_id, "unknown")
 

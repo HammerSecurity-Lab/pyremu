@@ -3,7 +3,7 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""LoadOps — 固件、设备树与初始化内存盘的装载.
+"""LoadOps — 固件、设备树与内存设备的装载.
 
 装载目标为物理地址; 落在引导只读存储器窗口内的内容经 BootRom.load 写入, 其余
 写入主存 bytearray 并预热 L2 缓存.
@@ -39,6 +39,7 @@ class LoadOps:
             virtio_net_s=self.virtio_net_s,
             watchdog=self.watchdog,
             crng=self.crng,
+            power_ctrl=self.power_ctrl,
             plic=self.plic,
             imsic=self.imsic,
             aplic_s=self.aplic,
@@ -71,7 +72,11 @@ class LoadOps:
         addr 为 None 时取 ram_base + ram_size - RAM_DTB_OFFSET, 见 mk/memory.mk.
         """
         if addr is None:
-            addr = self._cfg.ram_base + self._cfg.ram_size - configs_gen.RAM_DTB_OFFSET
+            addr = (
+                self._cfg.ram_base
+                + self._cfg.ram_size
+                - configs_gen.RAM_DTB_OFFSET
+            )
         dtb = Path(path).read_bytes()
         self.load_dtb_blob(addr, dtb)
 
@@ -88,16 +93,22 @@ class LoadOps:
         """
         bus = self.bus
         start, end = addr, addr + len(dtb)
-        if not (bus.is_ram_range(start, len(dtb)) or bus.is_rom_range(start, len(dtb))):
+        if not (
+            bus.is_ram_range(start, len(dtb))
+            or bus.is_rom_range(start, len(dtb))
+        ):
             raise ValueError(
                 f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 窗口"
                 f" [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
                 f"引导只读存储器的窗口内"
             )
         initrd = self._initrd
-        if initrd is not None and ranges_overlap(start, end, initrd.start, initrd.end):
+        if initrd is not None and ranges_overlap(
+            start, end, initrd.start, initrd.end
+        ):
             raise ValueError(
-                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 与 initramfs 的区间范围"
+                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 与"
+                " initramfs 的区间范围"
                 f" [0x{initrd.start:x}, 0x{initrd.end:x}) 重叠"
             )
         self._dtb_addr = addr
@@ -128,9 +139,11 @@ class LoadOps:
         data = Path(path).read_bytes()
         bus = self.bus
         if not bus.is_ram_range(addr, len(data)):
+            ram_end = bus.ram_base + bus.ram_size
             raise ValueError(
-                f"initramfs 的区间范围 [0x{addr:x}, 0x{addr + len(data):x}) 不在"
-                f" RAM 窗口 [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 内"
+                f"initramfs 的区间范围"
+                f" [0x{addr:x}, 0x{addr + len(data):x}) 不在"
+                f" RAM 窗口 [0x{bus.ram_base:x}, 0x{ram_end:x}) 内"
             )
         self.load_code(addr, data)
         self._initrd = dev_tree.Initrd(start=addr, end=addr + len(data))
@@ -159,7 +172,7 @@ class LoadOps:
             self.bus.write(addr, code)
 
     def _write_segment(self, seg, vaddr_offset: int) -> None:
-        """将段的数据写入物理地址 vaddr + vaddr_offset, 并按 memsz 把余下部分填零.
+        """将段数据写入物理地址 vaddr + vaddr_offset, 并按 memsz 填零.
 
         目标落在引导只读存储器的窗口内时经 BootRom.load 写入; 其余目标写入主存
         bytearray, 即加速执行引擎读取指令与数据的数据源. 不超过
@@ -171,7 +184,8 @@ class LoadOps:
             rom.load(vaddr - rom.base_addr, seg.data)
             if seg.memsz > len(seg.data):
                 pad = vaddr + len(seg.data)
-                rom.load(pad - rom.base_addr, b"\x00" * (seg.memsz - len(seg.data)))
+                pad_len = seg.memsz - len(seg.data)
+                rom.load(pad - rom.base_addr, b"\x00" * pad_len)
             return
 
         # 加速执行引擎直接读取这份 bytearray
@@ -218,8 +232,8 @@ class LoadOps:
         for seg in image.segments:
             self._write_segment(seg, load_offset)
 
-        # load_offset 非 0 时施加 PIE 装载偏移: 固件链接在低地址而主存位于高地址,
-        # S 模式经 mret 进入时使用链接地址, 该地址也须访问到同一批字节.
+        # load_offset 非 0 时施加 PIE 装载偏移: 固件链接在低地址而主存位于
+        # 高地址, S 模式经 mret 进入时使用链接地址, 该地址也须访问到同一批字节.
         if load_offset != 0 and image.segments:
             for seg in image.segments:
                 self._write_segment(seg, 0)

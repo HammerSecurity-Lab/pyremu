@@ -27,13 +27,16 @@ class TestFmtHexdump:
 
     def test_full_line_holds_sixteen_bytes(self):
         expected = (
-            "  0x0000000000001000  00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
-            "  |................|"
+            "  0x0000000000001000  00 01 02 03 04 05 06 07 "
+            "08 09 0a 0b 0c 0d 0e 0f  |................|"
         )
         assert fmt_hexdump(bytes(range(16)), 0x1000) == expected
 
     def test_short_line_pads_hex_column(self):
-        expected = "  0x0000000000000000  00                                               |.|"
+        expected = (
+            "  0x0000000000000000  00                       "
+            "                        |.|"
+        )
         assert fmt_hexdump(b"\x00") == expected
 
     def test_addr_advances_by_columns(self):
@@ -48,7 +51,9 @@ class TestFmtHexdump:
             "  0x0000000080000000  48 65 6c 6c 6f 2c 20 52  |Hello, R|\n"
             "  0x0000000080000008  49 53 43 2d 56 21        |ISC-V!|"
         )
-        assert fmt_hexdump(b"Hello, RISC-V!", 0x8000_0000, columns=8) == expected
+        assert (
+            fmt_hexdump(b"Hello, RISC-V!", 0x8000_0000, columns=8) == expected
+        )
 
     def test_ascii_column_keeps_printable_range(self):
         """可打印区间为 0x20 至 0x7E; 0x1F 与 0x7F 各自落在区间之外."""

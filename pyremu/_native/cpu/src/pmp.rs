@@ -5,7 +5,7 @@
 //! 并按条目索引由小到大优先匹配。
 
 use crate::consts::HOST_MDID;
-use crate::state::{riscv_mode, HartState};
+use crate::state::HartState;
 
 /// PMP 配置, 含条目配置字节、地址数组与条目数。
 pub struct PmpCtx {
@@ -24,41 +24,7 @@ pub fn pmp_ok(
 	is_execute: bool,
 	pmp: &PmpCtx,
 ) -> bool {
-	// 按 RISC-V 特权规范 §3.7.1, 未实现任何 PMP 条目时,
-	// S 模式与 U 模式的访问一律被拒绝, 仅允许 M 模式访存。
-	if pmp.num == 0 {
-		if state.mode == riscv_mode::M {
-			// RISC-V 特权规范 §4.1.12 要求取指不受 MPRV 影响。
-			if is_execute {
-				return true;
-			}
-			let mprv = (state.mstatus >> 17) & 1;
-			if mprv == 0 {
-				return true;
-			}
-			let mpp = (state.mstatus >> 11) & 0x3;
-			if mpp == (riscv_mode::M as u64) {
-				return true;
-			}
-		}
-		return false;
-	}
-	if state.mode == riscv_mode::M {
-		// 取指不受 MPRV 影响, M 模式取指一律绕过 PMP。
-		if is_execute {
-			return true;
-		}
-		let mprv = (state.mstatus >> 17) & 1;
-		if mprv == 0 {
-			return true;
-		}
-		// MPRV 为 1 时, PMP 按有效模式 MPP 检查;
-		// MPP 为 M 时有效模式仍为 M, 绕过 PMP 检查。
-		let mpp = (state.mstatus >> 11) & 0x3;
-		if mpp == (riscv_mode::M as u64) {
-			return true;
-		}
-	}
+	// M 模式的旁路与锁定条目的判定都在 pmp_check 内完成
 	pmp_check(
 		pmp.cfg,
 		pmp.addr,
@@ -74,9 +40,7 @@ pub fn pmp_ok(
 	) != 0
 }
 
-// ============================================================
 //  PMP 配置常量
-// ============================================================
 
 const PMP_R: u8 = 0b0000_0001;
 const PMP_W: u8 = 0b0000_0010;
@@ -86,8 +50,7 @@ const PMP_A_OFF: u8 = 0b0000_0000;
 const PMP_A_TOR: u8 = 0b0000_1000;
 const PMP_A_NA4: u8 = 0b0001_0000;
 const PMP_A_NAPOT: u8 = 0b0001_1000;
-#[allow(dead_code)]
-const PMP_L: u8 = 0b1000_0000;
+pub(crate) const PMP_L: u8 = 0b1000_0000;
 
 const _MODE_M: u8 = 3;
 
@@ -122,24 +85,23 @@ fn addr_in_range(addr: u64, size: u32, base: u64, rsize: u64) -> bool {
 	addr >= base && end <= rend
 }
 
-/// 检查单个条目的权限位，R 位为 0 时拒绝一切访问。
+/// 检查单个条目的权限位: 执行只要求 X; 读要求 R; 写入另要求 W。
+/// R 为 0 且 W 为 1 是保留组合, 读与写均被拒绝。
 #[inline(always)]
 fn check_perm(cfg: u8, is_write: bool, is_execute: bool) -> bool {
+	if is_execute {
+		return (cfg & PMP_X) != 0;
+	}
 	if (cfg & PMP_R) == 0 {
 		return false;
 	}
 	if is_write && (cfg & PMP_W) == 0 {
 		return false;
 	}
-	if is_execute && (cfg & PMP_X) == 0 {
-		return false;
-	}
 	true
 }
 
-// ============================================================
 //  主检查函数
-// ============================================================
 
 /// 判定一次物理内存访问是否通过 PMP 规则。
 ///
@@ -160,29 +122,26 @@ pub extern "C" fn pmp_check(
 	mdid: u64,
 ) -> u8 {
 	// ---- 确定有效特权模式 ----
+	// MPRV 不作用于取指; M 模式的数据访问在 MPRV=1 且 MPP 不为 M 时按 MPP 检查。
 	let mut eff_mode = mode_val;
-	if mode_val == _MODE_M {
+	if mode_val == _MODE_M && is_execute == 0 {
 		let mprv = (mstatus_val >> 17) & 1;
-		if mprv == 0 {
-			// M 模式且 MPRV 为 0: 绕过 PMP 检查
-			return 1;
-		}
-		let mpp = (mstatus_val >> 11) & 0x3;
-		// MPP 取 0 时为 U 模式, 1 为 S 模式, 其余则按 M 模式处理
-		eff_mode = match mpp {
-			0 => 0,
-			1 => 1,
-			_ => 3,
-		};
-		// MPRV=1 且 MPP 为 M 模式时，有效模式仍为 M, 不启用 PMP 检查。
-		if eff_mode == _MODE_M {
-			return 1;
+		if mprv != 0 {
+			let mpp = (mstatus_val >> 11) & 0x3;
+			// MPP 取 0 时为 U 模式, 1 为 S 模式, 其余则按 M 模式处理
+			eff_mode = match mpp {
+				0 => 0,
+				1 => 1,
+				_ => 3,
+			};
 		}
 	}
+	// 有效模式为 M 时只有锁定的条目参与检查, 未命中条目时放行
+	let is_mmode = eff_mode == _MODE_M;
 
-	// ---- 无条目则拒绝本次访问 ----
+	// ---- 无条目时 M 模式放行, 其余拒绝 ----
 	if num_entries == 0 {
-		return 0;
+		return is_mmode as u8;
 	}
 
 	let enclave_mode = mdid != HOST_MDID;
@@ -201,6 +160,10 @@ pub extern "C" fn pmp_check(
 		}
 
 		let cfg = cfg_slice[i];
+		// M 模式只受锁定条目约束
+		if is_mmode && (cfg & PMP_L) == 0 {
+			continue;
+		}
 		let a_type = cfg & PMP_A_MASK;
 		if a_type == PMP_A_OFF {
 			continue;
@@ -229,13 +192,11 @@ pub extern "C" fn pmp_check(
 		return check_perm(cfg, is_write != 0, is_execute != 0) as u8;
 	}
 
-	// ---- 无条目命中时，拒绝本次访问 ----
-	(eff_mode == _MODE_M) as u8
+	// ---- 无条目命中时, M 模式放行, 其余拒绝 ----
+	is_mmode as u8
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -410,14 +371,31 @@ mod tests {
 	}
 
 	#[test]
-	fn test_mmode_mprv1_mpp_s_enforces_pmp() {
-		// MPRV=1 且 MPP=S(1): 有效模式为 S, PMP 检查生效。
-		// 条目 0 与 PA 0x8000_0000 匹配且无 RWX 权限, 拒绝访存。
+	fn test_mmode_mprv1_does_not_affect_fetch() {
+		// MPRV 只改变数据访存的有效模式, 不影响取指。
+		// M 模式下取指时条目 0 虽与 PA 匹配, 未锁定的条目在 M 模式一律忽略
 		let cfg = [PMP_A_NAPOT | 0x00]; // NAPOT, 无 RWX 权限
 		let addr = [0x2000_01ffu64];
 		let mstatus = (1u64 << 17) | (1u64 << 11); // MPRV=1, MPP=1 表示有效模式为 S
 		assert_eq!(
 			check(&cfg, &addr, 1, 0x8000_0000, 0, 1, 3, mstatus, 0, 0),
+			1
+		);
+	}
+
+	#[test]
+	fn test_mmode_mprv1_data_access_uses_mpp() {
+		// MPRV=1 且 MPP=S(1): 数据访存的有效模式为 S, PMP 检查生效。
+		// 条目 0 与 PA 0x8000_0000 匹配且无 RWX 权限, 读写都被拒绝。
+		let cfg = [PMP_A_NAPOT | 0x00]; // NAPOT, 无 RWX 权限
+		let addr = [0x2000_01ffu64];
+		let mstatus = (1u64 << 17) | (1u64 << 11); // MPRV=1, MPP=1
+		assert_eq!(
+			check(&cfg, &addr, 1, 0x8000_0000, 0, 0, 3, mstatus, 0, 0),
+			0
+		);
+		assert_eq!(
+			check(&cfg, &addr, 1, 0x8000_0000, 1, 0, 3, mstatus, 0, 0),
 			0
 		);
 	}

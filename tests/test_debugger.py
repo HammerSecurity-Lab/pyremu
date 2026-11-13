@@ -25,7 +25,13 @@ from pyremu.memory.l2cache import L2Cache
 from pyremu.memory.mmu import PTE, satp_root_ppn, sv39_walk
 from pyremu.memory.pmp import PMP_A_TOR, PMP_R, PMP_W, PMP_X
 from pyremu.utils.parse_bin import FirmwareImage, FirmwareSegment
-from tests.conftest import make_test_dbg, make_test_emu
+from tests.conftest import (
+    make_test_dbg,
+    make_test_dbg_buffered,
+    make_test_emu,
+)
+
+POWER_BASE = 0x0010_0000
 
 # ============================================================
 #  辅助
@@ -95,7 +101,13 @@ class TestStackFrame:
     """栈帧."""
 
     def test_create(self):
-        sf = StackFrame(idx=0, fp=0x80001000, sp=0x80000FF0, ra=0x80000100, pc=0x800000FC)
+        sf = StackFrame(
+            idx=0,
+            fp=0x80001000,
+            sp=0x80000FF0,
+            ra=0x80000100,
+            pc=0x800000FC,
+        )
         assert sf.idx == 0
         assert sf.fp == 0x80001000
         assert sf.sp == 0x80000FF0
@@ -448,7 +460,8 @@ class TestCmdPc:
         dbg = make_test_dbg()
         dbg.hart.satp_val = (8 << 60) | 1  # Sv39 mode
         dbg.hart.pc = 0x1000
-        dbg.cmd_pc("0xFFFF800000010000")  # bits[63:39] 全 1, bit 38 = 0 — 格式错误
+        # bits[63:39] 全 1, bit 38 = 0, 地址格式错误
+        dbg.cmd_pc("0xFFFF800000010000")
 
 
 # ============================================================
@@ -587,6 +600,46 @@ class TestCmdStatus:
         dbg.cmd_status("bad")  # 非整数
 
 
+class TestPostPowerRequest:
+    """关机与复位请求置位后的命令行为."""
+
+    def test_cmd_step_reports_and_skips(self):
+        """单步不执行指令, 并报告关机请求."""
+        dbg, emu, buf = make_test_dbg_buffered(
+            prog_cnt=PROG_PA, is_code_loaded=False
+        )
+        emu.load_code(PROG_PA, b"\x13\x00\x00\x00" * 2)
+        emu.bus.write(POWER_BASE, (0x5555).to_bytes(4, "little"))
+        dbg.cmd_step(1)
+        assert dbg.hart.pc == PROG_PA
+        assert "关机" in buf.getvalue()
+
+    def test_cmd_run_reports_and_skips(self):
+        """按周期执行不推进 PC, 并报告关机请求."""
+        dbg, emu, buf = make_test_dbg_buffered(
+            prog_cnt=PROG_PA, is_code_loaded=False
+        )
+        emu.load_code(PROG_PA, b"\x13\x00\x00\x00" * 2)
+        emu.bus.write(POWER_BASE, (0x5555).to_bytes(4, "little"))
+        dbg.cmd_run(2)
+        assert dbg.hart.pc == PROG_PA
+        assert "关机" in buf.getvalue()
+
+    def test_status_overview_shows_off(self):
+        """概览的 State 列为 off."""
+        dbg, emu, buf = make_test_dbg_buffered(num_harts=2)
+        emu.bus.write(POWER_BASE, (0x7777).to_bytes(4, "little"))
+        dbg.cmd_status()
+        assert "off" in buf.getvalue()
+
+    def test_status_detail_reports_request(self):
+        """详情标题给出复位请求."""
+        dbg, emu, buf = make_test_dbg_buffered()
+        emu.bus.write(POWER_BASE, (0x7777).to_bytes(4, "little"))
+        dbg.cmd_status("0")
+        assert "复位" in buf.getvalue()
+
+
 # ============================================================
 #  TLB 命令
 # ============================================================
@@ -722,7 +775,9 @@ class TestCmdDisasm:
         dbg = make_test_dbg()
         # 0x10000000 是 UART MMIO, 不在 RAM 范围内
         result = dbg._count_instrs_between(0x10000000, 0x10000100)
-        assert result >= MAX_INSTR_COUNT, f"非 RAM 起始地址应返回上限值, 实际 {result}"
+        assert result >= MAX_INSTR_COUNT, (
+            f"非 RAM 起始地址应返回上限值, 实际 {result}"
+        )
 
     def test_count_instrs_iteration_limit(self):
         """超过 _MAX_INSTR_COUNT 条指令后停止遍历."""
@@ -730,7 +785,9 @@ class TestCmdDisasm:
         # RAM 范围内的大区间, 遍历因条目数超限而截断
         ram_base = dbg._emu.bus.ram_base
         result = dbg._count_instrs_between(ram_base, ram_base + 0x100000)
-        assert result <= MAX_INSTR_COUNT, f"指令数不应超过 {MAX_INSTR_COUNT}, 实际 {result}"
+        assert result <= MAX_INSTR_COUNT, (
+            f"指令数不应超过 {MAX_INSTR_COUNT}, 实际 {result}"
+        )
 
     def test_disasm_far_from_ref_no_hang(self):
         """ref_pc 与 disasm 地址相距甚远时不挂死, 且禁用步数."""
@@ -739,7 +796,9 @@ class TestCmdDisasm:
         dbg._disasm_past_terminator = False
         dbg.cmd_disasm("0x10000000", "32")  # UART 地址 — 远在 ref_pc 之上
         # 不应挂死 — 到达这里即通过
-        assert dbg._disasm_past_terminator is True, "大跨距应触发 past_terminator 禁用 +N 步数"
+        assert dbg._disasm_past_terminator is True, (
+            "相距甚远时应触发 past_terminator, 以禁用 +N 步数"
+        )
 
     def test_count_instrs_empty_range(self):
         """start >= end 时返回 0."""
@@ -760,7 +819,9 @@ class TestCmdDisasm:
         dbg.cmd_disasm("0x80000ff0", "4")
         step_after_first = dbg._disasm_base_step
         # 4 条 nop 之后步数到达 ref_pc, next_base 应为 0
-        assert step_after_first <= 0, f"ref_pc 之前 base_step 应 <=0, 实际 {step_after_first}"
+        assert step_after_first <= 0, (
+            f"ref_pc 之前 base_step 应 <=0, 实际 {step_after_first}"
+        )
 
         # 模拟 Enter 重复: 推进到 ref_pc 所在块
         dbg._disasm_next_addr = 0x80001000
@@ -772,7 +833,9 @@ class TestCmdDisasm:
             f"过 ref_pc 后 base_step 应为正, 实际 {step_after_second}"
         )
         # past_terminator 不应被误触发
-        assert dbg._disasm_past_terminator is False, "非终止指令不应设置 past_terminator"
+        assert dbg._disasm_past_terminator is False, (
+            "非终止指令不应设置 past_terminator"
+        )
 
     def test_disasm_odd_addr_auto_aligns(self):
         """非 2-字节对齐地址自动向下对齐并警告."""
@@ -820,7 +883,8 @@ class TestCmdDisasm:
         # 验证下一条地址: 两条 4 字节指令 = 8 字节后
         assert dbg._disasm_next_addr is not None
         assert dbg._disasm_next_addr == target_pa + 8, (
-            f"disasm PA: next_addr=0x{dbg._disasm_next_addr:x}, 期望 0x{target_pa + 8:x}"
+            f"disasm PA: next_addr=0x{dbg._disasm_next_addr:x}, "
+            f"期望 0x{target_pa + 8:x}"
         )
 
     def test_disasm_mmu_bare_falls_back_to_physical(self):
@@ -844,7 +908,7 @@ class TestCmdDisasm:
         hart = dbg.hart
         bus = dbg._emu.bus
 
-        # 2 MiB 超级页: L1 指针 -> L2 大页叶 (PPN bit 9=1, 触发 2026-07-02 掩码回归)
+        # 2 MiB 超级页: L1 指针指向 L2 大页叶, PPN 的 bit 9 为 1
         target_va_2m = 0x200000  # VA 在 2 MiB 对齐边界
         vpn2 = (target_va_2m >> 30) & 0x1FF
         vpn1 = (target_va_2m >> 21) & 0x1FF  # 2 MiB 页: L2 索引为 vpn1
@@ -858,26 +922,29 @@ class TestCmdDisasm:
 
         # L1: 指针 -> L2 页表
         _write_pte(L1_BASE + vpn2 * 8, L2_BASE >> 12, v=True)
-        # L2: 2 MiB 大页叶, PPN=0x80200 (bit 9=1, bits[8:0]=0 — Linux 启动场景复现)
+        # L2: 2 MiB 大页叶, PPN=0x80200, bit 9 为 1, bits[8:0] 全为 0
         mega_ppn = 0x80200
         _write_pte(L2_BASE + vpn1 * 8, mega_ppn, v=True, r=True, w=True, x=True)
 
         # 在映射目标 PA 处写入两条已知指令
         target_pa = 0x80200000
-        bus.write(target_pa, b"\x13\x00\x00\x00\x13\x05\x15\x00")  # nop + addi a0,a0,1
+        # nop + addi a0,a0,1
+        bus.write(target_pa, b"\x13\x00\x00\x00\x13\x05\x15\x00")
 
         hart.mode = RiscvMode.S
         hart.satp_val = (8 << 60) | (L1_BASE >> 12)
         hart.dtlb.flush_all()
         hart.itlb.flush_all()
 
-        # vdisasm — 经 _try_read_va_forced -> sv39_walk -> PA = (ppn << 12) | off
+        # vdisasm 经 _try_read_va_forced 与 sv39_walk,
+        # PA 由 ppn << 12 | off 算出
         dbg.cmd_vdisasm(hex(target_va_2m), "2")
 
         # 验证 next_addr 正确 (两条 4 字节指令, 共 8 字节)
         assert dbg._vdisasm_next_addr is not None
         assert dbg._vdisasm_next_addr == target_va_2m + 8, (
-            f"vdisasm 2M: next_addr=0x{dbg._vdisasm_next_addr:x}, 期望 0x{target_va_2m + 8:x}"
+            f"vdisasm 2M: next_addr=0x{dbg._vdisasm_next_addr:x}, "
+            f"期望 0x{target_va_2m + 8:x}"
         )
 
     def test_vdisasm_ppn_not_pa(self):
@@ -925,7 +992,9 @@ class TestCmdDisasm:
         # 直接调 sv39_walk: 返回 PPN, 不是 PA
         root_ppn = satp_root_ppn(hart.satp_val)
         assert hart.mem_read_phy is not None
-        ok, ppn, _perm, _ps = sv39_walk(root_ppn, target_va_4k, hart.mem_read_phy)
+        ok, ppn, _perm, _ps = sv39_walk(
+            root_ppn, target_va_4k, hart.mem_read_phy
+        )
         assert ok, "sv39_walk 应成功"
         # PPN != PA: 若调用方把 PPN 当 PA 用, 会读到错误地址
         page_off = target_va_4k & 0xFFF
@@ -1012,7 +1081,10 @@ class TestCmdSymbols:
         dbg = make_test_dbg()
         # 模拟 vmlinux 中的场景: aio_complete_rw 和 vfs_coredump 距离 60KB+
         syms = {"aio_complete_rw": 0x1000, "vfs_coredump": 0x11000}
-        ranges = [(0x1000, 0x1080, "aio_complete_rw"), (0x11000, 0x12000, "vfs_coredump")]
+        ranges = [
+            (0x1000, 0x1080, "aio_complete_rw"),
+            (0x11000, 0x12000, "vfs_coredump"),
+        ]
         # 0x1060 在 aio_complete_rw 范围内 — 旧算法会错误返回 vfs_coredump
         assert dbg._resolve_symbol(syms, 0x1060, ranges) == "aio_complete_rw"
         # 0x1000 精确起始
@@ -1045,10 +1117,10 @@ class TestCmdSymbols:
 
         真实回追溯源 (2026-07-04, Linux vmlinux bt):
           workqueue_sysfs_register (GLOBAL): 0x80045664, size=254
-          process_scheduled_works  (LOCAL):  0x8004604c, size=912  ← PC=0x800461c6
-          worker_thread            (LOCAL):  0x80047a94, size=638  ← PC=0x80047c38
+          process_scheduled_works (LOCAL): 0x8004604c, size=912 ← PC=0x800461c6
+          worker_thread (LOCAL): 0x80047a94, size=638 ← PC=0x80047c38
           kthread_blkcg           (GLOBAL): 0x8004d770, size=34
-          kthread                 (LOCAL):  0x8004d794, size=256  ← PC=0x8004d870
+          kthread (LOCAL): 0x8004d794, size=256 ← PC=0x8004d870
 
         旧行为: LOCAL 符号被 skip_local 过滤, ranges 中缺失, PC 经二分查找
         未命中后回退到最近前驱 GLOBAL, 导致 #03~#05 帧函数名全错.
@@ -1070,11 +1142,17 @@ class TestCmdSymbols:
         ]
         # 旧行为 (无 ranges): 前驱匹配 -> workqueue_sysfs_register (错误!)
         # 新行为 (有 ranges): 精确包含 -> process_scheduled_works
-        assert dbg._resolve_symbol(syms, 0x800461C6, ranges) == "process_scheduled_works"
+        assert (
+            dbg._resolve_symbol(syms, 0x800461C6, ranges)
+            == "process_scheduled_works"
+        )
         assert dbg._resolve_symbol(syms, 0x80047C38, ranges) == "worker_thread"
         assert dbg._resolve_symbol(syms, 0x8004D870, ranges) == "kthread"
         # GLOBAL 函数仍正常匹配
-        assert dbg._resolve_symbol(syms, 0x80045664, ranges) == "workqueue_sysfs_register"
+        assert (
+            dbg._resolve_symbol(syms, 0x80045664, ranges)
+            == "workqueue_sysfs_register"
+        )
 
     def test_resolve_symbol_gap_between_funcs_returns_none(self):
         """两函数间空隙地址: ranges 存在 -> 返回 None, 不猜测.
@@ -1090,14 +1168,19 @@ class TestCmdSymbols:
         ]
         assert dbg._resolve_symbol(syms, 0x8004D792, ranges) is None  # end 排除
         assert dbg._resolve_symbol(syms, 0x8004D793, ranges) is None  # 间隙中
-        assert dbg._resolve_symbol(syms, 0x8004D794, ranges) == "kthread"  # 边界内
+        # 边界内
+        assert dbg._resolve_symbol(syms, 0x8004D794, ranges) == "kthread"
 
     def test_find_segment_with_pie_offset(self):
         """_find_segment 传入链接时地址 (已减 _load_offset) 匹配段."""
         image = FirmwareImage(
             entry_point=0x0,
             format="elf",
-            segments=[FirmwareSegment(vaddr=0x0, data=b"", memsz=0x3EBB0, name=".text")],
+            segments=[
+                FirmwareSegment(
+                    vaddr=0x0, data=b"", memsz=0x3EBB0, name=".text"
+                ),
+            ],
             symbols={},
         )
         dbg = make_test_dbg()
@@ -1127,8 +1210,12 @@ class TestCmdSymbols:
             entry_point=0x0,
             format="elf",
             segments=[
-                FirmwareSegment(vaddr=0x0, data=b"", memsz=0x3F260, name=".text"),
-                FirmwareSegment(vaddr=0x180000, data=b"", memsz=0xE225, name=".sittim"),
+                FirmwareSegment(
+                    vaddr=0x0, data=b"", memsz=0x3F260, name=".text"
+                ),
+                FirmwareSegment(
+                    vaddr=0x180000, data=b"", memsz=0xE225, name=".sittim"
+                ),
             ],
             symbols={},
         )
@@ -1137,7 +1224,9 @@ class TestCmdSymbols:
         dbg._load_offset = 0x80000000
         # 内核 Image 区域 (fw_jump): VA 0x200000 起, 无对应段
         seg = dbg._find_segment(0x201048)
-        assert seg is None, f"段间空隙地址不应匹配任何段, 但返回了 {seg.name if seg else None}"
+        assert seg is None, (
+            f"段间空隙地址不应匹配任何段, 但返回了 {seg.name if seg else None}"
+        )
 
     def test_find_segment_gap_just_after_segment_returns_none(self):
         """紧接段末尾之后的地址返回 None.
@@ -1149,8 +1238,12 @@ class TestCmdSymbols:
             entry_point=0x0,
             format="elf",
             segments=[
-                FirmwareSegment(vaddr=0x1000, data=b"", memsz=0x100, name=".text"),
-                FirmwareSegment(vaddr=0x2000, data=b"", memsz=0x80, name=".rodata"),
+                FirmwareSegment(
+                    vaddr=0x1000, data=b"", memsz=0x100, name=".text"
+                ),
+                FirmwareSegment(
+                    vaddr=0x2000, data=b"", memsz=0x80, name=".rodata"
+                ),
             ],
             symbols={},
         )
@@ -1160,12 +1253,14 @@ class TestCmdSymbols:
         # 0x1100 在 1 MiB 内且紧接 .text — 旧实现会返回 .text
         seg = dbg._find_segment(0x1100)
         assert seg is None, (
-            f"段间空隙 0x1100 不应匹配 .text, 但返回了 {seg.name if seg else None}"
+            f"段间空隙 0x1100 不应匹配 .text, "
+            f"但返回了 {seg.name if seg else None}"
         )
         # 0x1FFF 紧接 .rodata 之前 — 同样不应匹配
         seg = dbg._find_segment(0x1FFF)
         assert seg is None, (
-            f"段间空隙 0x1FFF 不应匹配 .rodata, 但返回了 {seg.name if seg else None}"
+            f"段间空隙 0x1FFF 不应匹配 .rodata, "
+            f"但返回了 {seg.name if seg else None}"
         )
 
 
@@ -1627,7 +1722,8 @@ class TestCmdBreakpoint:
         assert "handle_page_fault" in bp.desc
 
     def test_kernel_sym_bp_not_found(self):
-        """内核符号表中无匹配符号时返回 False (供 cmd_bp_set 继续尝试地址解析)."""
+        """内核符号表中无匹配符号时返回 False,
+        供 cmd_bp_set 继续尝试地址解析."""
         dbg = make_test_dbg()
         dbg._image = _make_image()
         dbg._sym_symbols = {"some_func": 0xFFFFFFFF80001000}
@@ -1649,7 +1745,9 @@ class TestCmdBreakpoint:
         assert result is True
         assert len(dbg._breakpoints) == 1
         bp = dbg._breakpoints[0]
-        assert bp.value == 0x1000, f"应使用固件符号地址 0x1000, 实际 {bp.value:#x}"
+        assert bp.value == 0x1000, (
+            f"应使用固件符号地址 0x1000, 实际 {bp.value:#x}"
+        )
 
 
 class TestDispatch:
@@ -1758,7 +1856,9 @@ class TestDispatch:
     def test_sym_empty_symbols(self):
         """空符号表不应崩溃."""
         dbg = make_test_dbg()
-        dbg._image = FirmwareImage(format="elf", entry_point=0x1000, segments=[], symbols={})
+        dbg._image = FirmwareImage(
+            format="elf", entry_point=0x1000, segments=[], symbols={}
+        )
         assert dbg._dispatch(["sym"]) is True
 
     def test_sym_no_image(self):
@@ -1924,7 +2024,8 @@ class TestStackWalk:
         frames = dbg._walk_frame_chain()
         # Sv39 启用时 sepc 为裸 RAM 地址 -> 残留, 不生成边界帧
         assert len(frames) == 1, (
-            f"Sv39 + RAM sepc 不应生成边界帧 (即使是 SPP=S), 但得到 {len(frames)} 帧"
+            f"Sv39 + RAM sepc 不应生成边界帧 (即使是 SPP=S), "
+            f"但得到 {len(frames)} 帧"
         )
         assert frames[0].idx == 0
 
@@ -1957,8 +2058,10 @@ class TestStackWalk:
 
         frames = dbg._walk_frame_chain()
 
-        assert len(frames) >= 2, f"应至少有帧 #0 和帧 #1, 但只有 {len(frames)} 帧"
-        # 帧 #1 (caller): pc 应使用 saved_ra (0x80002000) 而非 live x1 (0xDEADBEEF)
+        assert len(frames) >= 2, (
+            f"应至少有帧 #0 和帧 #1, 但只有 {len(frames)} 帧"
+        )
+        # 帧 #1 为调用者: pc 应取 saved_ra 0x80002000, 不取 live x1 0xDEADBEEF
         frame1 = frames[1]
         assert frame1.pc == 0x80001FFC, (
             f"帧 #1 pc 应 = saved_ra - 4 = 0x80001FFC, 但得到 0x{frame1.pc:x}"
@@ -2097,7 +2200,9 @@ class TestUmodeBacktrace:
         h.gprs[8] = 0  # fp = 0 ->FP 链不可达
 
         frames = dbg._walk_frame_chain()
-        assert len(frames) == 2, f"RA 推断应产生 1 个调用者帧 (共 2 帧), 但只有 {len(frames)}"
+        assert len(frames) == 2, (
+            f"RA 推断应产生 1 个调用者帧 (共 2 帧), 但只有 {len(frames)}"
+        )
         assert frames[0].mode == "U"
         assert frames[1].mode == "U"
         assert frames[1].pc == 0x80001FFC  # ra - 4
@@ -2154,8 +2259,10 @@ class TestUmodeBacktrace:
         trap_sp = 0x8001E000
         bus.write(trap_sp, (0x80003AE8).to_bytes(8, "little"))  # trapped PC
         bus.write(trap_sp + 0, (0).to_bytes(8, "little"))  # zero verify (sp+0)
-        bus.write(trap_sp + 8, (0x80002000).to_bytes(8, "little"))  # saved_ra @ ra_off=8
-        bus.write(trap_sp + 16, (0x8000F080).to_bytes(8, "little"))  # saved_fp @ fp_off=16
+        # saved_ra @ ra_off=8
+        bus.write(trap_sp + 8, (0x80002000).to_bytes(8, "little"))
+        # saved_fp @ fp_off=16
+        bus.write(trap_sp + 16, (0x8000F080).to_bytes(8, "little"))
 
         # U-mode FP 链 (位于 saved_fp=0x8000F080)
         bus.write(0x8000F080 - 16, (0x8000F100).to_bytes(8, "little"))
@@ -2166,7 +2273,9 @@ class TestUmodeBacktrace:
         frames = dbg._walk_frame_chain()
 
         umode_frames = [f for f in frames if f.mode == "U"]
-        assert len(umode_frames) >= 1, f"{[(f.idx, f.mode, hex(f.pc)) for f in frames]}"
+        assert len(umode_frames) >= 1, (
+            f"{[(f.idx, f.mode, hex(f.pc)) for f in frames]}"
+        )
 
     # ---------- Fallback trap offsets ----------
 
@@ -2195,11 +2304,14 @@ class TestUmodeBacktrace:
         trap_sp = 0x8001E000
         bus.write(trap_sp, (0x80001000).to_bytes(8, "little"))  # trapped PC
         bus.write(trap_sp + 0, (0).to_bytes(8, "little"))  # zero verify
-        # saved_ra @ ra_off=0 — 但 zero verify 在同一个位置, 所以 ra_off=0 布局无法通过
+        # saved_ra @ ra_off=0, 但 zero verify 在同一个位置,
+        # 所以 ra_off=0 布局无法通过
         # 用 ra_off=8, fp_off=64 (Linux pt_regs) 布局
         # 在 trap_sp 上方找位置放 saved_ra
-        bus.write(trap_sp + 8, (0x80002000).to_bytes(8, "little"))  # saved_ra @ ra_off=8
-        bus.write(trap_sp + 64, (0x8000F080).to_bytes(8, "little"))  # saved_fp @ fp_off=64
+        # saved_ra @ ra_off=8
+        bus.write(trap_sp + 8, (0x80002000).to_bytes(8, "little"))
+        # saved_fp @ fp_off=64
+        bus.write(trap_sp + 64, (0x8000F080).to_bytes(8, "little"))
 
         # U-mode FP 链
         bus.write(0x8000F080 - 16, (0x8000F100).to_bytes(8, "little"))
@@ -2485,7 +2597,9 @@ class TestDisasmCompressed:
         result = dbg._fetch_and_disasm(PROG_PA)
         assert result is not None
         raw_hex, asm = result
-        assert len(raw_hex) == 4, f"压缩指令 hex 应为 4 位, 实际 {len(raw_hex)} 位: {raw_hex}"
+        assert len(raw_hex) == 4, (
+            f"压缩指令 hex 应为 4 位, 实际 {len(raw_hex)} 位: {raw_hex}"
+        )
         assert raw_hex == "7159", f"应为 7159 (仅 C.ADDI16SP), 实际: {raw_hex}"
         assert "c.addi16sp" in asm.lower(), f"应为 C.ADDI16SP, 实际: {asm}"
 
@@ -2539,7 +2653,9 @@ def _make_l2_dbg(
     """构造带可配置 L2 缓存的 Debugger."""
     dbg = make_test_dbg(ram_size=128 * 1024 * 1024, is_code_loaded=False)
     emu = dbg._emu
-    l2 = L2Cache(size=num_sets * ways * line_size, line_size=line_size, ways=ways)
+    l2 = L2Cache(
+        size=num_sets * ways * line_size, line_size=line_size, ways=ways
+    )
     emu.bus._l2 = l2
     l2.set_ram_backend(emu.bus._ram_read_direct, emu.bus._ram_write_direct)
     return dbg
@@ -2595,7 +2711,9 @@ class TestCacheDisplay:
         cap = _CacheOutputCapture(dbg)
         dbg.cmd_cache("0")
         text = cap.text()
-        assert "L2 Cache:" in text, "单 set 模式应为完整 hexdump, 不应含 data[:16]"
+        assert "L2 Cache:" in text, (
+            "单 set 模式应为完整 hexdump, 不应含 data[:16]"
+        )
 
     def test_range_shows_preview_format(self):
         """cache <start>-<end> -> 范围预览模式."""
@@ -2659,7 +2777,12 @@ class TestParseTrapSaveOffsets:
         imm_4_0 = imm & 0x1F
         imm_11_5 = (imm >> 5) & 0x7F
         return (
-            (imm_11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (0x3 << 12) | (imm_4_0 << 7) | 0x23
+            (imm_11_5 << 25)
+            | (rs2 << 20)
+            | (rs1 << 15)
+            | (0x3 << 12)
+            | (imm_4_0 << 7)
+            | 0x23
         )
 
     @staticmethod
@@ -2694,18 +2817,18 @@ class TestParseTrapSaveOffsets:
 
     def test_c_sdsp_both_ra_and_fp(self):
         """c.sdsp x1,8(sp) + c.sdsp x8,64(sp) -> (8, 64)"""
-        code = self._encode_c_sdsp(1, 8).to_bytes(2, "little") + self._encode_c_sdsp(
-            8, 64
-        ).to_bytes(2, "little")
+        code = self._encode_c_sdsp(1, 8).to_bytes(2, "little") + (
+            self._encode_c_sdsp(8, 64).to_bytes(2, "little")
+        )
         dbg, tvec = self._make_tvec_dbg(code)
         result = dbg._parse_trap_save_offsets(tvec)
         assert result == (8, 64), f"expected (8, 64), got {result}"
 
     def test_c_sdsp_fp_first_then_ra(self):
         """先保存 fp 后 ra 的顺序也应正确识别"""
-        code = self._encode_c_sdsp(8, 64).to_bytes(2, "little") + self._encode_c_sdsp(
-            1, 8
-        ).to_bytes(2, "little")
+        code = self._encode_c_sdsp(8, 64).to_bytes(2, "little") + (
+            self._encode_c_sdsp(1, 8).to_bytes(2, "little")
+        )
         dbg, tvec = self._make_tvec_dbg(code)
         result = dbg._parse_trap_save_offsets(tvec)
         assert result == (8, 64), f"expected (8, 64), got {result}"
@@ -2745,21 +2868,25 @@ class TestParseTrapSaveOffsets:
         dbg_c, tv_c = self._make_tvec_dbg(c_code)
         dbg_sd, tv_sd = self._make_tvec_dbg(sd_code)
 
-        assert dbg_c._parse_trap_save_offsets(tv_c) == dbg_sd._parse_trap_save_offsets(tv_sd)
+        assert dbg_c._parse_trap_save_offsets(tv_c) == (
+            dbg_sd._parse_trap_save_offsets(tv_sd)
+        )
 
     def test_equivalent_fp_offset(self):
         """c.sdsp 和 sd 对 fp 产生相同偏移 (需同时有 ra)"""
-        c_code = self._encode_c_sdsp(1, 8).to_bytes(2, "little") + self._encode_c_sdsp(
-            8, 64
-        ).to_bytes(2, "little")
-        sd_code = self._encode_sd(1, 2, 8).to_bytes(4, "little") + self._encode_sd(
-            8, 2, 64
-        ).to_bytes(4, "little")
+        c_code = self._encode_c_sdsp(1, 8).to_bytes(2, "little") + (
+            self._encode_c_sdsp(8, 64).to_bytes(2, "little")
+        )
+        sd_code = self._encode_sd(1, 2, 8).to_bytes(4, "little") + (
+            self._encode_sd(8, 2, 64).to_bytes(4, "little")
+        )
 
         dbg_c, tv_c = self._make_tvec_dbg(c_code)
         dbg_sd, tv_sd = self._make_tvec_dbg(sd_code)
 
-        assert dbg_c._parse_trap_save_offsets(tv_c) == dbg_sd._parse_trap_save_offsets(tv_sd)
+        assert dbg_c._parse_trap_save_offsets(tv_c) == (
+            dbg_sd._parse_trap_save_offsets(tv_sd)
+        )
 
     # ---- 边界 ----
 
@@ -2779,7 +2906,9 @@ class TestParseTrapSaveOffsets:
         # max_instrs=5, 每条压缩指令 2 字节, 最多读 10 字节
         # padding 10×2=20 字节, ra 在第 20 字节之后 -> 找不到
         result = dbg._parse_trap_save_offsets(tvec, max_instrs=5)
-        assert result is None, f"ra beyond max_instrs should return None, got {result}"
+        assert result is None, (
+            f"ra beyond max_instrs should return None, got {result}"
+        )
 
 
 # ============================================================
@@ -2891,7 +3020,14 @@ class TestCtrlFlowKind:
     def test_beq_is_branch(self):
         """BEQ 为条件分支."""
         # beq x0, x0, 8
-        instr = (0 << 25) | (0 << 20) | (0 << 15) | (0b000 << 12) | (1 << 7) | 0b1100011
+        instr = (
+            (0 << 25)
+            | (0 << 20)
+            | (0 << 15)
+            | (0b000 << 12)
+            | (1 << 7)
+            | 0b1100011
+        )
         assert Debugger._ctrl_flow_kind(instr) == "branch"
 
     def test_ecall_is_term(self):
@@ -2993,7 +3129,8 @@ class TestIpBits:
 
 
 # ============================================================
-#  CSR detail commands (mcause, scause, mtvec, stvec, mip, mie, sip, sie, medeleg, mideleg)
+#  CSR detail commands: mcause, scause, mtvec, stvec, mip, mie, sip, sie,
+#  medeleg, mideleg
 # ============================================================
 
 

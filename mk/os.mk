@@ -18,14 +18,14 @@ INITRD     ?=
 #   rootfs; 文件不存在时自动跳过 (回退到无根文件系统, 即 VFS panic)。root 所有的镜像
 #   自动只读打开。覆盖: make emu-linux DISK=/path/to/other.ext4
 DISK       ?= $(bsp_dir)/setup-rootfs/debootstrap/riscv-sd.ext4
-# ram / rdinit 可覆盖; 挂载 initramfs 时建议加大 RAM (全量驻留内存)。
-# 6G: 飞地内存池 (RESERVED_MEM_SIZE, 见 mk/memory.mk) 自 0x83000000 起占用
-# 2.25 GiB, 尾部到 ~4.30 GiB, 其余留给内核、根文件系统与 initramfs.
-ram        ?= 6G
+# ram / rdinit 可覆盖; 挂载 initramfs 时建议加大 RAM
+# 6G: 飞地内存池自 0x83000000 起占用 2.25 GiB, 
+# 尾部到 ~4.30 GiB, 其余留给内核、根文件系统与 initramfs.
+ram        ?= 4G
 rdinit     ?= /bin/bash
 
 # ---- Kernel bootargs ----
-# dyndbg: dynamic debug 控制 (内核 pr_debug/dev_dbg), 可覆盖.
+# dyndbg: dynamic debug 控制, 可覆盖.
 #   +p 启用全部, func NAME +p 按函数, file PATH +p 按文件, 留空关闭.
 dyndbg         ?=
 # func run_init_process +p
@@ -36,6 +36,10 @@ bootargs_extra ?=
 _bootargs   = earlycon=sbi console=ttySIF0
 # _bootargs  += dyndbg="$(dyndbg)"
 _bootargs  += root=/dev/vda rw
+# 终端类型须与 termio 发给受调试程序的按键编码一致: Home 与 End 取 xterm
+# 系列的 khome 与 kend, 即 ESC O H 与 ESC O F. 未给出时 zsh 读不到 terminfo
+# 的这两个键, 按键没有任何作用.
+_bootargs  += TERM=xterm-256color
 _bootargs  += $(if $(init),init=$(init))
 _bootargs  += $(if $(INITRD),rdinit=$(rdinit)) $(bootargs_extra)
 bootargs_arg    = --bootargs='$(_bootargs)'

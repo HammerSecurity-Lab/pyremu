@@ -3,34 +3,10 @@
 	url = https://github.com/riscv-software-src/riscv-tests.git
 [submodule "vendor/keystone"]
 	path = vendor/keystone
-	url = https://github.com/keystone-enclave/keystone
+	url = https://github.com/TrisenYu/keystone.git
 [submodule "vendor/musl"]
 	path = vendor/musl
 	url = https://git.musl-libc.org/git/musl
-[submodule "fn_apps/dune/dune-localfunctions"]
-	path = fn_apps/dune/dune-localfunctions
-	url = https://gitlab.dune-project.org/core/dune-localfunctions.git
-[submodule "fn_apps/dune/dune-grid"]
-	path = fn_apps/dune/dune-grid
-	url = https://gitlab.dune-project.org/core/dune-grid.git
-[submodule "fn_apps/dune/dune-istl"]
-	path = fn_apps/dune/dune-istl
-	url = https://gitlab.dune-project.org/core/dune-istl.git
-[submodule "fn_apps/dune/dune-typetree"]
-	path = fn_apps/dune/dune-typetree
-	url = https://gitlab.dune-project.org/staging/dune-typetree.git
-[submodule "fn_apps/dune/dune-uggrid"]
-	path = fn_apps/dune/dune-uggrid
-	url = https://gitlab.dune-project.org/staging/dune-uggrid.git
-[submodule "fn_apps/dune/dune-geometry"]
-	path = fn_apps/dune/dune-geometry
-	url = https://gitlab.dune-project.org/core/dune-geometry.git
-[submodule "fn_apps/dune/dune-common"]
-	path = fn_apps/dune/dune-common
-	url = https://gitlab.dune-project.org/core/dune-common.git
-[submodule "fn_apps/dune/dune-functions"]
-	path = fn_apps/dune/dune-functions
-	url = https://gitlab.dune-project.org/staging/dune-functions.git
 [submodule "vendor/mpfr"]
 	path = vendor/mpfr
 	url = https://gitlab.inria.fr/mpfr/mpfr.git
@@ -41,9 +17,33 @@
 	path = vendor/gmp
 	url = https://github.com/gmp-mirror/gmp.git
 	ignore = untracked
-[submodule "fn_apps/stress-ng"]
-	path = fn_apps/stress-ng
-	url = https://github.com/ColinIanKing/stress-ng
 [submodule "vendor/busybox"]
 	path = vendor/busybox
 	url = https://git.busybox.net/busybox
+[submodule "bsp/eval-suites/fn_apps/dune/dune-localfunctions"]
+	path = bsp/eval-suites/fn_apps/dune/dune-localfunctions
+	url = https://gitlab.dune-project.org/core/dune-localfunctions.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-grid"]
+	path = bsp/eval-suites/fn_apps/dune/dune-grid
+	url = https://gitlab.dune-project.org/core/dune-grid.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-istl"]
+	path = bsp/eval-suites/fn_apps/dune/dune-istl
+	url = https://gitlab.dune-project.org/core/dune-istl.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-typetree"]
+	path = bsp/eval-suites/fn_apps/dune/dune-typetree
+	url = https://gitlab.dune-project.org/staging/dune-typetree.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-uggrid"]
+	path = bsp/eval-suites/fn_apps/dune/dune-uggrid
+	url = https://gitlab.dune-project.org/staging/dune-uggrid.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-geometry"]
+	path = bsp/eval-suites/fn_apps/dune/dune-geometry
+	url = https://gitlab.dune-project.org/core/dune-geometry.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-common"]
+	path = bsp/eval-suites/fn_apps/dune/dune-common
+	url = https://gitlab.dune-project.org/core/dune-common.git
+[submodule "bsp/eval-suites/fn_apps/dune/dune-functions"]
+	path = bsp/eval-suites/fn_apps/dune/dune-functions
+	url = https://gitlab.dune-project.org/staging/dune-functions.git
+[submodule "bsp/eval-suites/fn_apps/stress-ng"]
+	path = bsp/eval-suites/fn_apps/stress-ng
+	url = https://github.com/ColinIanKing/stress-ng

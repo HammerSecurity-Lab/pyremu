@@ -61,11 +61,11 @@ TrapType = Enum(
     ),
 )
 
-# ============================================================
+
 #  TrapType -> mcause/scause 编码映射
 #  异常: code = 直接编号, bit 63 = 0
 #  中断: code = 直接编号, bit 63 = 1
-# ============================================================
+
 
 # 每个 TrapType 对应的 mcause 异常/中断编号
 _TRAP_CAUSE_CODE: dict[TrapType, int] = {
@@ -80,7 +80,8 @@ _TRAP_CAUSE_CODE: dict[TrapType, int] = {
     TrapType.StAccessFault: 7,
     TrapType.EcallFromUmode: 8,
     TrapType.EcallFromSmode: 9,
-    TrapType.EcallFromHmode: 10,  # HS-mode ecall -> 10 (reserved in spec; used here)
+    # HS-mode ecall -> 10 (reserved in spec; used here)
+    TrapType.EcallFromHmode: 10,
     TrapType.EcallFromMmode: 11,
     TrapType.InstrPageFault: 12,
     TrapType.LdPageFault: 13,
@@ -121,9 +122,8 @@ def trap_is_interrupt(trap: TrapType) -> bool:
     return (code >> 63) & 1 == 1
 
 
-# ============================================================
 #  中断优先级与硬件中断源的 mip 位
-# ============================================================
+
 
 # 中断优先级列表, 按优先级从高到低排列.
 # 预计算为模块级常量, 避免每条指令分配 list 与 6 个 tuple.
@@ -151,11 +151,11 @@ HW_MIP_MASK: int = (
 MODE_S_VALUE: int = RiscvMode.S.value
 
 
-# ============================================================
 #  RISC-V semihosting 序列
-# ============================================================
+
 # 调用序列为 ``slli x0,x0,0x1f; ebreak; srai x0,x0,7``, a0 存放操作码, a1 存放
-# 参数块指针; marker 指令编码与加速执行引擎 handlers.rs 的 SEMIHOSTING_PRE/POST 一致.
+# 参数块指针; marker 指令编码与加速执行引擎 handlers.rs 的 SEMIHOSTING_PRE/POST
+# 一致.
 # 带 marker 的 ebreak 内联服务 SYS_WRITE / SYS_WRITEC / SYS_OPEN / SYS_ISTTY,
 # SYS_EXIT 置停机标记供 run() 返回; 两者都不投递断点 trap.
 
@@ -183,7 +183,9 @@ def semihosting_write_stderr(data: bytes) -> None:
 
 
 # mcause/scause 编码到 TrapType 名称的逆向映射
-_CAUSE_CODE_NAME: dict[int, str] = {code: trap.name for trap, code in _TRAP_CAUSE_CODE.items()}
+_CAUSE_CODE_NAME: dict[int, str] = {
+    code: trap.name for trap, code in _TRAP_CAUSE_CODE.items()
+}
 
 
 def trap_cause_name(mcause_val: int) -> str:

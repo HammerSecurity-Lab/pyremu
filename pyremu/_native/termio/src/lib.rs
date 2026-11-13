@@ -3,9 +3,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU8, Ordering};
 use std::sync::Mutex;
 
-// ============================================================
 //  FFI 上下文: 由 Python ctypes 传入的 C 布局结构体
-// ============================================================
 
 /// 终端输入输出线程的共享状态, 由 Python 分配并在启动时传入一次.
 /// 所有指针在线程生命周期内保持有效.
@@ -58,9 +56,7 @@ struct SavedTerm {
 	old_fl1: libc::c_int,
 }
 
-// ============================================================
 //  全局线程描述符与 SIGCONT 处理所需的辅助状态
-// ============================================================
 
 static THREAD_HANDLE: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
@@ -130,9 +126,7 @@ fn uninstall_sigcont() {
 	}
 }
 
-// ============================================================
 //  输入输出辅助函数
-// ============================================================
 
 /// EINTR 时重试, EAGAIN 时等待 POLLOUT 可写后继续写入.
 /// 收到停止请求时放弃剩余输出, 避免终端停滞使线程无法结束.
@@ -212,12 +206,10 @@ fn drain_tx(h: &TermIoHandle, chunk: &mut [u8]) {
 	}
 }
 
-// ============================================================
 //  stdin 输入解析器: Ctrl+Q 停机检测与转义序列重组
 //
 //  所有输入先保留在接收缓冲区; 解析器每次在至多 6 字节的窗口内逐字节判定具体的输入
 //  当无法判定时, 例如半个 ESC 序列, 保留在接收缓冲区中作为下一轮解析的开头
-// ============================================================
 
 /// 直接设置 CPU 引擎的停止标志, 而不经过 Python.
 /// 主线程阻塞于 run_parallel 时信号处理函数不执行, 该路径使引擎的看门狗与
@@ -266,8 +258,26 @@ fn esc_seq_len(buf: &[u8]) -> Option<usize> {
 	None // 不足 6 字节且无 final, 保留等待补全
 }
 
-/// 扫描接收缓冲区前端: 消费连续的 0x11 运行即停机请求, 识别完整的 ESC 序列,
-/// 在首个不完整的 ESC 序列处停下. 返回可投递字节数与是否请求停机.
+/// 把宿主终端的按键编码改写为受调试程序终端使用的编码, 返回 ``None`` 表示原样转发.
+///
+/// 受调试程序终端取 xterm 系列, 其 terminfo 的 khome 与 kend 为 ESC O H 与 ESC O F.
+/// Ctrl+左键与 Ctrl+右键改写为 ESC b 与 ESC f, 即行编辑器中按词移动的序列;
+/// Ctrl+上键与 Ctrl+下键去掉修饰键, 与上键和下键相同.
+fn translate_key(seq: &[u8]) -> Option<&'static [u8]> {
+	match seq {
+		b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~" => Some(b"\x1bOH"),
+		b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~" => Some(b"\x1bOF"),
+		b"\x1b[1;5C" | b"\x1b[5C" | b"\x1bOc" => Some(b"\x1bf"),
+		b"\x1b[1;5D" | b"\x1b[5D" | b"\x1bOd" => Some(b"\x1bb"),
+		b"\x1b[1;5A" | b"\x1b[5A" => Some(b"\x1bOA"),
+		b"\x1b[1;5B" | b"\x1b[5B" => Some(b"\x1bOB"),
+		_ => None,
+	}
+}
+
+/// 扫描接收缓冲区前端: 消费连续的 0x11 运行即停机请求, 识别完整的 ESC 序列并
+/// 改写其中的按键编码, 在首个不完整的 ESC 序列处停下. 返回可投递字节数与是否
+/// 请求停机.
 /// - 可投递字节数为前端可安全写入接收环形缓冲区的字节数, 不含已消费的 0x11 运行
 ///   与不完整的 ESC 序列; 运行被移除后其后的字节前移, 留在接收缓冲区等待下轮解析.
 /// - 停机时运行之前的可投递前缀长度即为返回值, 运行之后的字节仍然保留.
@@ -275,7 +285,10 @@ fn scan_rx(recv: &mut Vec<u8>) -> (usize, bool) {
 	let mut i = 0usize;
 	while i < recv.len() {
 		let b = recv[i];
-		if b == 0x11 {
+		if b != 0x11 && b != 0x1b {
+			i += 1;
+			continue;
+		} else if b == 0x11 {
 			// 消费整个连续的 0x11 运行, 多个连续 Ctrl+Q 视作同一次停机请求.
 			let mut j = i;
 			while j < recv.len() && recv[j] == 0x11 {
@@ -284,17 +297,19 @@ fn scan_rx(recv: &mut Vec<u8>) -> (usize, bool) {
 			recv.drain(i..j);
 			return (i, true); // 停机由调用方调用 notify_emu_stop 执行
 		}
-		if b == 0x1b {
-			match esc_seq_len(&recv[i..]) {
-				Some(n) if n <= recv.len() - i => {
+		match esc_seq_len(&recv[i..]) {
+			Some(n) if n <= recv.len() - i => {
+				if let Some(out) = translate_key(&recv[i..i + n]) {
+					let out_len = out.len();
+					recv.splice(i..i + n, out.iter().copied());
+					i += out_len;
+				} else {
 					i += n;
 				}
-				_ => {
-					return (i, false); // ESC 序列不完整, 保留等待补全
-				}
 			}
-		} else {
-			i += 1;
+			_ => {
+				return (i, false); // ESC 序列不完整, 保留等待补全
+			}
 		}
 	}
 	(i, false)
@@ -315,9 +330,7 @@ fn drain_fd(fd: RawFd) {
 	}
 }
 
-// ============================================================
 //  标准输入到接收环形缓冲区
-// ============================================================
 
 /// 把标准输入当前可读的所有字节追加到接收缓冲区, 该 fd 为非阻塞, 读到 EAGAIN 为止.
 /// 接收环形缓冲区已满时仍照常读入, 由 scan_rx 与 deliver_rx
@@ -379,9 +392,7 @@ fn deliver_rx(h: &TermIoHandle, recv: &mut Vec<u8>, deliverable: usize) -> usize
 	delivered
 }
 
-// ============================================================
 //  线程入口
-// ============================================================
 
 fn termio_thread(h: TermIoHandle, saved: SavedTerm) {
 	let stop = unsafe { &*h.stop_flag };
@@ -499,9 +510,7 @@ fn termio_thread_simple(h: TermIoHandle, old_stdin_fl: libc::c_int) {
 	}
 }
 
-// ============================================================
 //  FFI 入口
-// ============================================================
 
 /// 启动终端输入输出后台线程.
 ///
@@ -692,9 +701,7 @@ pub extern "C" fn terminal_io_is_running() -> i32 {
 	}
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -911,6 +918,62 @@ mod tests {
 		assert!(!stop);
 		assert_eq!(deliverable, 1, "仅 'a' 可投递, 孤立 ESC 保留");
 		assert_eq!(&recv, b"a\x1b");
+	}
+
+	/// 宿主终端的 Home 与 End 有多个编码, 统一改写为客机终端 terminfo 的
+	/// khome 与 kend.
+	#[test]
+	fn test_translate_key_home_end_variants() {
+		for seq in [&b"\x1b[H"[..], b"\x1bOH", b"\x1b[1~", b"\x1b[7~"] {
+			assert_eq!(translate_key(seq), Some(&b"\x1bOH"[..]));
+		}
+		for seq in [&b"\x1b[F"[..], b"\x1bOF", b"\x1b[4~", b"\x1b[8~"] {
+			assert_eq!(translate_key(seq), Some(&b"\x1bOF"[..]));
+		}
+	}
+
+	/// Ctrl+左右键改写为按词移动的序列, Ctrl+上下键与上下键相同.
+	#[test]
+	fn test_translate_key_ctrl_arrows() {
+		assert_eq!(translate_key(b"\x1b[1;5D"), Some(&b"\x1bb"[..]));
+		assert_eq!(translate_key(b"\x1b[5D"), Some(&b"\x1bb"[..]));
+		assert_eq!(translate_key(b"\x1bOd"), Some(&b"\x1bb"[..]));
+		assert_eq!(translate_key(b"\x1b[1;5C"), Some(&b"\x1bf"[..]));
+		assert_eq!(translate_key(b"\x1b[5C"), Some(&b"\x1bf"[..]));
+		assert_eq!(translate_key(b"\x1bOc"), Some(&b"\x1bf"[..]));
+		assert_eq!(translate_key(b"\x1b[1;5A"), Some(&b"\x1bOA"[..]));
+		assert_eq!(translate_key(b"\x1b[5A"), Some(&b"\x1bOA"[..]));
+		assert_eq!(translate_key(b"\x1b[1;5B"), Some(&b"\x1bOB"[..]));
+		assert_eq!(translate_key(b"\x1b[5B"), Some(&b"\x1bOB"[..]));
+	}
+
+	/// 方向键与其余 ESC 序列原样转发.
+	#[test]
+	fn test_translate_key_passthrough() {
+		assert_eq!(translate_key(b"\x1b[A"), None);
+		assert_eq!(translate_key(b"\x1b[1;2D"), None);
+		assert_eq!(translate_key(b"\x1b[3~"), None);
+		assert_eq!(translate_key(b"\x1b"), None);
+	}
+
+	/// scan_rx 在投递前改写按键编码, 改写后的长度变化计入可投递字节数.
+	#[test]
+	fn test_scan_rx_translates_keys() {
+		let mut recv = b"a\x1b[Hb\x1b[1;5D".to_vec();
+		let (deliverable, stop) = scan_rx(&mut recv);
+		assert!(!stop);
+		assert_eq!(deliverable, recv.len());
+		assert_eq!(&recv, b"a\x1bOHb\x1bb");
+	}
+
+	/// 改写不影响不完整序列的保留: 其后的不完整 ESC 序列仍留在接收缓冲区.
+	#[test]
+	fn test_scan_rx_translate_then_holdback() {
+		let mut recv = b"\x1b[H\x1b[".to_vec();
+		let (deliverable, stop) = scan_rx(&mut recv);
+		assert!(!stop);
+		assert_eq!(deliverable, 3);
+		assert_eq!(&recv, b"\x1bOH\x1b[");
 	}
 
 	/// 受空闲容量约束, 装不下的字节保留在接收缓冲区, 不丢弃.

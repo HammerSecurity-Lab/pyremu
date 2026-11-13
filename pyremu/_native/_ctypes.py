@@ -11,9 +11,7 @@ import ctypes
 
 from pyremu.configs_gen import TLB_ENTRIES
 
-# ============================================================
 #  Instruction decode
-# ============================================================
 
 
 class DecodedFields(ctypes.Structure):
@@ -63,9 +61,7 @@ class CompressedFields(ctypes.Structure):
     ]
 
 
-# ============================================================
 #  ALU
-# ============================================================
 
 
 class Alu64(ctypes.Structure):
@@ -94,9 +90,7 @@ class FpOut(ctypes.Structure):
     ]
 
 
-# ============================================================
 #  Sv39 MMU
-# ============================================================
 
 
 class Sv39Vpn(ctypes.Structure):
@@ -122,9 +116,7 @@ class PteFields(ctypes.Structure):
     ]
 
 
-# ============================================================
 #  Hart state
-# ============================================================
 
 
 class TlbEntry(ctypes.Structure):
@@ -224,7 +216,8 @@ class HartState(ctypes.Structure):
         ("waiting", ctypes.c_uint8),
         ("wfi_woken", ctypes.c_uint8),
         ("halted", ctypes.c_uint8),
-        # mdid 为完整的 64 位, 按 u64 对齐后偏移为 8, 字节块同时由 16 字节增至 24 字节
+        # mdid 为完整的 64 位, 按 u64 对齐后偏移为 8, 字节块同时由 16 字节增至
+        # 24 字节
         ("mdid", ctypes.c_uint64),
         ("pmpsplit", ctypes.c_uint8),
         ("_pad", ctypes.c_uint8 * 7),
@@ -256,6 +249,9 @@ class HartState(ctypes.Structure):
         # 本 hart 的扩展开关; 由 Python 在状态数组分配时写入一次, 引擎只读.
         # 追加在末尾, 不移动上面各字段的偏移.
         ("isa_exts", IsaExtsC),
+        # 软件写入的 mip.SEIP; mip 的位 9 保存外部中断线的取值.
+        # 追加在末尾, 不移动上面各字段的偏移.
+        ("software_seip", ctypes.c_uint8),
     ]
 
 

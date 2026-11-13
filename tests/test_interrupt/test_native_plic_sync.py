@@ -41,7 +41,10 @@ MEIP = 1 << 11
 
 def _plic_program(plic, context: int, source: int) -> None:
     """经 MMIO 编程 PLIC: 置源优先级并在指定 context 使能该源."""
-    plic.write(source * PLIC_PRIORITY_STRIDE, (1).to_bytes(4, "little"))  # priority=1
+    plic.write(
+        source * PLIC_PRIORITY_STRIDE,
+        (1).to_bytes(4, "little"),
+    )  # priority=1
     word = source // 32
     bit = source % 32
     enable_off = PLIC_ENABLE_BASE + context * PLIC_ENABLE_STRIDE + word * 4

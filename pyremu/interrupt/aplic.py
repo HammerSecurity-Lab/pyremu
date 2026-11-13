@@ -26,7 +26,7 @@ APLIC 将传统有线中断 (level/edge-triggered) 转换为 MSI 消息，
     +0x1fdc            clrienum
     +0x2000            setipnum_le    — 单源置 pending (小端, 供 EOI retrigger)
     +0x3000            genmsi
-    +0x3004 + (i-1)*4  target[i]      — (hart_idx << 18) | (guest_idx << 12) | eiid
+    +0x3004 + (i-1)*4  target[i]      — hart_idx << 18 | guest_idx << 12 | eiid
     +0x4000            IDC 结构 (MSI 模式不使用)
 """
 
@@ -130,10 +130,7 @@ class APLIC(Device):
         """MSI 所投 IMSIC 文件所属的特权域."""
         return "M" if self.is_mmode else "S"
 
-    # ================================================================
     #  外设编程接口
-    # ================================================================
-
     def set_irq(self, source_num: int, level: bool = True) -> None:
         """外设调用入口: 拉高/拉低指定 wired 中断源输入电平。
 
@@ -152,6 +149,7 @@ class APLIC(Device):
 
             old_state = self._state[source_num]
             old_input = (old_state & _STATE_INPUT) != 0
+            is_pending = (old_state & _STATE_PENDING) != 0
 
             # 更新输入电平
             if level:
@@ -161,17 +159,17 @@ class APLIC(Device):
 
             # 依据触发类型决定是否置 pending
             update = False
-            if sm == _SM_LEVEL_HIGH and level and not (old_state & _STATE_PENDING):
+            if sm == _SM_LEVEL_HIGH and level and not is_pending:
                 self._state[source_num] |= _STATE_PENDING
                 update = True
-            elif sm == _SM_LEVEL_LOW and not level and not (old_state & _STATE_PENDING):
+            elif sm == _SM_LEVEL_LOW and not level and not is_pending:
                 self._state[source_num] |= _STATE_PENDING
                 update = True
             elif (
                 sm == _SM_EDGE_RISE
                 and level
                 and not old_input
-                and not (old_state & _STATE_PENDING)
+                and not is_pending
             ):
                 self._state[source_num] |= _STATE_PENDING
                 update = True
@@ -179,7 +177,7 @@ class APLIC(Device):
                 sm == _SM_EDGE_FALL
                 and not level
                 and old_input
-                and not (old_state & _STATE_PENDING)
+                and not is_pending
             ):
                 self._state[source_num] |= _STATE_PENDING
                 update = True
@@ -203,10 +201,7 @@ class APLIC(Device):
             )
             self._state[source_num] |= _STATE_ENABLED
 
-    # ================================================================
     #  Device 接口 (MMIO)
-    # ================================================================
-
     def read(self, offset: int, size: int) -> bytes:
         with self._lock:
             val = self._mmio_read(offset)
@@ -217,10 +212,7 @@ class APLIC(Device):
             val = int.from_bytes(data, "little", signed=False)
             self._mmio_write(offset, mask32(val))
 
-    # ================================================================
     #  MMIO 内部方法
-    # ================================================================
-
     def _mmio_read(self, offset: int) -> int:
         if offset == _DOMAINCFG:
             return self._domaincfg
@@ -255,13 +247,37 @@ class APLIC(Device):
         elif _SOURCECFG_BASE <= offset < _SOURCECFG_BASE + self.num_sources * 4:
             self._write_sourcecfg(offset, val)
         elif _SETIP_BASE <= offset < _SETIP_BASE + _BITFIELD_WORDS * 4:
-            self._write_word(offset, _SETIP_BASE, val, set_bit=True, bit=_STATE_PENDING)
+            self._write_word(
+                offset,
+                _SETIP_BASE,
+                val,
+                set_bit=True,
+                bit=_STATE_PENDING,
+            )
         elif _CLRIP_BASE <= offset < _CLRIP_BASE + _BITFIELD_WORDS * 4:
-            self._write_word(offset, _CLRIP_BASE, val, set_bit=False, bit=_STATE_PENDING)
+            self._write_word(
+                offset,
+                _CLRIP_BASE,
+                val,
+                set_bit=False,
+                bit=_STATE_PENDING,
+            )
         elif _SETIE_BASE <= offset < _SETIE_BASE + _BITFIELD_WORDS * 4:
-            self._write_word(offset, _SETIE_BASE, val, set_bit=True, bit=_STATE_ENABLED)
+            self._write_word(
+                offset,
+                _SETIE_BASE,
+                val,
+                set_bit=True,
+                bit=_STATE_ENABLED,
+            )
         elif _CLRIE_BASE <= offset < _CLRIE_BASE + _BITFIELD_WORDS * 4:
-            self._write_word(offset, _CLRIE_BASE, val, set_bit=False, bit=_STATE_ENABLED)
+            self._write_word(
+                offset,
+                _CLRIE_BASE,
+                val,
+                set_bit=False,
+                bit=_STATE_ENABLED,
+            )
         elif _TARGET_BASE <= offset < _TARGET_BASE + self.num_sources * 4:
             self._write_target(offset, val)
         else:
@@ -323,10 +339,7 @@ class APLIC(Device):
             if self._set_pending(val, True):
                 self._deliver_from_source(val)
 
-    # ================================================================
     #  位图辅助
-    # ================================================================
-
     def _read_word(self, offset: int, base: int, bit: int) -> int:
         word = (offset - base) // 4
         result = 0
@@ -359,9 +372,7 @@ class APLIC(Device):
             # 置 enable 或置 pending 都可能使源变为可投递
             self._deliver_from_source(src)
 
-    # ================================================================
     #  pending 置位 / 有效输入电平
-    # ================================================================
 
     def _input_active(self, src: int) -> bool:
         """源 ``src`` 的输入是否处于有效电平 (已应用低有效极性)。
@@ -404,19 +415,17 @@ class APLIC(Device):
         self._state[src] &= ~_STATE_PENDING
         return False
 
-    # ================================================================
     #  MSI 投递
-    # ================================================================
-
     def _deliver_from_source(self, src: int) -> None:
         """
-        若源 pending & enabled 且 domaincfg.IE, 投递 MSI 到 target[src].
-        投递时清除 pending.
+        源处于挂起且使能状态, 且 domaincfg.IE 置位时, 投递 MSI 到 target[src],
+        并在投递时清除挂起位.
         """
         if (self._domaincfg & _DOMAINCFG_IE) == 0:
             return
         state = self._state[src]
-        if (state & (_STATE_PENDING | _STATE_ENABLED)) != (_STATE_PENDING | _STATE_ENABLED):
+        both = _STATE_PENDING | _STATE_ENABLED
+        if (state & both) != both:
             return
 
         # 清除 pending 后投递 (MSI 模式)

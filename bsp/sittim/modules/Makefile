@@ -4,7 +4,7 @@
 # 扩展模块映像的构建与签名。
 #
 # 模块映像是一份连续的二进制文件: 没有 ELF 头, 没有重定位项, 末尾 64 字节是 ECDSA
-# (secp256r1) 签名 r‖s。签名者为 bsp/tee_aux_tools/sign-mod。
+# (secp256r1) 签名 r‖s。签名者为 bsp/tee-tools/signer。
 #
 # 映像偏移 0 处是 64 字节的映像描述块, 由 module.ld 的段内数据命令生成: 它声明模块入口在
 # 映像内的偏移、映像本体的字节数与可写静态数据的起始偏移。取入方按声明的偏移调用入口, 并在
@@ -61,14 +61,14 @@ DIST_DIR := dist
 MODULES := attest net fs
 
 # 宿主侧模块表。宿主工具的 C 源以引号包含直接取用, 故生成物落在该工具的源码目录, 见
-# bsp/tee_aux_tools/ext-mod-svc/tee_ext_mod_svc.c。
-MOD_TBL_INC := ../../tee_aux_tools/ext-mod-svc/ext_mod_table.inc
+# bsp/eval-suites/mod-loader/mod-loader.c。
+MOD_TBL_INC := ../../eval-suites/mod-loader/ext_mod_table.inc
 
 # 签名用私钥。公钥由签名者从私钥推出并打印, 其取值与 sittim 的 config.mk 中
 # ATTEST_PUB_KEY 相同。
 KEY       := ../$(ATTEST_PRIV_KEY_PATH)
-SIGN_DIR  := ../../tee_aux_tools/sign-mod
-SIGN_TOOL := $(SIGN_DIR)/target/$(HOST_TARGET)/release/sign-mod
+SIGN_DIR  := ../../tee-tools/signer
+SIGN_TOOL := $(SIGN_DIR)/target/$(HOST_TARGET)/release/signer
 
 MODULE_RUSTFLAGS := -C relocation-model=pic -C code-model=medium
 
@@ -140,7 +140,7 @@ mod_row = { $(call mod_id,$1), "$1.signed.bin" },
 
 # 模块表的首注释。
 define MOD_TBL_HDR
-/* ext_mod_table.inc - 扩展模块表, 由 tee_ext_mod_svc.c 在编译期包含.
+/* ext_mod_table.inc - 扩展模块表, 由 mod-loader.c 在编译期包含.
  *
  * 本文件由 bsp/sittim/modules/Makefile 的 mod-tbl 目标生成, 不手工编辑: 各项取部署目录 dist
  * 中的映像文件, 按模块名排序, 模块编号取自该模块源码中 MODULE_ID 的声明.
@@ -150,7 +150,7 @@ define MOD_TBL_HDR
  * 文件名拼接得到, 故本文件不含目录.
  *
  * 模块编号与映像声明的编号不一致时飞地的取入以编号不符失败, 见 sittim 的
- * ext_mod::LoadError::IdMismatch; 宿主侧的 tee_ext_mod_serve 按请求中的编号查表, 查不到时
+ * ext_mod::LoadError::IdMismatch; 宿主侧的 mod_loader_serve 按请求中的编号查表, 查不到时
  * 以字节数 0 应答, 飞地据此判该模块不存在.
  */
 endef

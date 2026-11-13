@@ -102,21 +102,10 @@ class SharedAttrs:
 
     _MODE_COLORS: dict[str, str]
 
-    # UART stdin 转发 (终端 raw mode 管理)
+    # UART stdin 转发
     _stdin_forward: bool
     _stdin_fd: int
     _saved_term_attrs: Any
-
-    # ----------------------------------------------------------
-    #  __getattr__ — 仅在 TYPE_CHECKING 时存在
-    #
-    #  告诉 Pylance: 通过 ``self`` 访问任何在 ``SharedAttrs``
-    #  中未定义的属性/方法都是合法的 (由其他操作类在最终
-    #  ``Debugger`` 类的 MRO 中提供).
-    #
-    #  返回 ``Any`` 是为了避免方法签名验证带来的级联错误 —
-    #  跨操作类方法的参数和返回类型由各操作类自己的实现决定.
-    # ----------------------------------------------------------
 
     if TYPE_CHECKING:
 

@@ -24,12 +24,15 @@ class TestMDivideByZero:
 
     @pytest.fixture
     def emu(self) -> Emulator:
-        return Emulator(num_harts=1, ram_base=0, ram_size=0x2000, prog_cnt=0x1000)
+        return Emulator(
+            num_harts=1, ram_base=0, ram_size=0x2000, prog_cnt=0x1000
+        )
 
     def _exec_rtype(self, emu, funct: int, rd: int, src_regs: int):
         """执行一条 R-type 指令并返回目标寄存器结果.
 
-        funct 为 funct7 与 funct3 打包后的取值, src_regs 为 rs1 与 rs2 打包后的取值.
+        funct 为 funct7 与 funct3 打包后的取值,
+        src_regs 为 rs1 与 rs2 打包后的取值.
         """
         h = emu.harts[0]
         h.exec_instr(r_type(0b0110011, rd, funct, src_regs))
@@ -38,39 +41,51 @@ class TestMDivideByZero:
     def test_div_by_zero(self, emu):
         """DIV x5, x10, x0 (divisor=0) -> x5 = -1."""
         emu.harts[0].gprs[10] = 42
-        result = self._exec_rtype(emu, pack_funct(1, 4), 5, pack_src_regs(10, 0))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 4), 5, pack_src_regs(10, 0)
+        )
         assert result == 0xFFFF_FFFF_FFFF_FFFF, f"应为 -1, 实际 {result:#x}"
 
     def test_divu_by_zero(self, emu):
         """DIVU x5, x10, x0 -> x5 = -1 (all-1s)."""
         emu.harts[0].gprs[10] = 0x8000_0000_0000_0000
-        result = self._exec_rtype(emu, pack_funct(1, 5), 5, pack_src_regs(10, 0))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 5), 5, pack_src_regs(10, 0)
+        )
         assert result == 0xFFFF_FFFF_FFFF_FFFF
 
     def test_rem_by_zero(self, emu):
         """REM x5, x10, x0 -> x5 = x10 (dividend)."""
         emu.harts[0].gprs[10] = 42
-        result = self._exec_rtype(emu, pack_funct(1, 6), 5, pack_src_regs(10, 0))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 6), 5, pack_src_regs(10, 0)
+        )
         assert result == 42
 
     def test_remu_by_zero(self, emu):
         """REMU x5, x10, x0 -> x5 = x10."""
         emu.harts[0].gprs[10] = 0xDEAD
-        result = self._exec_rtype(emu, pack_funct(1, 7), 5, pack_src_regs(10, 0))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 7), 5, pack_src_regs(10, 0)
+        )
         assert result == 0xDEAD
 
     def test_div_normal(self, emu):
         """DIV x5, x10, x2 (10 / 3 = 3)."""
         emu.harts[0].gprs[10] = 10
         emu.harts[0].gprs[2] = 3
-        result = self._exec_rtype(emu, pack_funct(1, 4), 5, pack_src_regs(10, 2))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 4), 5, pack_src_regs(10, 2)
+        )
         assert result == 3
 
     def test_rem_normal(self, emu):
         """REM x5, x10, x2 (10 % 3 = 1)."""
         emu.harts[0].gprs[10] = 10
         emu.harts[0].gprs[2] = 3
-        result = self._exec_rtype(emu, pack_funct(1, 6), 5, pack_src_regs(10, 2))
+        result = self._exec_rtype(
+            emu, pack_funct(1, 6), 5, pack_src_regs(10, 2)
+        )
         assert result == 1
 
 
@@ -156,7 +171,9 @@ class TestAluEdgeCases:
         """0 - 1 = UINT64_MAX (SUB wrap)."""
         h.gprs[10] = 0
         h.gprs[11] = 1
-        result = self._exec_r(h, 0b0100000, pack_src_regs(10, 11), 0b000, 10)  # SUB
+        result = self._exec_r(
+            h, 0b0100000, pack_src_regs(10, 11), 0b000, 10
+        )  # SUB
         assert result == TestAluEdgeCases.UINT64_MAX, (
             f"0 - 1 should be UINT64_MAX, got 0x{result:x}"
         )
@@ -172,7 +189,8 @@ class TestAluEdgeCases:
         h.gprs[11] = val
         result = self._exec_r(h, 0, pack_src_regs(10, 11), 0b000, 10)
         assert result == 0xFFFF_FFFF_FFFF_FFFE, (
-            f"INT64_MAX + INT64_MAX expected 0xFFFFFFFFFFFFFFFE, got 0x{result:x}"
+            f"INT64_MAX + INT64_MAX expected 0xFFFFFFFFFFFFFFFE, "
+            f"got 0x{result:x}"
         )
 
     def test_int64_max_add_1_overflows_to_int64_min(self, h):
@@ -185,16 +203,20 @@ class TestAluEdgeCases:
         )
 
     def test_int64_max_mul_self(self, h):
-        """INT64_MAX * INT64_MAX: low 64 = 1, MULH high 64 = 0x3FFFFFFFFFFFFFFF."""
+        """INT64_MAX * INT64_MAX: low 64 = 1,
+        MULH high 64 = 0x3FFFFFFFFFFFFFFF."""
         val = TestAluEdgeCases.INT64_MAX
         h.gprs[10] = val
         h.gprs[11] = val
         result_lo = self._exec_r(h, 1, pack_src_regs(10, 11), 0b000, 10)  # MUL
-        assert result_lo == 1, f"INT64_MAX^2 lo64 should be 1, got 0x{result_lo:x}"
+        assert result_lo == 1, (
+            f"INT64_MAX^2 lo64 should be 1, got 0x{result_lo:x}"
+        )
         h.gprs[10] = val
         result_hi = self._exec_r(h, 1, pack_src_regs(10, 11), 0b001, 10)  # MULH
         assert result_hi == 0x3FFF_FFFF_FFFF_FFFF, (
-            f"INT64_MAX^2 hi64 should be 0x3FFFFFFFFFFFFFFF, got 0x{result_hi:x}"
+            f"INT64_MAX^2 hi64 should be 0x3FFFFFFFFFFFFFFF, "
+            f"got 0x{result_hi:x}"
         )
 
     # ============================================================
@@ -207,7 +229,9 @@ class TestAluEdgeCases:
         h.gprs[10] = val
         h.gprs[11] = val
         result = self._exec_r(h, 0, pack_src_regs(10, 11), 0b000, 10)
-        assert result == 0, f"INT64_MIN + INT64_MIN should be 0, got 0x{result:x}"
+        assert result == 0, (
+            f"INT64_MIN + INT64_MIN should be 0, got 0x{result:x}"
+        )
 
     def test_int64_min_sub_1(self, h):
         """INT64_MIN - 1 = INT64_MAX."""
@@ -224,11 +248,14 @@ class TestAluEdgeCases:
         h.gprs[10] = val
         h.gprs[11] = val
         result_lo = self._exec_r(h, 1, pack_src_regs(10, 11), 0b000, 10)
-        assert result_lo == 0, f"INT64_MIN^2 lo64 should be 0, got 0x{result_lo:x}"
+        assert result_lo == 0, (
+            f"INT64_MIN^2 lo64 should be 0, got 0x{result_lo:x}"
+        )
         h.gprs[10] = val
         result_hi = self._exec_r(h, 1, pack_src_regs(10, 11), 0b001, 10)
         assert result_hi == 0x4000_0000_0000_0000, (
-            f"INT64_MIN^2 hi64 should be 0x4000000000000000, got 0x{result_hi:x}"
+            f"INT64_MIN^2 hi64 should be 0x4000000000000000, "
+            f"got 0x{result_hi:x}"
         )
 
     # ============================================================
@@ -269,7 +296,14 @@ class TestAluEdgeCases:
     def test_slliw_shamt_0_truncates_32bit(self, h):
         """SLLIW shamt=0: truncates to 32-bit, sign-extends to 64."""
         h.gprs[10] = 0xABCD_0000_8765_4321  # bit31=1 -> negative
-        instr = (0 << 25) | (0 << 20) | (10 << 15) | (0b001 << 12) | (10 << 7) | 0b0011011
+        instr = (
+            (0 << 25)
+            | (0 << 20)
+            | (10 << 15)
+            | (0b001 << 12)
+            | (10 << 7)
+            | 0b0011011
+        )
         advance = h.exec_instr(instr)
         if advance:
             h.pc = (h.pc + advance) & 0xFFFF_FFFF_FFFF_FFFF
@@ -300,7 +334,9 @@ class TestRegValueCanonicalization:
 
     @staticmethod
     def _addi(rd, rs1, imm12):
-        return (imm12 << 20) | (rs1 << 15) | (0b000 << 12) | (rd << 7) | 0b0010011
+        return (
+            (imm12 << 20) | (rs1 << 15) | (0b000 << 12) | (rd << 7) | 0b0010011
+        )
 
     @staticmethod
     def _slliw(rd, rs1, shamt):
@@ -410,7 +446,9 @@ class TestRegValueCanonicalization:
         self._exec(h, self._addi(16, 16, -0x113))  # a6 = 0xFFFFFFFFD00DFEED
         via_lui = h.gprs[16]
 
-        assert via_slliw == via_lui, f"via SLLIW: {via_slliw:#018x}, via LUI: {via_lui:#018x}"
+        assert via_slliw == via_lui, (
+            f"via SLLIW: {via_slliw:#018x}, via LUI: {via_lui:#018x}"
+        )
 
     def test_beq_with_values_from_different_paths(self, h):
         """BEQ 应正确判定不同路径构建的相等值."""
@@ -433,7 +471,9 @@ class TestRegValueCanonicalization:
         h.pc = 0x80000100
         self._exec(h, self._beq(15, 16, 8))
         # 分支应被采用 (相等), PC 跳转 +8
-        assert h.pc == 0x80000108, f"BEQ should be taken for equal values, PC={h.pc:#x}"
+        assert h.pc == 0x80000108, (
+            f"BEQ should be taken for equal values, PC={h.pc:#x}"
+        )
 
     def test_bne_with_values_from_different_paths(self, h):
         """BNE 应正确判定不同路径构建的相等值 (不应分支)."""
@@ -456,4 +496,6 @@ class TestRegValueCanonicalization:
         # BNE x15, x16, +8 — 值相等, 不应分支
         h.pc = 0x80000200
         self._exec(h, self._bne(15, 16, 8))
-        assert h.pc == 0x80000204, f"BNE should NOT be taken for equal values, PC={h.pc:#x}"
+        assert h.pc == 0x80000204, (
+            f"BNE should NOT be taken for equal values, PC={h.pc:#x}"
+        )

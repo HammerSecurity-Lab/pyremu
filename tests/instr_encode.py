@@ -4,8 +4,9 @@
 
 """RV64 32-bit 指令编码辅助, 供各测试模块共用.
 
-R-type 的两个字段组以打包形式传入: ``funct`` 由 funct7 与 funct3 打包, ``src_regs``
-由 rs1 与 rs2 打包. 其余格式按字段逐个传入, 参数次序为 opcode 在前, 目的寄存器其次.
+R-type 的两个字段组以打包形式传入: ``funct`` 由 funct7 与 funct3 打包,
+``src_regs`` 由 rs1 与 rs2 打包. 其余格式按字段逐个传入, 参数次序为
+opcode 在前, 目的寄存器其次.
 """
 
 from __future__ import annotations
@@ -22,17 +23,31 @@ def pack_src_regs(rs1: int, rs2: int) -> int:
 
 
 def r_type(opcode: int, rd: int, funct: int, src_regs: int) -> int:
-    """R-type: funct 为 funct7 左移 3 位再接 funct3, src_regs 为 rs1 左移 5 位再接 rs2."""
+    """R-type: funct 为 funct7 左移 3 位再接 funct3, src_regs 为 rs1 左移 5 位
+    再接 rs2."""
     funct7 = funct >> 3
     funct3 = funct & 0x7
     rs1 = src_regs >> 5
     rs2 = src_regs & 0x1F
-    return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+    return (
+        (funct7 << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | (rd << 7)
+        | opcode
+    )
 
 
 def i_type(opcode: int, rd: int, funct3: int, rs1: int, imm12: int) -> int:
     """I-type: 立即数写入 bits[31:20]."""
-    return ((imm12 & 0xFFF) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+    return (
+        ((imm12 & 0xFFF) << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | (rd << 7)
+        | opcode
+    )
 
 
 def s_type(opcode: int, funct3: int, rs1: int, rs2: int, imm12: int) -> int:

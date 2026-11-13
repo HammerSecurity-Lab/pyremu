@@ -38,17 +38,21 @@ from pyremu.utils.mask import (
 if TYPE_CHECKING:
     from pyremu.memory.pmp import PmpAccessInfo
 
-# ============================================================
+
 #  Platform detection
-# ============================================================
 
-_EXT = {"linux": ".so", "darwin": ".dylib", "win32": ".dll"}.get(sys.platform, ".so")
+
+_EXT = {"linux": ".so", "darwin": ".dylib", "win32": ".dll"}.get(
+    sys.platform, ".so"
+)
 _NATIVE_DIR = Path(__file__).resolve().parent
-_LIB_PATH = _NATIVE_DIR / f"libdecode{_EXT}"  # 单独留在外部，好减少SIGBUS/SIGSEGM一类的错误
+_LIB_PATH = (
+    _NATIVE_DIR / f"libdecode{_EXT}"
+)  # 单独留在外部，好减少SIGBUS/SIGSEGM一类的错误
 
-# ============================================================
+
 #  ctypes type definitions (must match Rust #[repr(C)] layout)
-# ============================================================
+
 
 from pyremu._native._ctypes import (  # noqa: E402, F401 — re-export
     Alu64,
@@ -64,9 +68,8 @@ from pyremu._native._ctypes import (  # noqa: E402, F401 — re-export
     TlbEntry,
 )
 
-# ============================================================
 #  Library loading
-# ============================================================
+
 
 _lib = None
 _tmp_so_path: str | None = None
@@ -244,9 +247,7 @@ except OSError as exc:
     )
 
 
-# ============================================================
 #  Public API
-# ============================================================
 
 
 def native_available() -> bool:
@@ -254,9 +255,7 @@ def native_available() -> bool:
     return _lib is not None
 
 
-# ============================================================
 #  Pure Python fallback
-# ============================================================
 
 
 def _sext12(val: int) -> int:
@@ -304,9 +303,7 @@ def _decode_fields_py(instr: int) -> DecodedFields:
     return f
 
 
-# ============================================================
 #  Public decode function
-# ============================================================
 
 
 def decode_fields(instr: int) -> DecodedFields:
@@ -374,7 +371,8 @@ def _dc_immediates(h: int, funct3: int, quadrant: int) -> tuple[int, int]:
 
 
 def _dc_imm_q0(h: int, funct3: int) -> int:
-    """象限 0 的立即数: C.ADDI4SPN / C.LW / C.SW / C.FLD / C.LD / C.FSD / C.SD."""
+    """象限 0 的立即数: C.ADDI4SPN / C.LW / C.SW / C.FLD / C.LD /
+    C.FSD / C.SD."""
     if funct3 == 0:
         return (
             ((h >> 6) & 0x1) << 2
@@ -385,7 +383,11 @@ def _dc_imm_q0(h: int, funct3: int) -> int:
         )
     if funct3 in (2, 6):
         # C.LW / C.SW: uimm[5:3|2|6]
-        return ((h >> 6) & 0x1) << 2 | ((h >> 10) & 0x7) << 3 | ((h >> 5) & 0x1) << 6
+        return (
+            ((h >> 6) & 0x1) << 2
+            | ((h >> 10) & 0x7) << 3
+            | ((h >> 5) & 0x1) << 6
+        )
     if funct3 in (1, 3, 5, 7):
         # C.FLD / C.LD / C.FSD / C.SD: uimm[5:3|6|7]
         return ((h >> 5) & 0x3) << 6 | ((h >> 10) & 0x7) << 3
@@ -393,7 +395,8 @@ def _dc_imm_q0(h: int, funct3: int) -> int:
 
 
 def _dc_imm_q1_lui(h: int, bit12: int, bits_6_2: int) -> int:
-    """funct3=011: C.ADDI16SP (rd=2) 的 10 位 nzimm, 否则 C.LUI 的 6 位 nzimm."""
+    """funct3=011: C.ADDI16SP (rd=2) 的 10 位 nzimm, 否则 C.LUI 的 6 位
+    nzimm."""
     bits_11_7 = (h >> 7) & 0x1F
     if bits_11_7 == 2:
         # C.ADDI16SP: 10-bit signed nzimm
@@ -470,9 +473,7 @@ def decode_compressed(half: int) -> CompressedFields:
     return _decode_compressed_py(half)
 
 
-# ============================================================
 # PMP check
-# ============================================================
 
 
 def pmp_check(
@@ -511,9 +512,7 @@ def pmp_check(
     )
 
 
-# ============================================================
 # Sv39 MMU helpers
-# ============================================================
 
 
 def sv39_decompose_va(va: int) -> Sv39Vpn:
@@ -550,7 +549,8 @@ def pte_parse(raw: int) -> PteFields:
 
 
 def pte_assemble_pa(ppn: int, va: int, level: int) -> int:
-    """Compute physical address from leaf PTE PPN, original VA, and page level."""
+    """Compute physical address from leaf PTE PPN, original VA, and page
+    level."""
     if _lib:
         return _lib.pte_assemble_pa(ppn, va, level)
     if level == 1:
@@ -568,9 +568,8 @@ def sv39_page_size(level: int) -> int:
     return 2 * 1024 * 1024 if level == 1 else 4096
 
 
-# ============================================================
 # ALU pure-compute ops
-# ============================================================
+
 
 _sint64 = ctypes.c_int64
 _uint64 = ctypes.c_uint64
@@ -902,7 +901,8 @@ def _opimm_slli(funct7: int, v1: int, imm: int) -> Alu64:
 
 
 def _opimm_slti(funct7: int, v1: int, imm: int) -> Alu64:
-    # SLTI 的两个操作数都按有符号数比较: imm 已规范到 [0, 2**64), 不能直接参与比较
+    # SLTI 的两个操作数都按有符号数比较: imm 已规范到 [0, 2**64), 不能直接
+    # 参与比较
     return _alu_ok(1 if _sint64(v1).value < _sint64(imm).value else 0)
 
 
@@ -1061,7 +1061,9 @@ def exec_op_imm32(funct3: int, funct7: int, v1: int, imm: int) -> Alu64:
 
 
 def _opimm32_addiw(funct7: int, v1: int, imm: int) -> Alu64:
-    return _alu_ok(_sext32(((v1 & 0xFFFF_FFFF) + (imm & 0xFFFF_FFFF)) & 0xFFFF_FFFF))
+    return _alu_ok(
+        _sext32(((v1 & 0xFFFF_FFFF) + (imm & 0xFFFF_FFFF)) & 0xFFFF_FFFF)
+    )
 
 
 def _opimm32_slliw(funct7: int, v1: int, imm: int) -> Alu64:
@@ -1101,9 +1103,7 @@ _OP_IMM32_FUNCT3: dict[int, Callable[[int, int, int], Alu64]] = {
 }
 
 
-# ============================================================
 #  F/D floating point compute (native-only — no pure-Python FPU)
-# ============================================================
 
 
 def fp_exec_op(
@@ -1144,9 +1144,7 @@ def fp_exec_fma(
     return _lib.fp_exec_fma(opcode, rm, fmt, rs1, rs2, rs3, frm)
 
 
-# ============================================================
 # RAM direct read/write (zero-allocation fast path)
-# ============================================================
 
 
 def bus_read_ram(
@@ -1185,9 +1183,7 @@ def bus_write_ram(
     return 0  # no native lib — caller uses pure-Python path
 
 
-# ============================================================
 #  FFI context structs — ctypes layouts matching Rust #[repr(C)]
-# ============================================================
 
 
 class MemCtx(ctypes.Structure):
@@ -1221,7 +1217,10 @@ class FfiClintCtx(ctypes.Structure):
         ("mtimecmp", ctypes.c_void_p),
         ("msip", ctypes.c_void_p),
         ("base", ctypes.c_uint64),
-        ("timebase_hz", ctypes.c_uint64),  # mtime 时钟源 Hz; 置0即禁用mtime的推进
+        (
+            "timebase_hz",
+            ctypes.c_uint64,
+        ),  # mtime 时钟源 Hz; 置0即禁用mtime的推进
     ]
 
 
@@ -1379,9 +1378,7 @@ class FfiTlbCtx(ctypes.Structure):
     ]
 
 
-# ============================================================
 #  Context info classes — Python-side helpers to build FFI structs
-# ============================================================
 
 
 class PmpInfo:
@@ -1394,7 +1391,9 @@ class PmpInfo:
 
     __slots__ = ("cfg", "addr", "num", "pmpsplit")
 
-    def __init__(self, cfg=None, addr=None, pmpsplit: int = 0, hart_num: int = 1):
+    def __init__(
+        self, cfg=None, addr=None, pmpsplit: int = 0, hart_num: int = 1
+    ):
         # Normalise cfg to a ctypes array if it isn't one already.
         if cfg is None or isinstance(cfg, (bytes, bytearray)):
             raw = cfg if cfg else b""
@@ -1426,10 +1425,14 @@ class PmpInfo:
         )
         hn = hart_num if hart_num > 0 else 1
         if total % hn != 0:
-            raise ValueError(f"PMP 缓冲区长度 {total} 无法被 hart 的数量 {hn} 整除")
+            raise ValueError(
+                f"PMP 缓冲区长度 {total} 无法被 hart 的数量 {hn} 整除"
+            )
         self.num = total // hn
         if self.num > 0xFF:
-            raise ValueError(f"per-hart PMP num={self.num} 超出 FfiPmpCtx.num (u8) 范围")
+            raise ValueError(
+                f"per-hart PMP num={self.num} 超出 FfiPmpCtx.num (u8) 范围"
+            )
 
 
 @dataclass(slots=True)
@@ -1540,7 +1543,9 @@ class RunConfig:
     stop_flag: Any = None  # ctypes.c_uint8 — Ctrl+Q 与设备共用的停止标志
     ext_irq: Any = None  # FfiExtIrqCtx — 外部中断上下文
     flush_cnt: Any = None  # ctypes.c_uint64 — 已发生的 TLB 刷新次数
-    flush_cnt_per_hart: Any = None  # ctypes array of c_uint64 — 各 hart 上次见到的取值
+    flush_cnt_per_hart: Any = (
+        None  # ctypes array of c_uint64 — 各 hart 上次见到的取值
+    )
 
 
 @dataclass(slots=True)
@@ -1679,7 +1684,9 @@ def _build_virtio_ffi(virtio: VirtIOInfo | None) -> FfiParts:
     ffi.driver_features_sel = virtio.driver_features_sel
     ffi.driver_features = virtio.driver_features
     ffi.queue_sel = virtio.queue_sel
-    ffi.queue_num = virtio.queue_num if virtio.queue_num else virtio.queue_num_max
+    ffi.queue_num = (
+        virtio.queue_num if virtio.queue_num else virtio.queue_num_max
+    )
     ffi.queue_ready = 1 if virtio.queue_ready else 0
     ffi.queue_desc = virtio.queue_desc
     ffi.queue_driver = virtio.queue_driver
@@ -1759,7 +1766,9 @@ def run_parallel(cfg: RunConfig) -> FfiVirtIOCtx | None:
     bp_parts = _build_bp_ffi(cfg.bp_addrs)
 
     hart_ctx = FfiHartCtx()
-    hart_ctx.states = ctypes.addressof(cfg.states) if cfg.states is not None else 0
+    hart_ctx.states = (
+        ctypes.addressof(cfg.states) if cfg.states is not None else 0
+    )
     hart_ctx.num_harts = cfg.num_harts
     hart_ctx.result = ctypes.addressof(cfg.result)
     hart_ctx.stop_flag = _addr_or_zero(cfg.stop_flag)
@@ -1771,12 +1780,16 @@ def run_parallel(cfg: RunConfig) -> FfiVirtIOCtx | None:
 
     intr_ctx = FfiInterruptCtx()
     intr_ctx.clint = ctypes.addressof(clint_state.ctx)
-    intr_ctx.plic = _addr_or_zero(plic_parts.ctx) if plic_parts.is_present else 0
+    intr_ctx.plic = (
+        _addr_or_zero(plic_parts.ctx) if plic_parts.is_present else 0
+    )
 
     dev_ctx = FfiDevicesCtx()
     dev_ctx.dev = ctypes.addressof(dev_ffi)
     dev_ctx.uart = ctypes.addressof(uart_parts.ctx)
-    dev_ctx.virtio = _addr_or_zero(virtio_parts.ctx) if virtio_parts.is_present else 0
+    dev_ctx.virtio = (
+        _addr_or_zero(virtio_parts.ctx) if virtio_parts.is_present else 0
+    )
     dev_ctx.watchdog = _addr_or_zero(watchdog_ffi) if has_watchdog else 0
 
     tlb_ctx = FfiTlbCtx()
@@ -1798,9 +1811,8 @@ def run_parallel(cfg: RunConfig) -> FfiVirtIOCtx | None:
     return virtio_parts.ctx if cfg.virtio else None
 
 
-# ============================================================
 #  libtermio.so — Terminal I/O background thread (独立于 CPU 模拟)
-# ============================================================
+
 
 _TERMIO_LIB_PATH = _NATIVE_DIR / f"libtermio{_EXT}"
 _termio_lib: ctypes.CDLL | None = None
@@ -1823,16 +1835,37 @@ class TermIoHandle(ctypes.Structure):
         ("rx_buf", ctypes.c_void_p),  # *mut u8 — shared RX ring buffer
         ("rx_cap", ctypes.c_uint32),  # capacity of rx_buf (power of two)
         ("rx_wr", ctypes.c_void_p),  # *mut AtomicU32 — write index (I/O thread)
-        ("rx_rd", ctypes.c_void_p),  # *mut AtomicU32 — read index (Python, 容量控制)
+        (
+            "rx_rd",
+            ctypes.c_void_p,
+        ),  # *mut AtomicU32 — read index (Python, 容量控制)
         ("tx_buf", ctypes.c_void_p),  # *mut u8 — shared TX ring buffer
         ("tx_cap", ctypes.c_uint32),  # entry capacity (= byte capacity / 2)
-        ("tx_wr", ctypes.c_void_p),  # *mut AtomicU32 — write index (hart threads)
-        ("tx_drain", ctypes.c_void_p),  # *mut AtomicU32 — drain index (I/O thread 独占)
+        (
+            "tx_wr",
+            ctypes.c_void_p,
+        ),  # *mut AtomicU32 — write index (hart threads)
+        (
+            "tx_drain",
+            ctypes.c_void_p,
+        ),  # *mut AtomicU32 — drain index (I/O thread 独占)
         ("stop_flag", ctypes.c_void_p),  # *mut AtomicU8 — stop request flag
-        ("pause_flag", ctypes.c_void_p),  # *mut AtomicU8 — pause (debugger break)
-        ("rx_notify", ctypes.c_void_p),  # *mut AtomicU8 — new RX data notification
-        ("rx_notify_fd", ctypes.c_int32),  # fd: Rust termio 写 1B 唤醒 RX daemon
-        ("rx_drain_fd", ctypes.c_int32),  # fd: Python 消费 ring 后写 1B 唤醒 termio 续传
+        (
+            "pause_flag",
+            ctypes.c_void_p,
+        ),  # *mut AtomicU8 — pause (debugger break)
+        (
+            "rx_notify",
+            ctypes.c_void_p,
+        ),  # *mut AtomicU8 — new RX data notification
+        (
+            "rx_notify_fd",
+            ctypes.c_int32,
+        ),  # fd: Rust termio 写 1B 唤醒 RX daemon
+        (
+            "rx_drain_fd",
+            ctypes.c_int32,
+        ),  # fd: Python 消费 ring 后写 1B 唤醒 termio 续传
     ]
 
 

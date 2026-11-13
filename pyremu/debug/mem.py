@@ -113,7 +113,9 @@ _LOAD_STORE_MNEMONICS = frozenset(
         "c.swsp",
     }
 )
-_PRIVILEGED_MNEMONICS = frozenset({"ecall", "ebreak", "mret", "sret", "wfi", "c.ebreak"})
+_PRIVILEGED_MNEMONICS = frozenset(
+    {"ecall", "ebreak", "mret", "sret", "wfi", "c.ebreak"}
+)
 _FENCE_AMO_MNEMONICS = frozenset(
     {
         "fence",
@@ -210,7 +212,11 @@ class MemoryOps(SharedAttrs):
             return None
         return read_pa_bytes(self._emu.bus, pa, size)
 
-    def _try_read_va_forced(self, va: int, size: int) -> tuple[int, bytes] | None:
+    def _try_read_va_forced(
+        self,
+        va: int,
+        size: int,
+    ) -> tuple[int, bytes] | None:
         """尝试 VA 读取并返回翻译后的 PA."""
         if size <= 0 or size > 4096:
             return None
@@ -303,7 +309,9 @@ class MemoryOps(SharedAttrs):
         if not operands:
             return asm_text if color is None else f"[{color}]{mnemonic}[/]"
         # 十六进制与纯数字立即数显示为品红
-        operands = re.sub(r"\b(0x[0-9a-fA-F]+|\d+)\b", r"[magenta]\1[/]", operands)
+        operands = re.sub(
+            r"\b(0x[0-9a-fA-F]+|\d+)\b", r"[magenta]\1[/]", operands
+        )
         if color is None:
             return f"{mnemonic} {operands}"
         return f"[{color}]{mnemonic}[/] {operands}"
@@ -411,7 +419,10 @@ class MemoryOps(SharedAttrs):
             m_style, s_style = "cyan", "cyan"
 
         tbl = Table(
-            title=f"Hart {self._hart_id}  Trap 上下文 {'中断' if is_intr else '异常'}",
+            title=(
+                f"Hart {self._hart_id}  Trap 上下文 "
+                f"{'中断' if is_intr else '异常'}"
+            ),
             border_style="red",
             show_header=True,
         )
@@ -436,13 +447,15 @@ class MemoryOps(SharedAttrs):
         self._console.print(tbl)
 
         m_anno = (
-            f"[cyan]{_mcause_name}[/]  MIE={(_mstatus >> 3) & 1} MPP={(_mstatus >> 11) & 3}"
+            f"[cyan]{_mcause_name}[/]  MIE={(_mstatus >> 3) & 1} "
+            f"MPP={(_mstatus >> 11) & 3}"
         )
         s_anno = ""
         if _scause != 0:
             _scause_name = trap_cause_name(_scause)
             s_anno = (
-                f"[cyan]{_scause_name}[/]  SIE={(_sstatus >> 1) & 1} SPP={(_sstatus >> 8) & 1}"
+                f"[cyan]{_scause_name}[/]  SIE={(_sstatus >> 1) & 1} "
+                f"SPP={(_sstatus >> 8) & 1}"
             )
         elif _sstatus != 0:
             s_anno = f"SIE={(_sstatus >> 1) & 1} SPP={(_sstatus >> 8) & 1}"
@@ -492,13 +505,18 @@ class MemoryOps(SharedAttrs):
         if addr & 1:
             orig = addr
             addr &= ~1
-            self._warn(f"addr 至少应为 2-字节对齐, 已从 0x{orig:016x} 对齐到 0x{addr:016x}")
+            self._warn(
+                f"addr 至少应为 2-字节对齐, 已从 0x{orig:016x} "
+                f"对齐到 0x{addr:016x}"
+            )
         raw = self._try_read_pa(addr, inst_count * 4)
         if raw is None:
             self._err(f"无法读取物理地址: [yellow]{hex_addr(addr)}[/]")
             return
 
-        is_continue = self._disasm_ref_pc is not None and addr == self._disasm_next_addr
+        is_continue = (
+            self._disasm_ref_pc is not None and addr == self._disasm_next_addr
+        )
         instrs, offset = self._decode_pa_range(addr, raw, inst_count)
         self._disasm_next_addr = addr + offset
         if not instrs:
@@ -526,7 +544,9 @@ class MemoryOps(SharedAttrs):
             pc_addr = addr + offset
             remaining = max_offset - offset
             chunk = raw[offset : offset + min(4, remaining)]
-            instr = int.from_bytes(chunk.ljust(4, b"\x00"), "little", signed=False)
+            instr = int.from_bytes(
+                chunk.ljust(4, b"\x00"), "little", signed=False
+            )
             is_compressed = decode_fields(instr).is_compressed
             inst_size = 2 if is_compressed else 4
             if remaining < inst_size:
@@ -537,7 +557,9 @@ class MemoryOps(SharedAttrs):
                     break
                 raw = raw[:offset] + extra + raw[offset + len(extra) :]
             asm = disasm(instr, pc_addr)
-            raw_hex = f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
+            raw_hex = (
+                f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
+            )
             ctrl = (
                 self._ctrl_flow_kind_compressed(instr & 0xFFFF)
                 if is_compressed
@@ -601,7 +623,10 @@ class MemoryOps(SharedAttrs):
             return f"+{step:<5d}"
         return "      "
 
-    def _disasm_lines(self, instrs: list[tuple[int, str, str, str]]) -> list[str]:
+    def _disasm_lines(
+        self,
+        instrs: list[tuple[int, str, str, str]],
+    ) -> list[str]:
         """渲染反汇编行, 并更新下一次续接时使用的步数值与终止标记."""
         base = self._disasm_base_step
         past_term = self._disasm_past_terminator
@@ -614,7 +639,9 @@ class MemoryOps(SharedAttrs):
             if scope and scope != last_scope:
                 last_scope = scope
                 lines.append(f"  {scope}")
-            prefix = self._disasm_prefix(step, pc_addr == self._disasm_ref_pc, past_term)
+            prefix = self._disasm_prefix(
+                step, pc_addr == self._disasm_ref_pc, past_term
+            )
             lines.append(
                 f"{prefix}    [blue]{hex_addr(pc_addr)}[/]    "
                 f"[bright_black]{raw_hex:>8s}[/]    {self._colorize_asm(asm)}"
@@ -663,7 +690,9 @@ class MemoryOps(SharedAttrs):
             self._err(f"地址 {va:#x} 超出 RV64 范围")
             return None
         if self.hart.mmu_mode == 0:
-            self._err("satp 未使能 (Bare 模式), vdisasm 无可用翻译; 请用 disasm")
+            self._err(
+                "satp 未使能 (Bare 模式), vdisasm 无可用翻译; 请用 disasm"
+            )
             return None
         # _resolve_sym_addr 在 Sv39 模式下返回 PA (经 translate_addr),
         # 但 vdisasm 需要 VA 才能做页表遍历. 通过 _pa_to_va 反查回 VA.
@@ -674,7 +703,10 @@ class MemoryOps(SharedAttrs):
         if va & 1:
             orig = va
             va &= ~1
-            self._warn(f"addr 至少应为 2-字节对齐, 已从 0x{orig:016x} 对齐到 0x{va:016x}")
+            self._warn(
+                f"addr 至少应为 2-字节对齐, 已从 0x{orig:016x} "
+                f"对齐到 0x{va:016x}"
+            )
         return va
 
     def _prepare_vdisasm(
@@ -694,7 +726,9 @@ class MemoryOps(SharedAttrs):
             self._err("内存后端未挂载")
             return None
         root_ppn = self.hart.satp_val & ((1 << 44) - 1)
-        ok, ppn, _perm, page_size = sv39_walk(root_ppn, va, self.hart.mem_read_phy)
+        ok, ppn, _perm, page_size = sv39_walk(
+            root_ppn, va, self.hart.mem_read_phy
+        )
         if not ok:
             self._err(
                 f"VA [yellow]{hex_addr(va)}[/] 页表翻译失败 (缺页);"
@@ -728,18 +762,24 @@ class MemoryOps(SharedAttrs):
             pc_pa = first_pa + offset
             remaining = max_offset - offset
             chunk = raw[offset : offset + min(4, remaining)]
-            instr = int.from_bytes(chunk.ljust(4, b"\x00"), "little", signed=False)
+            instr = int.from_bytes(
+                chunk.ljust(4, b"\x00"), "little", signed=False
+            )
             is_compressed = decode_fields(instr).is_compressed
             inst_size = 2 if is_compressed else 4
             if remaining < inst_size:
                 extra = read_pa_bytes(self._emu.bus, pc_pa, inst_size)
                 if extra is None:
                     hex_s = " ".join(f"{b:02x}" for b in raw[offset:])
-                    instrs.append((pc_va, hex_s, "[dim](截断)[/]", "normal", pc_pa))
+                    instrs.append(
+                        (pc_va, hex_s, "[dim](截断)[/]", "normal", pc_pa)
+                    )
                     break
                 raw = raw[:offset] + extra + raw[offset + len(extra) :]
             asm = disasm(instr, pc_va)
-            raw_hex = f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
+            raw_hex = (
+                f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
+            )
             ctrl = (
                 self._ctrl_flow_kind_compressed(instr & 0xFFFF)
                 if is_compressed
@@ -795,14 +835,18 @@ class MemoryOps(SharedAttrs):
                 root_ppn = h.satp_val & ((1 << 44) - 1)
                 ok, ppn, perm, _ = sv39_walk(root_ppn, page_va, h.mem_read_phy)
                 if not ok:
-                    lines.append(f"  [red]VA 0x{page_va:016x}  缺页 (无法翻译)[/]")
+                    lines.append(
+                        f"  [red]VA 0x{page_va:016x}  缺页 (无法翻译)[/]"
+                    )
                     continue
             pa = ppn << 12
             r = "r" if perm & 1 else "-"
             w = "w" if perm & 2 else "-"
             x = "x" if perm & 4 else "-"
             u = "u" if perm & 8 else "s"
-            lines.append(f"  VA 0x{page_va:016x} -> PA 0x{pa:016x}  [{r}{w}{x}{u}]")
+            lines.append(
+                f"  VA 0x{page_va:016x} -> PA 0x{pa:016x}  [{r}{w}{x}{u}]"
+            )
         self._console.print("\n".join(lines))
 
     @seize_val_err("addr 和 size 需为整数 (支持 0x 前缀)")
@@ -852,7 +896,9 @@ class MemoryOps(SharedAttrs):
             return
         first_pa, data = result
         self._show_va_mapping_header(va, size)
-        self._console.print(f"[dim]VA {hex_addr(va)} -> PA {hex_addr(first_pa)}[/]")
+        self._console.print(
+            f"[dim]VA {hex_addr(va)} -> PA {hex_addr(first_pa)}[/]"
+        )
         self._console.print(dye_hexdump(data, va))
 
     def _walk_and_read_va(self, va: int, size: int) -> tuple[int, bytes] | None:

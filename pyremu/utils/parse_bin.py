@@ -26,16 +26,14 @@ import lief
 
 from pyremu.utils.wrapper import seize_err_if_any
 
-# ============================================================
 #  文件格式魔数
-# ============================================================
+
 
 ELF_MAGIC = b"\x7fELF"
 PE_MAGIC = b"MZ"
 
-# ============================================================
+
 #  数据模型
-# ============================================================
 
 
 @dataclass
@@ -76,9 +74,7 @@ class FirmwareImage:
     symbol_ranges: list[tuple[int, int, str]] = field(default_factory=list)
 
 
-# ============================================================
 #  格式检测
-# ============================================================
 
 
 def detect_format(
@@ -99,9 +95,8 @@ def detect_format(
     return "raw"
 
 
-# ============================================================
 #  ELF 符号表原始解析 (绕过 LIEF 1M 符号上限)
-# ============================================================
+
 
 # Elf64_Sym: 24 bytes
 #   st_name  (u32, offset 0)
@@ -140,7 +135,8 @@ def _parse_symtab_raw(
         path: ELF 文件路径.
         symtab_span: .symtab 节的文件偏移与大小 (字节).
         strtab_span: .strtab 节的文件偏移与大小 (字节).
-        skip_local_noise: True 时跳过 LOCAL 非 FUNC 符号 (FILE/SECTION/NOTYPE 等).
+        skip_local_noise: True 时跳过 LOCAL 非 FUNC 符号
+            (FILE/SECTION/NOTYPE 等).
             LOCAL 的 STT_FUNC 始终保留 — 它们在大型 ELF (如 Linux vmlinux)
             中占比约 50%, 缺少会导致栈回溯函数名解析错误.
 
@@ -162,8 +158,8 @@ def _parse_symtab_raw(
 
     for i in range(count):
         off = i * ELF64_SYM_SIZE
-        st_name, st_info, _st_other, st_shndx, st_value, st_size = struct.unpack_from(
-            ELF64_SYM_FMT, symtab_data, off
+        st_name, st_info, _st_other, st_shndx, st_value, st_size = (
+            struct.unpack_from(ELF64_SYM_FMT, symtab_data, off)
         )
         # 跳过未定义符号与地址为 0 的符号
         if st_shndx == 0 or st_value == 0:
@@ -190,9 +186,7 @@ def _parse_symtab_raw(
     return symbols, ranges
 
 
-# ============================================================
 #  ELF 解析
-# ============================================================
 
 
 def _parse_elf(
@@ -280,9 +274,7 @@ def _parse_elf(
     )
 
 
-# ============================================================
 #  PE 解析
-# ============================================================
 
 
 def _parse_pe(
@@ -339,9 +331,7 @@ def _parse_pe(
     )
 
 
-# ============================================================
 #  Raw binary 解析
-# ============================================================
 
 
 def _parse_raw(
@@ -368,9 +358,7 @@ def _parse_raw(
     )
 
 
-# ============================================================
 #  统一入口
-# ============================================================
 
 
 @seize_err_if_any()
@@ -382,7 +370,8 @@ def parse_firmware(
 
     格式识别:
         ELF, 即 \\x7fELF 魔数, 提取 LOAD 段与 entrypoint
-        PE, 即 MZ 魔数, 提取节内容与 entrypoint, 入口地址由 RVA 加 ImageBase 得到
+        PE, 即 MZ 魔数, 提取节内容与 entrypoint,
+        入口地址由 RVA 加 ImageBase 得到
         其他格式按原始二进制处理, 全部字节映射到 base_addr
 
     Args:

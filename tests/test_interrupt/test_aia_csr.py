@@ -58,7 +58,9 @@ class TestAiaCsrGateCheckAccess:
         """全部 8 个 AIA CSR 的 implemented 标志必须一致."""
         states = {addr: csr_bank[addr].implemented for addr in _AIA_CSRS}
         unique = set(states.values())
-        assert len(unique) == 1, f"AIA CSR implemented flags must be uniform: {states}"
+        assert len(unique) == 1, (
+            f"AIA CSR implemented flags must be uniform: {states}"
+        )
 
     def test_mmode_access_consistent(self) -> None:
         """M 模式: implemented 为 False 时得到 CsrAccessError, 为 True 时通过.
@@ -80,7 +82,8 @@ class TestAiaCsrGateCheckAccess:
                     check_csr_access(addr, m_mode, is_write=True)
 
     def test_privilege_boundary_smode_cannot_access_mmode_aia(self) -> None:
-        """S 模式访问 M-mode AIA CSR: 权限不足 (privilege) 或 未实现 (unknown)."""
+        """S 模式访问 M-mode AIA CSR: 权限不足 (privilege) 或
+        未实现 (unknown)."""
         s_mode = RiscvMode.S.value
         m_csrs = (0x350, 0x351, 0x35C, 0xFB0)
         for addr in m_csrs:
@@ -173,7 +176,8 @@ class TestAiaCsrGateInstruction:
                 )
             else:
                 assert h.mcause_val == 2, (
-                    f"{_AIA_NAMES[addr]} (0x{addr:03X}): AIA=0 must trigger IllInstr"
+                    f"{_AIA_NAMES[addr]} (0x{addr:03X}): AIA=0 must trigger "
+                    "IllInstr"
                 )
 
     # ---- probe pattern (OpenSBI csr_read_allowed) ----

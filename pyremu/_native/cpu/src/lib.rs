@@ -1,7 +1,8 @@
-//! Pyremu 加速执行引擎的 Rust 库, 提供 RISC-V 指令分发,
-//! TLB, PMP 匹配, Sv39 页表遍历与 ALU 运算.
-//!
-//! 全部公开符号以 `#[no_mangle] pub extern "C"` 导出, 供 ctypes 调用.
+//! Pyremu 动态链接加速执行引擎, 提供
+//!     RISC-V 指令分发,
+//!     TLB与PMP匹配,
+//!     Sv39 页表遍历与 ALU 运算.
+//! 全部公开符号以 `#[no_mangle] pub extern "C"` 导出供 ctypes 调用.
 
 mod alu;
 mod atom_instr;

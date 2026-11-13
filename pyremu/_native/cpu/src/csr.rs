@@ -13,12 +13,11 @@ use crate::interrupt::{
 	compute_mtopi, compute_stopi, imsic_reg_read, imsic_reg_write, imsic_topei_claim_iid,
 	imsic_topei_peek, sync_imsic_one, IID_M_IPI, IID_S_IPI,
 };
+use crate::pmp::PMP_L;
 use crate::state::{exit_reason, riscv_mode, HartState, CFG_AIA, CPU_FREQ_HZ};
 use crate::trap::deliver_illegal_instruction;
 
-// ============================================================
 //  CsrContext: csr_read 与 csr_write 的合并参数
-// ============================================================
 
 /// 执行期间读取或写入一个 CSR 所需的全部状态.
 ///
@@ -68,9 +67,7 @@ impl<'a> CsrContext<'a> {
 	}
 }
 
-// ============================================================
 //  CSR 地址常量
-// ============================================================
 
 // 机器级
 pub const MSTATUS: u16 = 0x300;
@@ -173,9 +170,7 @@ pub fn misa_value(exts: &crate::state::IsaExts) -> u64 {
 	value
 }
 
-// ============================================================
 //  mstatus 与 sstatus 的位域掩码
-// ============================================================
 
 const MSTATUS_SIE: u64 = 1 << 1; // S 模式中断使能
 const MSTATUS_SPIE: u64 = 1 << 5; // S 模式中断的先前使能值
@@ -184,13 +179,33 @@ const MSTATUS_SPP: u64 = 1 << 8; // 陷入 S 模式前的特权级
 const MSTATUS_VS: u64 = 0b11 << 9; // 向量状态, 由 H 扩展使用
 const MSTATUS_FS: u64 = 0b11 << 13; // 浮点单元状态
 const MSTATUS_XS: u64 = 0b11 << 15; // 用户扩展状态
-const MSTATUS_MPRV: u64 = 1 << 17; // 修改访存特权级
+pub(crate) const MSTATUS_MPRV: u64 = 1 << 17; // 修改访存特权级
 const MSTATUS_SUM: u64 = 1 << 18; // 允许 S 模式访问用户级内存
 const MSTATUS_MXR: u64 = 1 << 19; // 把可执行页读作可读
-const MSTATUS_SD: u64 = 1 << 63; // 状态为脏, 只读
+const MSTATUS_UXL: u64 = 0b11 << 32; // 用户级 XLEN 字段, RV64 上只读
+const MSTATUS_UXL_64: u64 = 0b10 << 32; // mstatus.UXL 的读出值
+const MSTATUS_SD: u64 = 1 << 63; // 状态为脏, 由 FS、VS、XS 是否为 3 算出
+
+/// 按 FS、VS、XS 三个字段是否为 3 算出 SD 位.
+fn derive_sd(mstatus: u64) -> u64 {
+	let is_dirty = (mstatus & MSTATUS_FS) == MSTATUS_FS
+		|| (mstatus & MSTATUS_VS) == MSTATUS_VS
+		|| (mstatus & MSTATUS_XS) == MSTATUS_XS;
+	if is_dirty {
+		MSTATUS_SD
+	} else {
+		0
+	}
+}
+
+/// mstatus 的读出值: SD 由 FS、VS、XS 算出, UXL 在 RV64 上恒为 2.
+fn mstatus_view(mstatus: u64) -> u64 {
+	(mstatus & !MSTATUS_SD) | MSTATUS_UXL_64 | derive_sd(mstatus)
+}
 
 // sstatus 是 mstatus 的受限视图, 见 RISC-V 特权规范 4.1.1 节.
-// 读取 sstatus 只返回当前 S 模式程序可访问的那部分 mstatus 位.
+// 读取 sstatus 只返回当前 S 模式程序可访问的那部分 mstatus 位; MPRV 不在其中,
+// UXL 与 SD 为只读派生位.
 const SSTATUS_READ_MASK: u64 = MSTATUS_SIE
 	| MSTATUS_SPIE
 	| MSTATUS_UBE
@@ -198,17 +213,15 @@ const SSTATUS_READ_MASK: u64 = MSTATUS_SIE
 	| MSTATUS_VS
 	| MSTATUS_FS
 	| MSTATUS_XS
-	| MSTATUS_MPRV
 	| MSTATUS_SUM
 	| MSTATUS_MXR
+	| MSTATUS_UXL
 	| MSTATUS_SD;
 
-// 写入 sstatus 只更新可写的那部分位, VS 与 SD 为只读
-const SSTATUS_WRITE_MASK: u64 = SSTATUS_READ_MASK & !(MSTATUS_VS | MSTATUS_SD);
+// 写入 sstatus 只更新可写的那部分位, VS、UXL 与 SD 为只读
+const SSTATUS_WRITE_MASK: u64 = SSTATUS_READ_MASK & !(MSTATUS_VS | MSTATUS_UXL | MSTATUS_SD);
 
-// ============================================================
 //  公开接口
-// ============================================================
 
 /// 返回状态: 0 为成功, 处理函数返回前进 4 字节; 1 为 IllInstr 陷态;
 /// 2 为退出到 Python, 对未知 CSR 的读取或写入需要 Python 侧处理.
@@ -220,6 +233,20 @@ pub const CSR_EXIT: u8 = 2;
 ///
 /// 0xC00-0xC1F 为 cycle, time, instret 与 hpmcounter3-31,
 /// 0xC80-0xC9F 为这些计数器的高位部分.
+/// 仅 RV32 存在的 CSR. RV64 上读写这些地址均触发 IllInstr.
+fn is_rv32_only_csr(addr: u16) -> bool {
+	match addr {
+		// 机器级与用户级计数器的高半部分
+		0xB80..=0xB9F | 0xC80..=0xC9F => true,
+		0x114 | 0x154 | 0x15D | 0x193 => true,
+		0x214 | 0x254 | 0x25D => true,
+		0x310 | 0x312 | 0x313 | 0x314 | 0x318 | 0x319 | 0x31A | 0x354 => true,
+		0x612 | 0x613 | 0x618 | 0x61A | 0x655 | 0x656 | 0x657 => true,
+		0x721 | 0x722 => true,
+		_ => false,
+	}
+}
+
 fn counter_enable_bit(addr: u16) -> Option<u64> {
 	match addr {
 		0xC00..=0xC1F => Some(1 << (addr - 0xC00)),
@@ -236,6 +263,11 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
 	// 检查特权级
 	let priv_req = (addr >> 8) as u8 & 0x3; // 位 [9:8]
 	if !csr_priv_ok(ctx.state.mode, priv_req) {
+		return (0, CSR_ILL);
+	}
+
+	// 仅 RV32 存在的 CSR 在 RV64 上不存在
+	if is_rv32_only_csr(addr) {
 		return (0, CSR_ILL);
 	}
 
@@ -262,7 +294,7 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
 
 	match addr {
         // 存放在 HartState 中的机器级 CSR
-        MSTATUS => (ctx.state.mstatus, CSR_OK),
+        MSTATUS => (mstatus_view(ctx.state.mstatus), CSR_OK),
         MEDELEG => (ctx.state.medeleg, CSR_OK),
         MIDELEG => (ctx.state.mideleg, CSR_OK),
         MIE     => (ctx.state.mie, CSR_OK),
@@ -271,19 +303,26 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
         MEPC    => (ctx.state.mepc, CSR_OK),
         MCAUSE  => (ctx.state.mcause, CSR_OK),
         MTVAL   => (ctx.state.mtval, CSR_OK),
-        MIP     => (ctx.state.mip.load(Ordering::Acquire), CSR_OK),
+        MIP     => (ctx.state.mip_value(), CSR_OK),
         MCOUNTEREN => (ctx.state.mcounteren, CSR_OK),
 
         // 存放在 HartState 中的 S 模式 CSR
-        SSTATUS => (ctx.state.mstatus & SSTATUS_READ_MASK, CSR_OK),
+        SSTATUS => (mstatus_view(ctx.state.mstatus) & SSTATUS_READ_MASK, CSR_OK),
         SIE     => (ctx.state.mie & ctx.state.mideleg, CSR_OK),
-        SIP     => (ctx.state.mip.load(Ordering::Acquire) & ctx.state.mideleg, CSR_OK),
+        SIP     => (ctx.state.mip_value() & ctx.state.mideleg, CSR_OK),
         STVEC   => (ctx.state.stvec, CSR_OK),
         SSCRATCH => (ctx.state.sscratch, CSR_OK),
         SEPC    => (ctx.state.sepc, CSR_OK),
         SCAUSE  => (ctx.state.scause, CSR_OK),
         STVAL   => (ctx.state.stval, CSR_OK),
-        SATP    => (ctx.state.satp, CSR_OK),
+        SATP    => {
+            // mstatus.TVM=1 时 S 模式读写 satp 触发 IllInstr
+            if ctx.state.mode == riscv_mode::S && ((ctx.state.mstatus >> 20) & 1) != 0 {
+                (0, CSR_ILL)
+            } else {
+                (ctx.state.satp, CSR_OK)
+            }
+        }
         SCOUNTEREN => (ctx.state.scounteren, CSR_OK),
         // 平台未声明 sstc 时该 CSR 不存在, 读取产生 IllInstr, 与 Python 侧
         // validate_csr 的判定一致.
@@ -308,15 +347,10 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
 
         // time, 取自 CLINT 的 mtime
         TIME => (ctx.mtime(), CSR_OK),
-        // timeh: mtime 的 bits[63:32]
-        TIMEH => (ctx.mtime() >> 32, CSR_OK),
 
         // 机器级与用户级计数器, 按本 hart 已执行完成的指令数换算.
-        // 高半 CSR 返回同一计数的 bits[63:32].
         MCYCLE | CYCLE => (cycles_of(ctx.state), CSR_OK),
         MINSTRET | INSTRET => (ctx.state.total_instrs, CSR_OK),
-        MCYCLEH | CYCLEH => ((cycles_of(ctx.state) >> 32) & 0xFFFF_FFFF, CSR_OK),
-        MINSTRETH | INSTRETH => ((ctx.state.total_instrs >> 32) & 0xFFFF_FFFF, CSR_OK),
 
         0x5C0 => (ctx.state.mdid, CSR_OK),
         0x5C1 => (ctx.state.pmpsplit as u64, CSR_OK),
@@ -380,8 +414,7 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
             else { (0, CSR_ILL) }
         }
         // 其余 AIA CSR, 如 mvien 与 mvip
-        0x308 /* mvien */ | 0x309 /* mvip */
-        | 0x318 /* mvienh */ | 0x319 /* mviph */ => (0, CSR_OK),
+        0x308 /* mvien */ | 0x309 /* mvip */ => (0, CSR_OK),
 
         // 调试与跟踪触发 CSR 0x7A0-0x7AF 未实现. 返回 0 而非 IllInstr:
         // OpenSBI 不把 IllInstr 陷态处理逻辑委派给 S 模式, S 模式的探测会陷入机器级,
@@ -389,9 +422,6 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
         // 返回 0 让内核可以探测这些 CSR 而不陷态. 具备 Sdext 的硬件在
         // 机器级可访问它们; 不具备时视为未实现并读作 0.
         0x7A0..=0x7AF => (0, CSR_OK),
-
-        // 仅 RV32 使用的 CSR, 在 RV64 上读取合法, 返回 0.
-        0x310 /* mstatush */ | 0x312 /* medelegh */ | 0x313 /* midelegh */ => (0, CSR_OK),
 
         // ---- PMP CSR, 用于 RV64 ----
         // RV64 上编号为奇数的 pmpcfg 寄存器非法.
@@ -431,41 +461,74 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
 /// status 为 CSR_ILL 时产生 IllInstr 陷态.
 /// status 为 CSR_EXIT 时退出到 Python 处理.
 pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
+	csr_write_masked(ctx, addr, val, u64::MAX)
+}
+
+/// 按写入掩码写入 CSR 的值, 返回 ``status``.
+/// write_mask 为指令实际改写的位: CSRRW 为全部位, CSRRS 与 CSRRC 为 rs1.
+pub fn csr_write_masked(ctx: &mut CsrContext, addr: u16, val: u64, write_mask: u64) -> u8 {
 	let priv_req = (addr >> 8) as u8 & 0x3;
 	if !csr_priv_ok(ctx.state.mode, priv_req) {
 		return CSR_ILL;
 	}
 
+	// 仅 RV32 存在的 CSR 在 RV64 上不存在
+	if is_rv32_only_csr(addr) {
+		return CSR_ILL;
+	}
+
 	match addr {
         MSTATUS => {
-            // SD 只读
-            let sd = ctx.state.mstatus & MSTATUS_SD;
-            let wr = val & !MSTATUS_SD;
-            ctx.state.mstatus = wr | sd;
+            // SD 与 UXL 为只读派生位: SD 按写入后的 FS、VS、XS 算出, UXL 恒为 2.
+            let wr = val & !(MSTATUS_SD | MSTATUS_UXL);
+            ctx.state.mstatus = wr | derive_sd(wr);
             CSR_OK
         }
         MEDELEG => { ctx.state.medeleg = val; CSR_OK }
         MIDELEG => { ctx.state.mideleg = val; CSR_OK }
         MIE     => { ctx.state.mie = val; CSR_OK }
-        MTVEC   => { ctx.state.mtvec = val; CSR_OK }
+        MTVEC   => {
+            // MODE 只有 0 (direct) 与 1 (vectored) 两种编码, 保留编码的写入被忽略
+            if (val & 0b11) < 2 {
+                ctx.state.mtvec = val;
+            }
+            CSR_OK
+        }
         MSCRATCH => { ctx.state.mscratch = val; CSR_OK }
-        MEPC    => { ctx.state.mepc = val; CSR_OK }
+        MEPC    => {
+            // 低位按 IALIGN 取零: 有 C 扩展时只清 bit 0, 否则清 bit 1
+            let mask = if ctx.state.isa_exts.is_c { !1u64 } else { !3u64 };
+            ctx.state.mepc = val & mask;
+            CSR_OK
+        }
         MCAUSE  => { ctx.state.mcause = val; CSR_OK }
         MTVAL   => { ctx.state.mtval = val; CSR_OK }
         MIP     => {
-            // MSIP, MTIP, SEIP 与 MEIP 为只读位, 由 CLINT 与外部中断控制器
-            // 驱动, 写入时保留原值. SSIP, STIP 与 USIP 可写: 设备树未声明
-            // sstc 时, M 模式固件以 mtimecmp 承担 S 模式定时器, 到期经
-            // ``csrw mip`` 置位 STIP, 重新装定 mtimecmp 时清除该位.
-            let ro_mask: u64 = (1 << 3) | (1 << 7) | (1 << 9) | (1 << 11);
-            ctx.state.mip.store((ctx.state.mip.load(Ordering::Acquire) & ro_mask) | (val & !ro_mask), Ordering::Release);
+            // 只有 SSIP 与 STIP 的存储值可被软件写入, 其余位只读: USIP、MSIP、
+            // UTIP、MTIP、UEIP 与 MEIP 由 CLINT 或外部中断控制器驱动.
+            // STIP 可写: 设备树未声明 sstc 时, M 模式固件以 mtimecmp 承担
+            // S 模式定时器, 到期经 ``csrw mip`` 置位 STIP, 重新装定 mtimecmp
+            // 时清除该位.
+            //
+            // SEIP 的写入只改变软件位: 读出的 SEIP 是软件位与外部中断线的或,
+            // 存储值中的位 9 属于外部中断线, 写入时保留原值.
+            //
+            // 写入掩码不含位 9 时软件位保持不变: CSRRS 与 CSRRC 的写入值由读出值
+            // 算出, 其位 9 含外部中断线的当前取值. 掩码含位 9 时软件位取 val 的位 9.
+            let mut writable_mask: u64 = (1 << 1) | (1 << 5);
+            writable_mask &= write_mask;
+            if write_mask & (1 << 9) != 0 {
+                ctx.state.software_seip = ((val >> 9) & 1) as u8;
+            }
+            ctx.state.mip.store((ctx.state.mip.load(Ordering::Acquire) & !writable_mask) | (val & writable_mask), Ordering::Release);
             CSR_OK
         }
         MCOUNTEREN => { ctx.state.mcounteren = val; CSR_OK }
 
         SSTATUS => {
             let mask = SSTATUS_WRITE_MASK;
-            ctx.state.mstatus = (ctx.state.mstatus & !mask) | (val & mask);
+            let wr = (ctx.state.mstatus & !mask) | (val & mask);
+            ctx.state.mstatus = (wr & !MSTATUS_SD) | derive_sd(wr);
             CSR_OK
         }
         SIE => {
@@ -483,13 +546,28 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
             ctx.state.mip.store((ctx.state.mip.load(Ordering::Acquire) & !wr_mask) | (val & wr_mask), Ordering::Release);
             CSR_OK
         }
-        STVEC   => { ctx.state.stvec = val; CSR_OK }
+        STVEC   => {
+            // MODE 只有 0 (direct) 与 1 (vectored) 两种编码, 保留编码的写入被忽略
+            if (val & 0b11) < 2 {
+                ctx.state.stvec = val;
+            }
+            CSR_OK
+        }
         SSCRATCH => { ctx.state.sscratch = val; CSR_OK }
-        SEPC    => { ctx.state.sepc = val; CSR_OK }
+        SEPC    => {
+            // 低位按 IALIGN 取零: 有 C 扩展时只清 bit 0, 否则清 bit 1
+            let mask = if ctx.state.isa_exts.is_c { !1u64 } else { !3u64 };
+            ctx.state.sepc = val & mask;
+            CSR_OK
+        }
         SCAUSE  => { ctx.state.scause = val; CSR_OK }
         STVAL   => { ctx.state.stval = val; CSR_OK }
         SCOUNTEREN => { ctx.state.scounteren = val; CSR_OK }
         SATP    => {
+            // mstatus.TVM=1 时 S 模式读写 satp 触发 IllInstr
+            if ctx.state.mode == riscv_mode::S && ((ctx.state.mstatus >> 20) & 1) != 0 {
+                return CSR_ILL;
+            }
             // ASID 即位 [59:44] 固定为 0, 属于 WARL: 加速执行引擎的 TLB
             // 与 Python 侧的 TLB 都不用 ASID 标记条目. 写入时清除 ASID 位,
             // MODE 与 PPN 按写入值保存, 随后刷新两个 TLB.
@@ -504,18 +582,18 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
         // 机器信息寄存器只读, 写入被忽略
         MISA | MVENDORID | MARCHID | MIMPID | MHARTID     => CSR_OK,
 
-        // time 与 timeh 分别为 0xC01 与 0xC81.
+        // time 位于 0xC01.
         // ``csrrs rd, time, x0`` 会把读到的值回写到该 CSR, 故写操作静默
         // 忽略并返回成功. 若返回 CSR_EXIT, 每条 rdtime 都会退出到 Python,
         // 引起内核性能下降并使得内核因意外的时钟输入而阻塞在对定时中断的响应上.
-        TIME | TIMEH => CSR_OK,
+        TIME => CSR_OK,
 
         // 模拟器一侧，mcycle, minstret 及其时间 CSR 寄存器的计数由本 hart 的指令数换算
         // 将忽略任何写入.
-        MCYCLE | MINSTRET | MCYCLEH | MINSTRETH => CSR_OK,
+        MCYCLE | MINSTRET => CSR_OK,
 
         // cycle 与 instret 为只读计数器
-        CYCLE | INSTRET | CYCLEH | INSTRETH => CSR_OK,
+        CYCLE | INSTRET => CSR_OK,
 
         // 平台未声明 sstc 时该 CSR 不存在, 写入产生 IllInstr, 与 Python 侧
         // validate_csr 的判定一致.
@@ -678,11 +756,7 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
             return CSR_OK;
         }
         // 其余 AIA CSR 不涉及 IMSIC, 写入被忽略.
-        0x308 /* mvien */ | 0x309 /* mvip */
-        | 0x318 /* mvienh */ | 0x319 /* mviph */ => CSR_OK,
-
-        // 仅 RV32 使用的 CSR, 在 RV64 上写入被忽略.
-        0x310 /* mstatush */ | 0x312 /* medelegh */ | 0x313 /* midelegh */ => CSR_OK,
+        0x308 /* mvien */ | 0x309 /* mvip */ => CSR_OK,
 
         // ---- PMP CSR, 用于 RV64 ----
         // RV64 上编号为奇数的 pmpcfg 寄存器非法.
@@ -694,9 +768,14 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
                 // 仅写入 [entry_base, num) 内的条目. num 小于 entry_base + 8 时
                 // 截断, 避免越界写入破坏 cfg 的假设.
                 let n = ((ctx.pmp.num as usize) - entry_base).min(8);
-                for i in 0..n {
-                    let b = ((val >> (i * 8)) & 0xFF) as u8;
-                    unsafe { *ctx.pmp.cfg.add(entry_base + i) = b; }
+                // 组内任一条目的 L 置位时, 整组写入被忽略
+                let is_group_locked = (0..n)
+                    .any(|i| unsafe { *ctx.pmp.cfg.add(entry_base + i) } & PMP_L != 0);
+                if !is_group_locked {
+                    for i in 0..n {
+                        let b = ((val >> (i * 8)) & 0xFF) as u8;
+                        unsafe { *ctx.pmp.cfg.add(entry_base + i) = b; }
+                    }
                 }
             }
             CSR_OK
@@ -704,7 +783,10 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
         // PMP 地址寄存器 0x3B0-0x3EF: 每个条目一个, 各 8 字节.
         a if (0x3B0..=0x3EF).contains(&a) => {
             let n = (a - 0x3B0) as usize;
-            if n < ctx.pmp.num as usize {
+            // 该条目的 L 置位时, 地址写入被忽略
+            if n < ctx.pmp.num as usize
+                && unsafe { *ctx.pmp.cfg.add(n) } & PMP_L == 0
+            {
                 unsafe { *ctx.pmp.addr.add(n) = val; }
             }
             CSR_OK
@@ -715,9 +797,7 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
     }
 }
 
-// ============================================================
 //  辅助函数
-// ============================================================
 
 /// 刷新两个 TLB, 不引入 translate 模块.
 #[inline]
@@ -778,10 +858,11 @@ pub fn handle_csr(
 		read_gpr(ctx.state, rs1)
 	};
 
-	let new_val: u64 = match funct3 & 0x3 {
-		1 => rs1_val,            // CSRRW 与 CSRRWI
-		2 => old_val | rs1_val,  // CSRRS 与 CSRRSI
-		3 => old_val & !rs1_val, // CSRRC 与 CSRRCI
+	// 写入掩码为指令实际改写的位: CSRRW 为全部位, CSRRS 与 CSRRC 为 rs1.
+	let (new_val, write_mask): (u64, u64) = match funct3 & 0x3 {
+		1 => (rs1_val, u64::MAX),           // CSRRW 与 CSRRWI
+		2 => (old_val | rs1_val, rs1_val),  // CSRRS 与 CSRRSI
+		3 => (old_val & !rs1_val, rs1_val), // CSRRC 与 CSRRCI
 		_ => {
 			deliver_illegal_instruction(ctx.state, instr as u64);
 			return 0;
@@ -838,7 +919,7 @@ pub fn handle_csr(
 	}
 
 	// 即使 rd 为 0 也必须写入 CSR, rd 为 0 时只是跳过把旧值写入 rd.
-	let wstatus = csr_write(ctx, csr_addr, new_val);
+	let wstatus = csr_write_masked(ctx, csr_addr, new_val, write_mask);
 	if wstatus == CSR_ILL {
 		deliver_illegal_instruction(ctx.state, instr as u64);
 		return 0;
@@ -859,9 +940,7 @@ pub fn handle_csr(
 	4
 }
 
-// ============================================================
 //  GPR 读取与写入
-// ============================================================
 
 #[inline]
 fn read_gpr(state: &HartState, rs: u8) -> u64 {
@@ -882,9 +961,7 @@ fn write_gpr(state: &mut HartState, rd: u8, val: u64) {
 /// 处理函数返回该值表示请求退出到 Python.
 pub const EXIT_SENTINEL: u64 = u64::MAX;
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -944,7 +1021,73 @@ mod tests {
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		let (v, st) = csr_read(&mut ctx, MSTATUS);
 		assert_eq!(st, CSR_OK);
-		assert_eq!(v, 0x1880);
+		assert_eq!(v, 0x1880 | MSTATUS_UXL_64, "UXL 读出恒为 2");
+	}
+
+	/// sstatus 不含 MPRV. 旧掩码包含该位时, 读出的 sstatus 会带出 M 模式的访存特权位.
+	#[test]
+	fn read_sstatus_excludes_mprv() {
+		let mut s = test_state();
+		s.mstatus = MSTATUS_MPRV | MSTATUS_SIE;
+		let clint = test_clint(0);
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, st) = csr_read(&mut ctx, SSTATUS);
+		assert_eq!(st, CSR_OK);
+		assert_eq!(v & MSTATUS_MPRV, 0, "sstatus 不得出现 MPRV");
+		assert_eq!(v & MSTATUS_SIE, MSTATUS_SIE);
+	}
+
+	/// sstatus.UXL 在 RV64 上只读, 读出为 2, 写入被忽略.
+	#[test]
+	fn read_sstatus_uxl_is_two() {
+		let mut s = test_state();
+		let clint = test_clint(0);
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let st = csr_write(&mut ctx, SSTATUS, MSTATUS_UXL);
+			assert_eq!(st, CSR_OK);
+		}
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, st) = csr_read(&mut ctx, SSTATUS);
+		assert_eq!(st, CSR_OK);
+		assert_eq!(
+			v & MSTATUS_UXL,
+			MSTATUS_UXL_64,
+			"UXL 读出值为 2, 写入不改变该值"
+		);
+		assert_eq!(s.mstatus & MSTATUS_UXL, 0, "存储值不保存 UXL");
+	}
+
+	/// SD 由 FS、VS、XS 三个字段是否为 3 得出, 写入 mstatus 的 SD 位被忽略.
+	#[test]
+	fn mstatus_sd_derived_from_fs() {
+		let mut s = test_state();
+		let clint = test_clint(0);
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			assert_eq!(csr_write(&mut ctx, MSTATUS, 1 << 13), CSR_OK);
+		}
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, _) = csr_read(&mut ctx, MSTATUS);
+		assert_eq!(v & MSTATUS_SD, 0, "FS 不为 3 时 SD 为 0");
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			assert_eq!(
+				csr_write(&mut ctx, MSTATUS, MSTATUS_FS | MSTATUS_SD),
+				CSR_OK
+			);
+		}
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, _) = csr_read(&mut ctx, MSTATUS);
+		assert_eq!(v & MSTATUS_SD, MSTATUS_SD, "FS 为 3 时 SD 为 1");
+		// 清除 FS 后 SD 随之清除, 不受写入的 SD 位影响
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			assert_eq!(csr_write(&mut ctx, MSTATUS, 0), CSR_OK);
+		}
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, _) = csr_read(&mut ctx, MSTATUS);
+		assert_eq!(v & MSTATUS_SD, 0, "FS 清零后 SD 为 0");
 	}
 
 	#[test]
@@ -957,7 +1100,7 @@ mod tests {
 		assert_eq!(st, CSR_OK);
 		assert_eq!(
 			v & SSTATUS_READ_MASK,
-			MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP
+			MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_UXL_64
 		);
 	}
 
@@ -1134,10 +1277,10 @@ mod tests {
 		);
 	}
 
-	/// mip 位于 0x344: SSIP 与 STIP 可写, 只读位 SEIP 不得被受调试程序的
-	/// ``csrw mip`` 覆写. 设备树未声明 sstc 时, 固件经 STIP 转交 S 模式定时器中断.
+	/// mip 位于 0x344: SSIP、STIP 与 SEIP 可写. 对 SEIP 的写入只改变软件位,
+	/// 外部中断线的取值保留在 ``mip`` 的位 9 中.
 	#[test]
-	fn write_mip_writes_stip_and_preserves_seip() {
+	fn write_mip_writes_stip_and_software_seip() {
 		let mut s = test_state();
 		s.mip
 			.store((1 << 5) | (1 << 9) | (1 << 1), Ordering::Release);
@@ -1156,8 +1299,9 @@ mod tests {
 		assert_eq!(
 			mip & (1 << 9),
 			1 << 9,
-			"SEIP is read-only, must be preserved"
+			"the external SEIP line must be preserved through csrw mip"
 		);
+		assert_eq!(s.software_seip, 0, "the software SEIP bit must be cleared");
 		assert_eq!(
 			mip & (1 << 1),
 			0,
@@ -1178,6 +1322,157 @@ mod tests {
 		);
 	}
 
+	/// USIP、UTIP 与 UEIP 在 mip 中只读, 写入被忽略.
+	#[test]
+	fn write_mip_ignores_read_only_u_bits() {
+		let mut s = test_state();
+		s.mip.store(0, Ordering::Release);
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let st = csr_write(&mut ctx, MIP, (1 << 0) | (1 << 4) | (1 << 8));
+			assert_eq!(st, CSR_OK);
+		}
+		assert_eq!(
+			s.mip.load(Ordering::Acquire) & ((1 << 0) | (1 << 4) | (1 << 8)),
+			0,
+			"U 级的挂起位由硬件驱动, csrw mip 不得置位"
+		);
+	}
+
+	/// csrs mip, SSIP 的写入掩码不含位 9, 不得把外部中断线记成软件位.
+	///
+	/// 外部中断线为高时 mip 的读出值位 9 为 1, CSRRS 的写入值由读出值算出,
+	/// 写入路径若按该值的位 9 设置软件位, 中断控制器撤销外部线之后该位仍为 1.
+	#[test]
+	fn csrs_mip_ssip_does_not_latch_software_seip() {
+		let mut s = test_state();
+		s.mip.store(1 << 9, Ordering::Release); // 外部中断线为高
+		s.gprs[5] = 1 << 1; // t0 的位 1 为 1, 位 9 为 0
+		let mut r = make_instr_group();
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			// CSRRS x0, mip, t0: funct3 为 010, rs1 为 5, rd 为 0, csr 为 0x344
+			let adv = handle_csr(&mut ctx, 0, 5, MIP, 0b010, 0x3442A073, &mut r);
+			assert_eq!(adv, 4);
+		}
+		assert_eq!(
+			s.mip.load(Ordering::Acquire) & (1 << 1),
+			1 << 1,
+			"SSIP 应被置位"
+		);
+		assert_eq!(s.software_seip, 0, "写入掩码不含位 9, 软件 SEIP 不得被置位");
+		s.mip.fetch_and(!(1 << 9), Ordering::AcqRel); // 中断控制器撤销外部线
+		let clint = test_clint(0);
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, _) = csr_read(&mut ctx, MIP);
+		assert_eq!(v & (1 << 9), 0, "撤销外部线后 SEIP 必须为 0");
+	}
+
+	/// csrc mip, SSIP 同样不写位 9, 撤销外部线后 SEIP 为 0.
+	#[test]
+	fn csrc_mip_ssip_does_not_latch_software_seip() {
+		let mut s = test_state();
+		s.mip.store((1 << 9) | (1 << 1), Ordering::Release);
+		s.gprs[5] = 1 << 1;
+		let mut r = make_instr_group();
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			// CSRRC x0, mip, t0: funct3 为 011, rs1 为 5, rd 为 0, csr 为 0x344
+			let adv = handle_csr(&mut ctx, 0, 5, MIP, 0b011, 0x3442B073, &mut r);
+			assert_eq!(adv, 4);
+		}
+		assert_eq!(s.mip.load(Ordering::Acquire) & (1 << 1), 0, "SSIP 应被清除");
+		assert_eq!(s.software_seip, 0, "写入掩码不含位 9, 软件 SEIP 不得被置位");
+		s.mip.fetch_and(!(1 << 9), Ordering::AcqRel);
+		let clint = test_clint(0);
+		let mut ctx = test_csr_ctx(&mut s, &clint);
+		let (v, _) = csr_read(&mut ctx, MIP);
+		assert_eq!(v & (1 << 9), 0, "撤销外部线后 SEIP 必须为 0");
+	}
+
+	/// csrw mip 写全部位: 写入值的位 9 为 0 时清除软件 SEIP 位.
+	#[test]
+	fn csrw_mip_clears_software_seip() {
+		let mut s = test_state();
+		s.software_seip = 1;
+		s.gprs[5] = 0;
+		let mut r = make_instr_group();
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			// CSRRW x0, mip, t0: funct3 为 001, rs1 为 5, rd 为 0, csr 为 0x344
+			let adv = handle_csr(&mut ctx, 0, 5, MIP, 0b001, 0x34429073, &mut r);
+			assert_eq!(adv, 4);
+		}
+		assert_eq!(s.software_seip, 0, "csrw mip, 0 应清除软件 SEIP 位");
+	}
+
+	/// csrs mip, SEIP 的写入掩码含位 9, 软件位随写入值置位.
+	#[test]
+	fn csrs_mip_seip_sets_software_seip() {
+		let mut s = test_state();
+		s.mip.store(0, Ordering::Release); // 外部中断线为低
+		s.gprs[5] = 1 << 9;
+		let mut r = make_instr_group();
+		{
+			let clint = test_clint(0);
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let adv = handle_csr(&mut ctx, 0, 5, MIP, 0b010, 0x3442A073, &mut r);
+			assert_eq!(adv, 4);
+		}
+		assert_eq!(s.software_seip, 1, "写入掩码含位 9 时软件 SEIP 应被置位");
+	}
+
+	/// 写入 mip.SEIP 只置位软件位; 外部线撤除后读出值仍为 1, 软件清除后
+	/// 读出值才变为 0. 外部线撤除不得影响软件位, 软件位也不得覆盖外部线.
+	#[test]
+	fn mip_seip_reads_software_or_external() {
+		let mut s = test_state();
+		// sip 的读出值为 mip 与 mideleg 按位与, 委派 SEI 后 sip 才可见该位
+		s.mideleg |= 1 << 9;
+		let clint = test_clint(0);
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let st = csr_write(&mut ctx, MIP, 1 << 9);
+			assert_eq!(st, CSR_OK);
+			let (v, _) = csr_read(&mut ctx, MIP);
+			assert_eq!(v & (1 << 9), 1 << 9, "软件位须体现在 mip 的读出值中");
+		}
+		// 此时只有软件位, 外部线为 0.
+		assert_eq!(s.mip.load(Ordering::Acquire) & (1 << 9), 0);
+		// 外部线拉高.
+		s.mip.fetch_or(1 << 9, Ordering::AcqRel);
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let (v, _) = csr_read(&mut ctx, MIP);
+			assert_eq!(v & (1 << 9), 1 << 9);
+			let (sv, _) = csr_read(&mut ctx, SIP);
+			assert_eq!(sv & (1 << 9), 1 << 9, "sip 的读出值同样取或");
+		}
+		// 软件清除 SEIP, 外部线仍在.
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let st = csr_write(&mut ctx, MIP, 0);
+			assert_eq!(st, CSR_OK);
+			let (v, _) = csr_read(&mut ctx, MIP);
+			assert_eq!(
+				v & (1 << 9),
+				1 << 9,
+				"外部线仍在时, 软件清除 SEIP 后读出值必须仍为 1"
+			);
+		}
+		// 外部线撤除, 读出值随之变为 0.
+		s.mip.fetch_and(!(1 << 9), Ordering::AcqRel);
+		{
+			let mut ctx = test_csr_ctx(&mut s, &clint);
+			let (v, _) = csr_read(&mut ctx, MIP);
+			assert_eq!(v & (1 << 9), 0, "外部线与软件位均为 0 时读出值为 0");
+		}
+	}
+
 	#[test]
 	fn read_time() {
 		let mut s = test_state();
@@ -1188,15 +1483,14 @@ mod tests {
 		assert_eq!(v, 123456789);
 	}
 
+	/// timeh 只在 RV32 上存在, RV64 访问该地址即为非法.
 	#[test]
-	fn read_timeh() {
+	fn read_timeh_is_illegal_on_rv64() {
 		let mut s = test_state();
 		let clint = test_clint(0x123456789AB);
 		let mut ctx = test_csr_ctx(&mut s, &clint);
-		let (v, st) = csr_read(&mut ctx, 0xC81);
-		assert_eq!(st, CSR_OK);
-		// 0x123456789AB 右移 32 位
-		assert_eq!(v, 0x123);
+		let (_, st) = csr_read(&mut ctx, 0xC81);
+		assert_eq!(st, CSR_ILL, "RV64 上 timeh 的访问必须判为非法");
 	}
 
 	/// mcycle 与 cycle 由本 hart 已执行完成的指令数换算.
@@ -1229,26 +1523,21 @@ mod tests {
 		assert_eq!(v, 0x1_2345_6789);
 	}
 
-	/// 高半 CSR 返回同一计数的 bits[63:32].
+	/// 高半计数器 CSR 仅 RV32 存在, RV64 上读取触发 IllInstr.
 	#[test]
-	fn read_counter_high_halves() {
+	fn read_counter_high_halves_illegal_on_rv64() {
 		let mut s = test_state();
 		s.total_instrs = 0x1_2345_6789;
-		let cycles = 0x1_2345_6789u64.wrapping_mul(CYCLES_PER_INSTR);
 		let clint = test_clint(0);
 		let mut ctx = test_csr_ctx(&mut s, &clint);
-		let (v, st) = csr_read(&mut ctx, MCYCLEH);
+		assert_eq!(csr_read(&mut ctx, MCYCLEH).1, CSR_ILL);
+		assert_eq!(csr_read(&mut ctx, CYCLEH).1, CSR_ILL);
+		assert_eq!(csr_read(&mut ctx, MINSTRETH).1, CSR_ILL);
+		assert_eq!(csr_read(&mut ctx, INSTRETH).1, CSR_ILL);
+		// 低半部分仍可读
+		let (v, st) = csr_read(&mut ctx, CYCLE);
 		assert_eq!(st, CSR_OK);
-		assert_eq!(v, (cycles >> 32) & 0xFFFF_FFFF);
-		let (v, st) = csr_read(&mut ctx, CYCLEH);
-		assert_eq!(st, CSR_OK);
-		assert_eq!(v, (cycles >> 32) & 0xFFFF_FFFF);
-		let (v, st) = csr_read(&mut ctx, MINSTRETH);
-		assert_eq!(st, CSR_OK);
-		assert_eq!(v, 0x1);
-		let (v, st) = csr_read(&mut ctx, INSTRETH);
-		assert_eq!(st, CSR_OK);
-		assert_eq!(v, 0x1);
+		assert_eq!(v, 0x1_2345_6789u64.wrapping_mul(CYCLES_PER_INSTR));
 	}
 
 	/// 两个 hart 的计数器互不影响: 各自的读数只由自身的指令数给出.
@@ -1308,9 +1597,9 @@ mod tests {
 		}
 	}
 
-	/// 高半计数器与低半共用 counteren 的同一位.
+	/// 计数器的 counteren 检查只作用于低半部分, 高半部分在 RV64 上不存在.
 	#[test]
-	fn counter_high_half_shares_enable_bit() {
+	fn counter_high_half_illegal_on_rv64() {
 		let clint = test_clint(0);
 		let mut s = test_state();
 		s.mode = riscv_mode::U;
@@ -1318,7 +1607,7 @@ mod tests {
 		s.scounteren = 0b001;
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		assert_eq!(csr_read(&mut ctx, CYCLE).1, CSR_OK);
-		assert_eq!(csr_read(&mut ctx, CYCLEH).1, CSR_OK);
+		assert_eq!(csr_read(&mut ctx, CYCLEH).1, CSR_ILL);
 		assert_eq!(csr_read(&mut ctx, INSTRET).1, CSR_ILL);
 		assert_eq!(csr_read(&mut ctx, INSTRETH).1, CSR_ILL);
 	}
@@ -1333,7 +1622,7 @@ mod tests {
 		s.scounteren = 0;
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		assert_eq!(csr_read(&mut ctx, TIME).1, CSR_OK);
-		assert_eq!(csr_read(&mut ctx, TIMEH).1, CSR_OK);
+		assert_eq!(csr_read(&mut ctx, TIMEH).1, CSR_ILL, "timeh 仅 RV32 存在");
 		assert_eq!(csr_read(&mut ctx, CYCLE).1, CSR_ILL);
 	}
 
@@ -1551,9 +1840,7 @@ mod tests {
 		assert_eq!(csr_write(&mut ctx, 0x3EF, 0), CSR_OK); // pmpaddr63, 最后一个条目
 	}
 
-	// ============================================================
 	//  AIA CSR 的可用性, 由编译期常量 CFG_AIA 分发期望值
-	// ============================================================
 	//
 	// CFG_AIA 为 false 时全部 AIA CSR 返回 CSR_ILL, 防止内核探测到
 	// 不存在的 IMSIC 硬件. CFG_AIA 为 true 时返回 CSR_OK, IMSIC 寄存器

@@ -5,8 +5,9 @@
 
 """virtio-net MMIO 网络设备 (virtio v1.2 规范).
 
-只承载设备语义: feature 集合、0x100 起的配置空间 (MAC、链路状态、队列对数、MTU)、
-接收与发送两条 virtqueue 的处理。MMIO 寄存器堆与 virtqueue 遍历由
+只承载设备语义: feature 集合、0x100 起的配置空间以及接收与发送两条
+virtqueue 的处理。配置空间含 MAC、链路状态、队列对数、MTU。
+MMIO 寄存器堆与 virtqueue 遍历由
 [virtio_mmio](pyremu/peripheral/virtio_mmio.py) 提供。
 
 特性:
@@ -35,9 +36,8 @@ from pyremu.peripheral.virtio_mmio import (
     VRING_DESC_F_WRITE,
 )
 
-# ============================================================
 #  设备标识与 feature
-# ============================================================
+
 
 # virtio 设备类型号
 VIRTIO_NET_DEVICE_ID = 0x1
@@ -47,22 +47,23 @@ VIRTIO_NET_F_MAC = 1 << 5
 
 # 本设备支持的 feature (64-bit)
 #
-# VIRTIO_F_RING_EVENT_IDX (bit 29) 与 VIRTIO_F_RING_INDIRECT_DESC (bit 28) 的声明
-# 问题与 virtio-blk 同源, 理由见 virtio_blk.py 的同名常量注释: 前者要求设备回写
-# available ring 的 avail_event 字段, 后者要求描述符链遍历实现间接表, 二者本模块
-# 均未实现, 声明了会使驱动走上设备不支持的路径。
+# VIRTIO_F_RING_EVENT_IDX (bit 29) 与
+# VIRTIO_F_RING_INDIRECT_DESC (bit 28) 均不声明: 前者要求设备回写
+# available ring 的 avail_event 字段, 后者要求描述符链遍历实现间接表,
+# 二者本模块均未实现, 声明了会使驱动进入设备不支持的路径。
 #
 # VIRTIO_NET_F_MRG_RXBUF 同样不声明: 声明后驱动允许把一个帧拆进多个接收缓冲区,
-# 首部还要多出 num_buffers 字段, 接收路径须据此拼帧。不声明时一个帧占一个缓冲区。
+# 首部还要多出 num_buffers 字段, 接收路径须据此拼帧。
+# 不声明时一个帧占一个缓冲区。
 #
 # VIRTIO_NET_F_CSUM 与 VIRTIO_NET_F_GUEST_CSUM 与各类 GSO feature 一概不声明:
 # 声明即表示设备参与校验和与分段卸载, 未实现时会静默产出错误的帧。不声明时
 # 驱动在软件里完成这些工作, 设备只需收发完整的以太帧。
 _DEVICE_FEATURES = VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC
 
-# ============================================================
+
 #  队列
-# ============================================================
+
 
 # 队列 0 接收驱动提供的空缓冲区, 队列 1 接收驱动填入的待发帧
 VIRTIO_NET_RX_QUEUE = 0
@@ -80,9 +81,9 @@ VIRTIO_NET_CHAIN_MAX_DESC = 16
 # 内存占用有界, 而不是让待收队列无限增长。
 VIRTIO_NET_RX_QUEUE_LIMIT = 64
 
-# ============================================================
+
 #  virtio_net_config 配置空间 (offset 0x100+)
-# ============================================================
+
 
 VIRTIO_NET_CFG_MAC = 0x00  # u8 mac[6]
 VIRTIO_NET_CFG_STATUS = 0x06  # __virtio16 status
@@ -95,9 +96,9 @@ VIRTIO_NET_CFG_SIZE = 0x0C
 # status 字段的位 (VIRTIO_NET_S_*)
 VIRTIO_NET_S_LINK_UP = 1
 
-# ============================================================
+
 #  以太网与 virtio 首部
-# ============================================================
+
 
 # 以太帧首部长度: 目的 MAC (6) + 源 MAC (6) + 类型 (2)
 ETHERNET_HEADER_SIZE = 14
@@ -116,9 +117,9 @@ ETHERNET_FRAME_MAX = ETHERNET_HEADER_SIZE + ETHERNET_MTU
 # 卸载 feature 时, 首部各字段恒为 0。
 VIRTIO_NET_HDR_SIZE = 10
 
-# ============================================================
+
 #  中断源编号
-# ============================================================
+
 
 # S 模式一侧实例的中断源编号。既有取值是 VIRTIO_BLK_IRQ = 1 与 UART_IRQ = 10,
 # 故 2 空闲。
@@ -129,9 +130,9 @@ VIRTIO_NET_S_IRQ = 2
 # 同一个中断源会一并置位。
 VIRTIO_NET_M_IRQ = 3
 
-# ============================================================
+
 #  默认 MAC 地址
-# ============================================================
+
 
 # 首字节的 bit0 为 0 表示单播, bit1 为 1 表示本地管理地址, 故 0x02 开头的地址
 # 不会与任何厂商分配的地址冲突。两个实例取不同值, 回环时可用源地址区分。
@@ -152,8 +153,9 @@ class NetBackend(ABC):
     def bind(self, device: VirtIONet) -> None:
         """绑定收发帧的设备. 设备构造时调用一次.
 
-        默认实现为空操作: 同步回环的帧经 transmit 的返回值交回调用方, 后端不必保存
-        设备. 帧从宿主异步到达的后端覆写本方法, 覆写实现只能保存设备的弱引用.
+        默认实现为空操作: 同步回环的帧经 transmit 的返回值交回调用方,
+        后端不必保存设备. 帧从宿主异步到达的后端覆写本方法,
+        覆写实现只能保存设备的弱引用.
         """
 
     @abstractmethod
@@ -175,7 +177,8 @@ class LoopbackBackend(NetBackend):
     请求, 该请求回环回来后由本机协议栈应答, 应答再回环回来填入 ARP 表, 之后 UDP
     报文以本机 MAC 为目的发出并回环到本机的接收路径。
 
-    终止性: 接收路径不发送帧, 故回环不会自我增殖; 协议栈对 ARP 应答不再回以应答。
+    终止性: 接收路径不发送帧, 故回环的帧不会再进入发送路径;
+    协议栈对 ARP 应答不再回以应答。
     """
 
     def transmit(self, tx_frame: bytes) -> bytes | None:
@@ -227,9 +230,10 @@ class VirtIONet(Device):
         self._backend = backend if backend is not None else LoopbackBackend()
         self._backend.bind(self)
 
-        # 中断投递: 完成中断经 irq_sink 给出的投递目标上报; 中断源号为 0 或未给出
-        # 投递目标时不投递。调用方应传设备中断投递目标 DeviceIrqSink, 理由见
-        # virtio_blk.py。
+        # 中断投递: 完成中断经 irq_sink 给出的投递目标上报;
+        # 中断源号为 0 或未给出投递目标时不投递. 调用方应传设备中断投递目标
+        # DeviceIrqSink, 它除置位中断控制器外还通知加速执行引擎并唤醒
+        # 进入 WFI 的 hart, 直接调用控制器会略过这两步.
         irq, on_irq = irq_sink if irq_sink is not None else (0, None)
         self.mmio = VirtioMMIO(
             VirtioMMIOConfig(
@@ -259,8 +263,10 @@ class VirtIONet(Device):
         self.mmio.write(offset, data)
 
     def process_queue(self, index: int, max_descriptors: int = 0) -> bool:
-        """处理第 *index* 条队列中待处理的请求. 语义见 VirtioMMIO.process_queue."""
-        return self.mmio.process_queue(index, self._handle_request, max_descriptors)
+        """处理第 *index* 条队列中待处理的请求."""
+        return self.mmio.process_queue(
+            index, self._handle_request, max_descriptors
+        )
 
     # ---- 后端接入 ----
 
@@ -308,11 +314,17 @@ class VirtIONet(Device):
         cfg = bytearray(VIRTIO_NET_CFG_SIZE)
         cfg[VIRTIO_NET_CFG_MAC : VIRTIO_NET_CFG_MAC + 6] = self._mac
         status = VIRTIO_NET_S_LINK_UP if self._link_up else 0
-        cfg[VIRTIO_NET_CFG_STATUS : VIRTIO_NET_CFG_STATUS + 2] = status.to_bytes(2, "little")
+        cfg[VIRTIO_NET_CFG_STATUS : VIRTIO_NET_CFG_STATUS + 2] = (
+            status.to_bytes(2, "little")
+        )
         # 未协商 VIRTIO_NET_F_MQ, 队列对数恒为 1
         pairs = (1).to_bytes(2, "little")
-        cfg[VIRTIO_NET_CFG_MAX_VQ_PAIRS : VIRTIO_NET_CFG_MAX_VQ_PAIRS + 2] = pairs
-        cfg[VIRTIO_NET_CFG_MTU : VIRTIO_NET_CFG_MTU + 2] = ETHERNET_MTU.to_bytes(2, "little")
+        cfg[VIRTIO_NET_CFG_MAX_VQ_PAIRS : VIRTIO_NET_CFG_MAX_VQ_PAIRS + 2] = (
+            pairs
+        )
+        cfg[VIRTIO_NET_CFG_MTU : VIRTIO_NET_CFG_MTU + 2] = (
+            ETHERNET_MTU.to_bytes(2, "little")
+        )
         return cfg
 
     # ---- 队列处理 ----
@@ -332,7 +344,11 @@ class VirtIONet(Device):
             return
         self.process_queue(index)
 
-    def _handle_request(self, queue: VirtQueue, chain: list[VirtqDesc]) -> tuple[bool, int]:
+    def _handle_request(
+        self,
+        queue: VirtQueue,
+        chain: list[VirtqDesc],
+    ) -> tuple[bool, int]:
         """处理一个描述符链. 只有发送队列经此路径.
 
         Returns:
@@ -349,7 +365,9 @@ class VirtIONet(Device):
         首部与帧可同处一个描述符, 也可分处相邻的若干描述符, 故先按链顺序拼出完整
         字节序列再切掉首部。
         """
-        buf = b"".join(self.mmio.read_phys(desc.addr, desc.length) for desc in chain)
+        buf = b"".join(
+            self.mmio.read_phys(desc.addr, desc.length) for desc in chain
+        )
         if (
             len(buf) < VIRTIO_NET_HDR_SIZE
             or len(buf[VIRTIO_NET_HDR_SIZE:]) < ETHERNET_HEADER_SIZE

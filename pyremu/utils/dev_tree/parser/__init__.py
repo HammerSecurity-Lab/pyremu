@@ -6,7 +6,8 @@
 
 """设备树解析器 — 对外给出入口类 DT 与解析结果的数据模型.
 
-词法单元、词法分析、语法分析与节点模型分别位于 tokens, lexer, syntax 与 model 模块.
+词法单元、词法分析、语法分析与节点模型分别位于 tokens, lexer, syntax 与
+model 模块.
 """
 
 from pyremu.utils.dev_tree.parser.model import (

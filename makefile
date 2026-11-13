@@ -186,7 +186,7 @@ phony += build-fw-linux
 # 文件名按来源加前缀, 供 sym ls 按类归组:
 #   fw-*      固件
 #   kernel-*  测试固件
-#   app-*     飞地载荷, 取自 fn_apps/bin
+#   app-*     飞地载荷, 取自 bsp/eval-suites/fn_apps/bin
 #   kei-sav   零阶段启动器 (bsp/kei-boot/kei.sav.elf)
 #   sittim    Rust S 模式可信管理程序
 #   vmlinux   Linux 内核
@@ -204,7 +204,7 @@ SYM_EXPORT_SPECS = \
 	$(LINUX_VMLINUX):vmlinux
 
 sym-export:
-	@tools/export_symbols.sh $(sym_dir) $(SYM_EXPORT_SPECS) fn_apps/bin:app-
+	@tools/export_symbols.sh $(sym_dir) $(SYM_EXPORT_SPECS) bsp/eval-suites/fn_apps/bin:app-
 phony += sym-export
 
 # ---- initramfs 打包 debootstrap 目录下生成cpio与gzip ----

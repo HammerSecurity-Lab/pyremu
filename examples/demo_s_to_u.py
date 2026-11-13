@@ -4,7 +4,8 @@
 
 预编译固件 u_mode_run_fib.elf 流程:
   1. M 模式: 配置 PMP/medeleg/mstatus, MRET -> S
-  2. S 模式: 配置 stvec/sscratch/sstatus, 建立 Sv39 页表 (含 U 栈保护页), SRET -> U
+  2. S 模式: 配置 stvec/sscratch/sstatus, 建立 Sv39 页表
+     (含 U 栈保护页), SRET -> U
   3. U 模式: 从 UART 读取 n (1~16), 约束后计算 fib(n), ECALL 报告
   4. S 模式 trap handler: 分发 syscall (report/exit), 捕获页错误并终止进程
 
@@ -65,14 +66,20 @@ def demo_well_behaved(emu: Emulator, fw) -> None:
             print(f"    栈帧回溯 ({len(frames)} 帧):")
             for f in frames:
                 tag = f"#{f.idx + 1:02d}"
-                print(f"    {tag} pc=0x{f.pc:08x} fp=0x{f.fp:08x} ra=0x{f.ra:08x}")
+                print(
+                    f"    {tag} pc=0x{f.pc:08x} fp=0x{f.fp:08x} "
+                    f"ra=0x{f.ra:08x}"
+                )
             print("    fib(3) -> fib(4) -> fib(5) 调用链可见 ✓")
 
         # 完成后退出
         if uart.tx_data().count(b"Enter") >= 2:
             break
 
-    print(f"\n  UART 输出: {uart.tx_data().decode('latin-1', errors='replace')!r}")
+    print(
+        f"\n  UART 输出: "
+        f"{uart.tx_data().decode('latin-1', errors='replace')!r}"
+    )
 
     # 验证 fib_result
     raw = emu.bus.try_read(fw.symbols.get("fib_result"), 8)
@@ -80,7 +87,10 @@ def demo_well_behaved(emu: Emulator, fw) -> None:
         val = int.from_bytes(raw, "little")
         print(f"  fib_result = {val} {'✓' if val == 5 else '✗'}")
 
-    print(f"\n  特权切换: {' -> '.join(f'{fr}->{to}' for _, fr, to in transitions)}")
+    print(
+        f"\n  特权切换: "
+        f"{' -> '.join(f'{fr}->{to}' for _, fr, to in transitions)}"
+    )
 
 
 def demo_pathological(emu: Emulator, fw) -> None:
@@ -106,7 +116,10 @@ def demo_pathological(emu: Emulator, fw) -> None:
     # Run until S-mode catches the fault
     for _ in range(3000):
         emu.step()
-        if "Process terminated" in uart.tx_data().decode("latin-1", errors="replace"):
+        if (
+            "Process terminated"
+            in uart.tx_data().decode("latin-1", errors="replace")
+        ):
             break
 
     out = uart.tx_data().decode("latin-1", errors="replace")

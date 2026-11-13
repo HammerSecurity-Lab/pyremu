@@ -41,7 +41,9 @@ def _cfg(is_net_s: bool = True, is_net_m: bool = True) -> PlatformConfig:
 
 
 def _fdt(cfg: PlatformConfig) -> libfdt.Fdt:
-    return libfdt.Fdt(Emulator(cfg, bootargs="console=ttySIF0").build_default_dtb())
+    return libfdt.Fdt(
+        Emulator(cfg, bootargs="console=ttySIF0").build_default_dtb()
+    )
 
 
 def _find(fdt: libfdt.Fdt, path: str) -> int:
@@ -95,7 +97,9 @@ class TestNetNodePresence:
     def test_enclave_side_node_absent(self) -> None:
         """飞地侧实例的节点不存在."""
         fdt = _fdt(_cfg())
-        assert _find(fdt, f"/soc/virtio@{NET_M_BASE:x}") < 0, "飞地侧实例不得进设备树"
+        assert _find(fdt, f"/soc/virtio@{NET_M_BASE:x}") < 0, (
+            "飞地侧实例不得进设备树"
+        )
 
     def test_enclave_side_irq_absent_from_whole_tree(self) -> None:
         """飞地侧实例的中断源编号不出现在全树任何 ``interrupts`` 属性中.
@@ -106,9 +110,13 @@ class TestNetNodePresence:
         fdt = _fdt(_cfg())
         for raw in _all_interrupt_props(fdt):
             cells = struct.unpack(f">{len(raw) // 4}I", raw)
-            assert VIRTIO_NET_M_IRQ not in cells, f"飞地侧源号出现在 interrupts={cells}"
+            assert VIRTIO_NET_M_IRQ not in cells, (
+                f"飞地侧源号出现在 interrupts={cells}"
+            )
 
-    @pytest.mark.parametrize("is_s_nic,is_m_nic", [(False, True), (False, False)])
+    @pytest.mark.parametrize(
+        "is_s_nic,is_m_nic", [(False, True), (False, False)]
+    )
     def test_nic_fdt_node(self, is_s_nic: bool, is_m_nic: bool) -> None:
         fdt = _fdt(_cfg(is_net_s=is_s_nic, is_net_m=is_m_nic))
         assert _find(fdt, f"/soc/virtio@{NET_M_BASE:x}") < 0

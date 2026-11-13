@@ -6,8 +6,8 @@
 """芯片设备树的回写 — 把已解析的芯片树改写为交给受调试程序的 DTB blob.
 
 回写使用 pyfdt. 交给受调试程序的设备树以芯片树为底, 由 `chip_dt_to_dtb` 按
-`DeliveredTree` 写入模拟器装配出的 RAM 窗口、保留区间、/chosen 的内容与芯片树未声明
-的设备节点, 不由 build.py 重新生成.
+`DeliveredTree` 写入模拟器装配出的 RAM 窗口、保留区间、/chosen 的内容与
+芯片树未声明的设备节点, 不由 build.py 重新生成.
 """
 
 from __future__ import annotations
@@ -25,7 +25,12 @@ from pyfdt.pyfdt import (
     FdtPropertyWords,
 )
 
-from pyremu.utils.dev_tree.chip import ChipDt, COMPAT_PLIC, DtDeviceNode, DtRegion
+from pyremu.utils.dev_tree.chip import (
+    ChipDt,
+    COMPAT_PLIC,
+    DtDeviceNode,
+    DtRegion,
+)
 from pyremu.utils.dev_tree.fdt_node import (
     cells_for,
     cells_of_node,
@@ -50,10 +55,11 @@ from pyremu.utils.dev_tree.parser import Node
 class DeliveredTree:
     """模拟器写入交付设备树的内容.
 
-    ram 为实际装配的主存窗口, 改写 /memory; num_harts 为实际装配的 hart 数, 改写
-    CPU 节点的 hart 编号; reserved_ranges 为平台保留区间, 追加到 /reserved-memory;
-    bootargs 与 initrd 写入 /chosen; devices 为芯片树没有声明、由模拟器补充的设备
-    节点, 按给出的顺序追加到中断控制器所在的节点下.
+    ram 为实际装配的主存窗口, 改写 /memory; num_harts 为实际装配的 hart 数,
+    改写 CPU 节点的 hart 编号; reserved_ranges 为平台保留区间,
+    追加到 /reserved-memory; bootargs 与 initrd 写入 /chosen;
+    devices 为芯片树没有声明、由模拟器补充的设备节点,
+    按给出的顺序追加到中断控制器所在的节点下.
     """
 
     ram: DtRegion | None = None
@@ -77,19 +83,21 @@ def chip_dt_to_dtb(
     delivered 的取值取代. 根节点声明的单元格数不足以描述这些区间时改为 2 与 2,
     并同步改写根节点的直接子节点的 reg 与 ranges, 使各属性的含义不变.
 
-    delivered.num_harts 给出时, 各处理器节点的 reg 改写为装配的 hart 编号, 列出
-    处理器中断控制器的 interrupts-extended 补全到全部装配的 hart. 后者决定 OpenSBI
-    为哪些 hart 配置 MSIP、定时器与 PLIC 上下文.
+    delivered.num_harts 给出时, 各处理器节点的 reg 改写为装配的 hart 编号,
+    列出处理器中断控制器的 interrupts-extended 补全到全部装配的 hart.
+    后者决定 OpenSBI 为哪些 hart 配置 MSIP、定时器与 PLIC 上下文.
 
-    report 为修正项的报告入口, 每项以一条文本给出; 未给出时不报告. 修正无法完成时
-    抛出 ValueError, 不写出语义错误的 blob.
+    report 为修正项的报告入口, 每项以一条文本给出; 未给出时不报告.
+    修正无法完成时抛出 ValueError, 不写出语义错误的 blob.
     """
     if delivered is None:
         delivered = DeliveredTree()
     root = _to_fdt_node(chip.tree.root)
     addr_cells = cells_of_node(root, "#address-cells", DEFAULT_ADDR_CELLS)
     size_cells = cells_of_node(root, "#size-cells", DEFAULT_SIZE_CELLS)
-    need_addr, need_size = _needed_cells(delivered.ram, delivered.reserved_ranges)
+    need_addr, need_size = _needed_cells(
+        delivered.ram, delivered.reserved_ranges
+    )
     if need_addr > addr_cells or need_size > size_cells:
         new_addr = max(addr_cells, need_addr)
         new_size = max(size_cells, need_size)
@@ -183,7 +191,9 @@ def _rewrite_child_reg(
         return
     step = addr_cells + size_cells
     if len(prop.words) % step:
-        raise ValueError(f"{node.get_name()} 的 reg 长度不是 {step} 个单元格的整数倍")
+        raise ValueError(
+            f"{node.get_name()} 的 reg 长度不是 {step} 个单元格的整数倍"
+        )
     words: list[int] = []
     for start in range(0, len(prop.words), step):
         base = decode_cells(prop.words[start : start + addr_cells])
@@ -209,7 +219,9 @@ def _rewrite_child_ranges(
     child_size = cells_of_node(node, "#size-cells", DEFAULT_SIZE_CELLS)
     step = parent_addr_cells + child_addr + child_size
     if len(prop.words) % step:
-        raise ValueError(f"{node.get_name()} 的 ranges 长度不是 {step} 个单元格的整数倍")
+        raise ValueError(
+            f"{node.get_name()} 的 ranges 长度不是 {step} 个单元格的整数倍"
+        )
     words: list[int] = []
     for start in range(0, len(prop.words), step):
         parent = decode_cells(prop.words[start : start + parent_addr_cells])
@@ -263,10 +275,10 @@ def _rewrite_cpus(
 ) -> list[str]:
     """把处理器节点的 hart 编号改写为模拟器装配的编号, 返回被改写的节点说明.
 
-    模拟器按 /cpus 子节点的顺序装配 hart 0 至 hart num_harts-1, 与树中 reg 给出的
-    取值无关. 从 reg 读出 hart 编号, 编号重复或不连续时会为同一 hart 重复建立
-    处理器, 或启动不存在的 hart. 超出装配数量的 CPU 节点标记为 disabled, 不把
-    不存在的 hart 列入处理器集合.
+    模拟器按 /cpus 子节点的顺序装配 hart 0 至 hart num_harts-1,
+    与树中 reg 给出的取值无关. 从 reg 读出 hart 编号,
+    编号重复或不连续时会为同一 hart 重复建立处理器, 或启动不存在的 hart.
+    超出装配数量的 CPU 节点标记为 disabled, 不把不存在的 hart 列入处理器集合.
 
     Raises:
         ValueError: CPU 节点的地址单元格数无法容纳 hart 编号.
@@ -284,19 +296,23 @@ def _rewrite_cpus(
         if index >= num_harts:
             set_property(sub, FdtPropertyStrings("status", ["disabled"]))
             messages.append(
-                f"CPU 节点 {name} 超出装配的 hart 数 {num_harts}, 已标记为 disabled"
+                f"CPU 节点 {name} 超出装配的 hart 数 {num_harts},"
+                " 已标记为 disabled"
             )
             index += 1
             continue
         try:
             reg = encode_cells(index, addr_cells)
         except ValueError as exc:
-            raise ValueError(f"{name} 的 hart 编号无法写入 {addr_cells} 个地址单元格") from exc
+            raise ValueError(
+                f"{name} 的 hart 编号无法写入 {addr_cells} 个地址单元格"
+            ) from exc
         declared = _declared_hart_id(sub)
         if declared != index:
             text = "未声明" if declared is None else f"0x{declared:x}"
             messages.append(
-                f"CPU 节点 {name} 的 reg 为 {text}, 与装配的 hart 编号 {index} 不一致, 已改写"
+                f"CPU 节点 {name} 的 reg 为 {text},"
+                f" 与装配的 hart 编号 {index} 不一致, 已改写"
             )
         set_property(sub, FdtPropertyWords("reg", reg))
         index += 1
@@ -318,7 +334,10 @@ def _cpu_intc_node(
 ) -> FdtNode | None:
     """处理器节点的中断控制器子节点; 没有时为 None."""
     for sub in cpu.subdata:
-        if isinstance(sub, FdtNode) and node_property(sub, "interrupt-controller") is not None:
+        if (
+            isinstance(sub, FdtNode)
+            and node_property(sub, "interrupt-controller") is not None
+        ):
             return sub
     return None
 
@@ -356,12 +375,13 @@ def _rewrite_intc_hart_lists(
 ) -> list[str]:
     """把列出处理器中断控制器的 interrupts-extended 补全到全部装配的 hart.
 
-    OpenSBI 依这一属性为各 hart 配置 MSIP、定时器与 PLIC 上下文. 只列出部分 hart 时,
-    其余 hart 没有可写入的 MSIP 寄存器, sbi_hsm_hart_start 报告成功后目标 hart 仍在
-    WFI 等待, 受调试程序的多 hart 启动停在这一步.
+    OpenSBI 依这一属性为各 hart 配置 MSIP、定时器与 PLIC 上下文.
+    只列出部分 hart 时, 其余 hart 没有可写入的 MSIP 寄存器,
+    sbi_hsm_hart_start 报告成功后目标 hart 仍在 WFI 等待,
+    受调试程序的多 hart 启动停在这一步.
 
-    只改写每一对都由处理器中断控制器组成、且各 hart 的中断号序列一致的属性; 设备节点
-    指向 PLIC 的同类属性不在改写范围.
+    只改写每一对都由处理器中断控制器组成、
+    且各 hart 的中断号序列一致的属性; 设备节点指向 PLIC 的同类属性不在改写范围.
 
     Raises:
         ValueError: 处理器节点不足 num_harts 个, 其中有节点未启用, 或其无法给出
@@ -371,14 +391,19 @@ def _rewrite_intc_hart_lists(
         return []
     nodes = _cpu_nodes(root)
     if len(nodes) < num_harts:
-        raise ValueError(f"处理器节点只有 {len(nodes)} 个, 少于装配的 hart 数 {num_harts}")
+        raise ValueError(
+            f"处理器节点只有 {len(nodes)} 个, 少于装配的 hart 数 {num_harts}"
+        )
     for index, (cpu, intc) in enumerate(nodes[:num_harts]):
         if not is_enabled_node(cpu):
             raise ValueError(
-                f"处理器节点 {cpu.get_name()} 未启用, 无法为 hart {index} 列出中断控制器"
+                f"处理器节点 {cpu.get_name()} 未启用,"
+                f" 无法为 hart {index} 列出中断控制器"
             )
         if intc is None:
-            raise ValueError(f"处理器节点 {cpu.get_name()} 没有中断控制器子节点")
+            raise ValueError(
+                f"处理器节点 {cpu.get_name()} 没有中断控制器子节点"
+            )
     phandles = [phandle_of(intc) for _, intc in nodes[:num_harts]]
     known = {phandle_of(intc) for _, intc in nodes if intc is not None}
     messages: list[str] = []
@@ -393,7 +418,10 @@ def _rewrite_intc_hart_lists(
         if pattern is None:
             continue
         words = [
-            word for phandle in phandles for hwirq in pattern for word in (phandle, hwirq)
+            word
+            for phandle in phandles
+            for hwirq in pattern
+            for word in (phandle, hwirq)
         ]
         if words == prop.words:
             continue
@@ -407,8 +435,8 @@ def _rewrite_intc_hart_lists(
             )
         else:
             messages.append(
-                f"节点 {name} 的 interrupts-extended 的 hart 顺序与装配顺序不一致, "
-                f"已按装配顺序改写"
+                f"节点 {name} 的 interrupts-extended 的 hart 顺序"
+                f"与装配顺序不一致, 已按装配顺序改写"
             )
     return messages
 
@@ -439,7 +467,12 @@ def _add_reserved_memory(
     for index, (base, size) in enumerate(ranges):
         child = FdtNode(f"reserved-{offset + index}@{base:x}")
         child.add_raw_attribute("no-map", b"")
-        child.append(FdtPropertyWords("reg", reg_words(base, size, addr_cells, size_cells)))
+        child.append(
+            FdtPropertyWords(
+                "reg",
+                reg_words(base, size, addr_cells, size_cells),
+            )
+        )
         node.append(child)
 
 
@@ -460,11 +493,15 @@ def _rewrite_chosen(
         start, end = initrd
         set_property(
             node,
-            FdtPropertyBytes.init_raw("linux,initrd-start", struct.pack(">Q", start)),
+            FdtPropertyBytes.init_raw(
+                "linux,initrd-start", struct.pack(">Q", start)
+            ),
         )
         set_property(
             node,
-            FdtPropertyBytes.init_raw("linux,initrd-end", struct.pack(">Q", end)),
+            FdtPropertyBytes.init_raw(
+                "linux,initrd-end", struct.pack(">Q", end)
+            ),
         )
 
 
@@ -483,7 +520,9 @@ def _add_device_node(
     """
     plic = find_node(root, COMPAT_PLIC)
     if plic is None:
-        raise ValueError(f"芯片设备树中没有 PLIC 节点, 无法为 {device.name} 声明中断")
+        raise ValueError(
+            f"芯片设备树中没有 PLIC 节点, 无法为 {device.name} 声明中断"
+        )
     parent = parent_of(root, plic)
     if parent is None:
         parent = root
@@ -491,7 +530,12 @@ def _add_device_node(
     size_cells = cells_of_node(parent, "#size-cells", DEFAULT_SIZE_CELLS)
     node = FdtNode(f"{device.name}@{device.region.base:x}")
     node.append(FdtPropertyStrings("compatible", [device.compatible]))
-    reg = reg_words(device.region.base, device.region.size, addr_cells, size_cells)
+    reg = reg_words(
+        device.region.base,
+        device.region.size,
+        addr_cells,
+        size_cells,
+    )
     node.append(FdtPropertyWords("reg", reg))
     node.append(FdtPropertyWords("interrupt-parent", [phandle_of(plic)]))
     node.append(FdtPropertyWords("interrupts", [device.irq]))
@@ -505,6 +549,10 @@ def _raise_plic_ndev(
 ) -> None:
     """把 PLIC 的 riscv,ndev 抬高到不小于中断源编号 irq."""
     prop = node_property(plic, "riscv,ndev")
-    current = prop.words[0] if isinstance(prop, FdtPropertyWords) and prop.words else 0
+    current = (
+        prop.words[0]
+        if isinstance(prop, FdtPropertyWords) and prop.words
+        else 0
+    )
     if current < irq:
         set_property(plic, FdtPropertyWords("riscv,ndev", [irq]))

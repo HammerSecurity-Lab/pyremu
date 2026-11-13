@@ -120,8 +120,9 @@ def _parse_isa_string(isa: str) -> list[str]:
     while i < len(single_part):
         ch = single_part[i]
         if ch in _MULTI_LETTER_START:
-            # 单字母段中出现 z 或 x 或 s 时, 该字符起至本段末尾为一个多字母扩展名;
-            # 首段与其余段之间漏写下划线时 (如 "rv64imafdcbzicsr") 由此纠正
+            # 单字母段中出现 z 或 x 或 s 时, 该字符起至本段末尾
+            # 为一个多字母扩展名; 首段与其余段之间漏写下划线时
+            # (如 "rv64imafdcbzicsr") 由此纠正
             exts.append(_strip_version(single_part[i:]))
             break
         i += 1
@@ -133,7 +134,9 @@ def _parse_isa_string(isa: str) -> list[str]:
             continue
         i = _skip_version(single_part, i)
     if multi_part:
-        exts.extend(_strip_version(part) for part in multi_part.split("_") if part)
+        exts.extend(
+            _strip_version(part) for part in multi_part.split("_") if part
+        )
     return [ext for ext in exts if ext]
 
 
@@ -142,9 +145,10 @@ def isa_ext_list(
 ) -> list[str]:
     """把旧式 ISA 字符串或扩展名列表归一为小写扩展名列表; 空值给出空列表.
 
-    字符串先去掉 "rv64" 或 "rv32" 前缀, 第一个 "_" 之前按单个字母取扩展, 其中 "g"
-    展开为 imafd 与 zicsr、zifencei; 该段中一旦出现 z 或 x 或 s, 自该字符起至本段
-    末尾为一个多字母扩展名; 其后各段为多字母扩展名. 末尾版本号一并去掉.
+    字符串先去掉 "rv64" 或 "rv32" 前缀, 第一个 "_" 之前按单个字母取扩展,
+    其中 "g" 展开为 imafd 与 zicsr、zifencei; 该段中一旦出现 z 或 x 或 s,
+    自该字符起至本段末尾为一个多字母扩展名; 其后各段为多字母扩展名.
+    末尾版本号一并去掉.
     """
     if isa is None:
         return []

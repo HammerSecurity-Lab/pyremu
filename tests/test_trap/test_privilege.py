@@ -8,15 +8,22 @@
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.core.hart import RiscvMode
+from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.priv_defs import (
+    MSTATUS_FS,
     MSTATUS_MIE,
     MSTATUS_MPIE,
     MSTATUS_MPP,
+    MSTATUS_MPRV,
+    MSTATUS_SD,
     MSTATUS_SIE,
     MSTATUS_SPIE,
     MSTATUS_SPP,
+    MSTATUS_TSR,
+    MSTATUS_TVM,
     MSTATUS_TW,
+    MSTATUS_UXL,
+    MSTATUS_UXL_64,
 )
 from pyremu.core.trap_def import TrapType
 from pyremu.memory.bus import Bus
@@ -239,11 +246,14 @@ class TestCsrrwRdRs1:
         hart.write_csr(0x340, old_scratch)  # mscratch = old_scratch
 
         # 执行 csrrw sp, mscratch, sp
-        instr_val = (0x340 << 20) | (2 << 15) | (1 << 12) | (2 << 7) | Opc.sys.value
+        instr_val = (
+            (0x340 << 20) | (2 << 15) | (1 << 12) | (2 << 7) | Opc.sys.value
+        )
         hart.exec_instr(instr_val)
 
         assert hart.gprs[2] == old_scratch, (
-            f"csrrw 后 sp 应为旧 mscratch 值 0x{old_scratch:08x}, 实际 0x{hart.gprs[2]:08x}"
+            f"csrrw 后 sp 应为旧 mscratch 值 0x{old_scratch:08x}, "
+            f"实际 0x{hart.gprs[2]:08x}"
         )
         assert hart.csrs["mscratch"].val == old_sp, (
             f"csrrw 后 mscratch 应为旧 sp 值 0x{old_sp:08x}, "
@@ -259,11 +269,15 @@ class TestCsrrwRdRs1:
         hart.write_csr(0x340, old_scratch)
 
         # csrrw t0, mscratch, sp  (rd=5, rs1=2)
-        instr_val = (0x340 << 20) | (2 << 15) | (1 << 12) | (5 << 7) | Opc.sys.value
+        instr_val = (
+            (0x340 << 20) | (2 << 15) | (1 << 12) | (5 << 7) | Opc.sys.value
+        )
         hart.exec_instr(instr_val)
 
         assert hart.gprs[5] == old_scratch, "rd(t0) 应为旧 CSR 值"
-        assert hart.csrs["mscratch"].val == old_sp, "CSR 应写入 rs1(sp) 的原始值"
+        assert hart.csrs["mscratch"].val == old_sp, (
+            "CSR 应写入 rs1(sp) 的原始值"
+        )
 
     def test_csrrs_rd_eq_rs1_preserves_rs1(self, hart):
         """csrrs t0, mscratch, t0: rd==rs1 时 SET 位应使用原始 rs1 值."""
@@ -274,12 +288,17 @@ class TestCsrrwRdRs1:
         hart.write_csr(0x340, old_csr)
 
         # csrrs t0, mscratch, t0  (rd=5, rs1=5)
-        instr_val = (0x340 << 20) | (5 << 15) | (2 << 12) | (5 << 7) | Opc.sys.value
+        instr_val = (
+            (0x340 << 20) | (5 << 15) | (2 << 12) | (5 << 7) | Opc.sys.value
+        )
         hart.exec_instr(instr_val)
 
-        assert hart.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0, 实际 0x{hart.gprs[5]:x}"
+        assert hart.gprs[5] == old_csr, (
+            f"rd 应为旧 CSR 值 0, 实际 0x{hart.gprs[5]:x}"
+        )
         assert hart.csrs["mscratch"].val == rs1_orig, (
-            f"CSR 应为 old|rs1=0x{rs1_orig:x}, 实际 0x{hart.csrs['mscratch'].val:x}"
+            f"CSR 应为 old|rs1=0x{rs1_orig:x}, "
+            f"实际 0x{hart.csrs['mscratch'].val:x}"
         )
 
     def test_csrrc_rd_eq_rs1_preserves_rs1(self, hart):
@@ -291,11 +310,15 @@ class TestCsrrwRdRs1:
         hart.write_csr(0x340, old_csr)
 
         # csrrc t0, mscratch, t0  (rd=5, rs1=5)
-        instr_val = (0x340 << 20) | (5 << 15) | (3 << 12) | (5 << 7) | Opc.sys.value
+        instr_val = (
+            (0x340 << 20) | (5 << 15) | (3 << 12) | (5 << 7) | Opc.sys.value
+        )
         hart.exec_instr(instr_val)
 
         expected_csr = old_csr & ~rs1_orig  # 0xFF & ~0x0F = 0xF0
-        assert hart.gprs[5] == old_csr, f"rd 应为旧 CSR 值 0xFF, 实际 0x{hart.gprs[5]:x}"
+        assert hart.gprs[5] == old_csr, (
+            f"rd 应为旧 CSR 值 0xFF, 实际 0x{hart.gprs[5]:x}"
+        )
         assert hart.csrs["mscratch"].val == expected_csr, (
             f"CSR 应为 0x{expected_csr:x}, 实际 0x{hart.csrs['mscratch'].val:x}"
         )
@@ -323,7 +346,9 @@ class TestCsrPrivilege:
     @staticmethod
     def _csrrwi(rd: int, uimm: int, csr: int) -> int:
         """CSRRWI rd, csr, uimm."""
-        return (csr << 20) | (uimm << 15) | (5 << 12) | (rd << 7) | Opc.sys.value
+        return (
+            (csr << 20) | (uimm << 15) | (5 << 12) | (rd << 7) | Opc.sys.value
+        )
 
     @staticmethod
     def _csrrs(rd: int, rs1: int, csr: int) -> int:
@@ -509,7 +534,9 @@ class TestCsrPrivilege:
         hart.csrs["mcounteren"].val = 0b111
         hart.csrs["scounteren"].val = 0
         hart.exec_instr(self._csrrs(rd=5, rs1=0, csr=0xC00))
-        assert hart.mcause_val == 2, "scounteren 未使能时读取 cycle 应触发 IllInstr"
+        assert hart.mcause_val == 2, (
+            "scounteren 未使能时读取 cycle 应触发 IllInstr"
+        )
 
     def test_smode_cycle_read_without_mcounteren_traps(self, hart):
         """S 模式读取 cycle: mcounteren 未置位时 -> IllInstr."""
@@ -517,7 +544,9 @@ class TestCsrPrivilege:
         hart.csrs["mcounteren"].val = 0
         hart.csrs["scounteren"].val = 0b111
         hart.exec_instr(self._csrrs(rd=5, rs1=0, csr=0xC00))
-        assert hart.mcause_val == 2, "mcounteren 未使能时读取 cycle 应触发 IllInstr"
+        assert hart.mcause_val == 2, (
+            "mcounteren 未使能时读取 cycle 应触发 IllInstr"
+        )
 
     def test_mmode_can_read_write_mstatus(self, hart):
         """M 模式可以读写 mstatus."""
@@ -603,19 +632,25 @@ class TestSstatusMstatusLinkage:
         assert (hart.read_csr(0x100) & MSTATUS_SPP) == 0
         # 写 mstatus.SPP=1
         hart.mstatus_val |= MSTATUS_SPP
-        assert (hart.read_csr(0x100) & MSTATUS_SPP) != 0, "sstatus.SPP 应反映 mstatus.SPP 的值"
+        assert (hart.read_csr(0x100) & MSTATUS_SPP) != 0, (
+            "sstatus.SPP 应反映 mstatus.SPP 的值"
+        )
 
     def test_sstatus_write_spp_updates_mstatus(self, hart):
         """写 sstatus.SPP 应更新 mstatus.SPP."""
         hart.mstatus_val &= ~MSTATUS_SPP  # 清零
         # 通过 write_csr 写 sstatus = SPP
         hart.write_csr(0x100, MSTATUS_SPP)
-        assert hart.mstatus_val & MSTATUS_SPP, "写 sstatus.SPP=1 应更新 mstatus.SPP"
+        assert hart.mstatus_val & MSTATUS_SPP, (
+            "写 sstatus.SPP=1 应更新 mstatus.SPP"
+        )
 
     def test_sstatus_read_sie_reflects_mstatus(self, hart):
         """读 sstatus.SIE 应返回 mstatus.SIE 的值."""
         hart.mstatus_val |= MSTATUS_SIE
-        assert (hart.read_csr(0x100) & MSTATUS_SIE) != 0, "sstatus.SIE 应反映 mstatus.SIE 的值"
+        assert (hart.read_csr(0x100) & MSTATUS_SIE) != 0, (
+            "sstatus.SIE 应反映 mstatus.SIE 的值"
+        )
         hart.mstatus_val &= ~MSTATUS_SIE
         assert (hart.read_csr(0x100) & MSTATUS_SIE) == 0
 
@@ -623,7 +658,9 @@ class TestSstatusMstatusLinkage:
         """写 sstatus.SIE 应更新 mstatus.SIE."""
         hart.mstatus_val &= ~MSTATUS_SIE
         hart.write_csr(0x100, MSTATUS_SIE)
-        assert hart.mstatus_val & MSTATUS_SIE, "写 sstatus.SIE=1 应更新 mstatus.SIE"
+        assert hart.mstatus_val & MSTATUS_SIE, (
+            "写 sstatus.SIE=1 应更新 mstatus.SIE"
+        )
 
     def test_sstatus_write_does_not_leak_to_higher_bits(self, hart):
         """sstatus 写只影响受限视图内的位, 不影响 mstatus 高位 (如 MPP)."""
@@ -631,16 +668,20 @@ class TestSstatusMstatusLinkage:
         # 写 sstatus 为全 1
         hart.write_csr(0x100, 0xFFFF_FFFF_FFFF_FFFF)
         # MPP (bits 11-12) 是 mstatus 独有的, 不应被 sstatus 写改变
-        assert (hart.mstatus_val & MSTATUS_MPP) == (original_mstatus & MSTATUS_MPP), (
-            "sstatus 写不应影响 mstatus.MPP 等高位字段"
-        )
+        assert (hart.mstatus_val & MSTATUS_MPP) == (
+            original_mstatus & MSTATUS_MPP
+        ), "sstatus 写不应影响 mstatus.MPP 等高位字段"
 
     def test_sstatus_read_excludes_mstatus_only_bits(self, hart):
         """读 sstatus 不应返回 MPP/MPIE 等 mstatus 专有位."""
-        hart.mstatus_val = MSTATUS_MPP | MSTATUS_MPIE | MSTATUS_SPP | MSTATUS_SIE
+        hart.mstatus_val = (
+            MSTATUS_MPP | MSTATUS_MPIE | MSTATUS_SPP | MSTATUS_SIE
+        )
         sstatus_val = hart.read_csr(0x100)
         assert (sstatus_val & MSTATUS_MPP) == 0, "sstatus 不应暴露 mstatus.MPP"
-        assert (sstatus_val & MSTATUS_MPIE) == 0, "sstatus 不应暴露 mstatus.MPIE"
+        assert (sstatus_val & MSTATUS_MPIE) == 0, (
+            "sstatus 不应暴露 mstatus.MPIE"
+        )
         assert (sstatus_val & MSTATUS_SPP) != 0, "sstatus 应包含 SPP"
         assert (sstatus_val & MSTATUS_SIE) != 0, "sstatus 应包含 SIE"
 
@@ -657,6 +698,147 @@ class TestSstatusMstatusLinkage:
         hart.deliver_trap(TrapType.Breakpoint, hart.pc, is_interrupt=False)
 
         # 陷阱后 mstatus.SPP 应为 1 (来自 S 模式)
-        assert hart.mstatus_val & MSTATUS_SPP, "S 模式 ebreak 陷阱后 mstatus.SPP 必须为 1"
+        assert hart.mstatus_val & MSTATUS_SPP, (
+            "S 模式 ebreak 陷阱后 mstatus.SPP 必须为 1"
+        )
         # sstatus 读应反映 SPP=1
-        assert hart.read_csr(0x100) & MSTATUS_SPP, "sstatus.SPP 应反映 mstatus.SPP=1"
+        assert hart.read_csr(0x100) & MSTATUS_SPP, (
+            "sstatus.SPP 应反映 mstatus.SPP=1"
+        )
+
+
+class TestSstatusView:
+    """sstatus 的派生只读位与 M 模式专有位."""
+
+    def test_sstatus_read_excludes_mprv_and_reports_uxl(self, hart):
+        """sstatus 不含 MPRV; UXL 在 RV64 上读出为 2."""
+        hart.write_csr(0x300, MSTATUS_MPRV | MSTATUS_MPIE)
+        val = hart.read_csr(0x100)
+        assert (val & MSTATUS_MPRV) == 0, "sstatus 不得带出 M 模式的 MPRV"
+        assert (val & MSTATUS_UXL) == MSTATUS_UXL_64, "sstatus.UXL 应恒为 2"
+
+    def test_sstatus_write_cannot_set_mprv(self, hart):
+        """经 sstatus 写入 MPRV 不改变 mstatus.MPRV."""
+        hart.write_csr(0x100, MSTATUS_MPRV)
+        assert (hart.mstatus_val & MSTATUS_MPRV) == 0
+
+    def test_sstatus_sd_follows_fs(self, hart):
+        """SD 由 FS 是否为 3 算出, 不作为独立存储位."""
+        hart.write_csr(0x300, MSTATUS_FS)
+        assert hart.read_csr(0x100) & MSTATUS_SD
+        hart.write_csr(0x300, 0)
+        assert (hart.read_csr(0x100) & MSTATUS_SD) == 0
+
+
+class TestCsrWarl:
+    """mepc、mtvec 与 misa 的 WARL 写入约束."""
+
+    def test_mepc_low_bit_kept_with_compressed(self, hart):
+        """有 C 扩展时 IALIGN 为 16, 只清 bit 0."""
+        hart.write_csr(0x341, 0x8000_1002)
+        assert hart.read_csr(0x341) == 0x8000_1002
+
+    def test_mepc_low_two_bits_cleared_without_compressed(self):
+        """无 C 扩展时 IALIGN 为 32, 清 bits 1:0."""
+        attrs = RatifiedHartAttrs.from_platform(16, "rv64ima")
+        h = Hart(id=0, ratified_hart_attrs=attrs)
+        h.write_csr(0x341, 0x8000_1002)
+        assert h.read_csr(0x341) == 0x8000_1000
+
+    def test_mtvec_reserved_mode_ignored(self, hart):
+        """MODE 为保留编码的写入被忽略."""
+        hart.write_csr(0x305, MTVEC | 1)
+        hart.write_csr(0x305, 0x8002_0002)
+        assert hart.read_csr(0x305) == MTVEC | 1
+
+    def test_misa_write_ignored(self, hart):
+        """misa 写入被忽略."""
+        old = hart.read_csr(0x301)
+        hart.write_csr(0x301, 0)
+        assert hart.read_csr(0x301) == old
+
+
+class TestTvmTsrAndMprv:
+    """mstatus.TVM、mstatus.TSR 与 MRET/SRET 对 MPRV 的清除."""
+
+    @pytest.fixture
+    def smode_hart(self, hart) -> Hart:
+        hart.csrs["mtvec"].val = MTVEC
+        hart.mode = RiscvMode.S
+        return hart
+
+    def test_smode_satp_access_traps_with_tvm(self, smode_hart):
+        """TVM=1 时 S 模式访问 satp 触发 IllInstr."""
+        h = smode_hart
+        h.mstatus_val = MSTATUS_TVM
+        h.exec_instr(0x1800_22F3)  # csrrs x5, satp, x0
+        assert h.mcause_val == 2
+        assert h.mtval_val == 0x1800_22F3
+        assert h.pc == MTVEC
+
+    def test_smode_satp_access_allowed_without_tvm(self, smode_hart):
+        """TVM=0 时 S 模式可访问 satp."""
+        h = smode_hart
+        h.mstatus_val = 0
+        h.exec_instr(0x1800_22F3)
+        assert h.mcause_val != 2
+
+    def test_smode_sfence_vma_traps_with_tvm(self, smode_hart):
+        """TVM=1 时 S 模式执行 SFENCE.VMA 触发 IllInstr."""
+        h = smode_hart
+        h.mstatus_val = MSTATUS_TVM
+        h.exec_instr(0x1200_0073)
+        assert h.mcause_val == 2
+        assert h.pc == MTVEC
+
+    def test_smode_sret_traps_with_tsr(self, smode_hart):
+        """TSR=1 时 S 模式执行 SRET 触发 IllInstr."""
+        h = smode_hart
+        h.mstatus_val = MSTATUS_TSR
+        h.exec_instr(0x1020_0073)
+        assert h.mcause_val == 2
+        assert h.pc == MTVEC
+
+    def test_mmode_sret_ignores_tsr(self, hart):
+        """TSR 不约束 M 模式的 SRET."""
+        hart.csrs["mtvec"].val = MTVEC
+        hart.mode = RiscvMode.M
+        hart.mstatus_val = MSTATUS_TSR
+        hart.sepc_val = 0x8000_5000
+        hart.trap_sret()
+        assert hart.pc == 0x8000_5000
+
+    def test_mret_clears_mprv_when_returning_to_smode(self, hart):
+        """MPP 为 S 时 MRET 清除 MPRV."""
+        hart.mode = RiscvMode.M
+        hart.mstatus_val = MSTATUS_MPRV | (1 << 11)  # MPP = S
+        hart.mepc_val = 0x8000_5000
+        hart.trap_mret()
+        assert hart.mode == RiscvMode.S
+        assert (hart.mstatus_val & MSTATUS_MPRV) == 0
+
+    def test_mret_preserves_mprv_when_returning_to_mmode(self, hart):
+        """MPP 为 M 时 MRET 保留 MPRV."""
+        hart.mode = RiscvMode.M
+        hart.mstatus_val = MSTATUS_MPRV | MSTATUS_MPP
+        hart.mepc_val = 0x8000_5000
+        hart.trap_mret()
+        assert hart.mode == RiscvMode.M
+        assert hart.mstatus_val & MSTATUS_MPRV
+
+    def test_sret_clears_mprv(self, hart):
+        """SRET 的返回级低于 M, 清除 MPRV."""
+        hart.mode = RiscvMode.S
+        hart.mstatus_val = MSTATUS_MPRV | MSTATUS_SPP
+        hart.sepc_val = 0x8000_5000
+        hart.trap_sret()
+        assert hart.mode == RiscvMode.S
+        assert (hart.mstatus_val & MSTATUS_MPRV) == 0
+
+    def test_rv32_only_counter_high_half_traps(self, hart):
+        """RV64 上访问 cycleh 触发 IllInstr."""
+        hart.csrs["mtvec"].val = MTVEC
+        hart.mode = RiscvMode.M
+        hart.exec_instr(0xC800_22F3)  # csrrs x5, cycleh, x0
+        assert hart.mcause_val == 2
+        assert hart.pc == MTVEC

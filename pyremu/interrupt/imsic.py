@@ -83,7 +83,7 @@ IID_EXT_MIN = 6
 class _ImsicFile:
     """单个 IMSIC interrupt file (M-mode 或 S-mode).
 
-    eip/eie 为 u32 列表 (索引 = interrupt number // 32, bit = interrupt number % 32).
+    eip 与 eie 为 u32 列表; 中断号除以 32 的商为索引, 除以 32 的余数为位号.
     """
 
     __slots__ = ("eip", "eie", "eidelivery", "eithreshold", "_any_ext")
@@ -108,7 +108,7 @@ class _ImsicFile:
         self._any_ext = False
 
     def set_pending(self, eip_num: int) -> None:
-        """置 pending 位.  All IIDs (including software IPIs) contribute to _any_ext."""
+        """置挂起位; 全部中断号 (含软件中断) 都使 _any_ext 置位."""
         if 0 < eip_num < _MAX_INTERRUPT_IDS:
             word = eip_num >> 5
             bit = eip_num & 31
@@ -166,7 +166,9 @@ class _ImsicFile:
         ext_mask = ~sw_mask & 0xFFFFFFFF
         for i in range(_EIP_WORDS):
             if i == 0:
-                pending = (self.eip[i] & sw_mask) | (self.eip[i] & self.eie[i] & ext_mask)
+                pending = (self.eip[i] & sw_mask) | (
+                    self.eip[i] & self.eie[i] & ext_mask
+                )
             else:
                 pending = self.eip[i] & self.eie[i]
             if pending:
@@ -179,8 +181,8 @@ class _ImsicFile:
         mtopi (0xFB0) 使用此方法 — 只读, 不 claim.
         返回 (IID << 16) | priority, 或 0 表示无中断.
 
-        Software interrupts (IID=1,3): eip only — eie 不参与 (eie 仅管控外部中断).
-        External interrupts (IID>=6): eip & eie.
+        软件中断的中断号为 1 与 3: 只看 eip, eie 不参与, 后者只管控外部中断.
+        外部中断的中断号不小于 6: 取 eip 与 eie 的按位与.
         """
         # IPI fast-path: software interrupts (IID=1,3) are always "enabled"
         # when pending — they do NOT require eie NOR eidelivery.
@@ -202,7 +204,9 @@ class _ImsicFile:
         for i in range(_EIP_WORDS - 1, -1, -1):
             pending_enabled = self.eip[i] & self.eie[i]
             if i == 0:
-                pending_enabled = (self.eip[i] & sw_mask) | (pending_enabled & ext_mask)
+                pending_enabled = (self.eip[i] & sw_mask) | (
+                    pending_enabled & ext_mask
+                )
 
             if pending_enabled == 0:
                 continue
@@ -243,7 +247,9 @@ class _ImsicFile:
         for i in range(_EIP_WORDS - 1, -1, -1):
             pending_enabled = self.eip[i] & self.eie[i]
             if i == 0:
-                pending_enabled = (self.eip[i] & sw_mask) | (pending_enabled & ext_mask)
+                pending_enabled = (self.eip[i] & sw_mask) | (
+                    pending_enabled & ext_mask
+                )
             if pending_enabled == 0:
                 continue
             bit = pending_enabled.bit_length() - 1
@@ -366,8 +372,8 @@ class IMSIC(Device):
         # set_ip_number), 不得反向.
         self._lock = threading.Lock()
 
-        # 加速引擎持有的 hart 状态 ctypes 数组 (Emulator 注入, 无 native 时为 None).
-        # 见 bind_ffi_states / _publish_eip.
+        # 加速执行引擎持有的 hart 状态 ctypes 数组, 由 Emulator 注入;
+        # 未启用加速执行引擎时为 None. 见 bind_ffi_states / _publish_eip.
         self._ffi_states = None
 
     # ----------------------------------------------------------
@@ -532,7 +538,8 @@ class IMSIC(Device):
         file = self._file_for(hart_id, priv)
         if file is None:
             return
-        mirror = states[hart_id].imsic_m if priv == "M" else states[hart_id].imsic_s
+        state = states[hart_id]
+        mirror = state.imsic_m if priv == "M" else state.imsic_s
         for i in range(_EIP_WORDS):
             mirror.eip[i] = file.eip[i]
         # 仅外部中断门控位; 软件中断 (IID 1/3) 由 Rust 侧 IPI 快路径覆盖,
@@ -564,20 +571,6 @@ class IMSIC(Device):
             if file is not None:
                 file.clear_pending(eip_num)
                 self._publish_eip(hart_id, priv)
-
-    def clear_ipi_on_trap(self, hart_id: int, exc_code: int) -> None:
-        """清除软件中断 trap 入口对应的 IMSIC eip 位 (legacy 路径).
-
-        exc_code: 3 (MSIP->M-file IID=3) 或 1 (SSIP->S-file IID=1).
-        仅当 eidelivery==0 时清除 — eidelivery==1 的 AIA 路径经 MTOPEI/STOPEI
-        claim, 不走此处 (与 trap_handler._imsic_clear_ipi_on_trap 原语义一致).
-        """
-        if exc_code not in (1, 3) or not (0 <= hart_id < self.num_harts):
-            return
-        with self._lock:
-            file = self._files[hart_id][0 if exc_code == 3 else 1]
-            if file.eidelivery == 0:
-                file.clear_pending(exc_code)
 
     # ----------------------------------------------------------
     #  mtopi / stopi IID claim — 完整覆盖全部 6 个主要 IID

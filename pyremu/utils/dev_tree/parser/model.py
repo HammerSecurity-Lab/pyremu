@@ -115,7 +115,9 @@ class Node:
         if name != "/":
             for char in name:
                 if char not in nodename_chars:
-                    dt._parse_error(f"{self.path}: bad character '{char}' in node name")
+                    dt._parse_error(
+                        f"{self.path}: bad character '{char}' in node name"
+                    )
 
     @property
     def name(self) -> str:
@@ -220,7 +222,10 @@ class Node:
                 return filename
 
         rel_filename = safe_relpath(self.filename)
-        s = f"\n/* node '{self.path}' defined in {rel_filename}:{self.lineno} */\n"
+        s = (
+            f"\n/* node '{self.path}' defined in"
+            f" {rel_filename}:{self.lineno} */\n"
+        )
         s += "".join(label + ": " for label in self.labels)
 
         s += f"{self.name} {{\n"
@@ -240,7 +245,9 @@ class Node:
             for i, line in enumerate(lines):
                 drawn = line
                 if i in comments:
-                    drawn += " " * (max_len - len(line) + 1) + comments[i] + "\n"
+                    drawn += (
+                        " " * (max_len - len(line) + 1) + comments[i] + "\n"
+                    )
                 s += drawn
 
         for child in self.nodes.values():
@@ -403,7 +410,11 @@ class Property:
         """
         # Data labels (e.g. 'foo = label: <3>') are irrelevant, so filter them
         # out
-        types = [marker[1] for marker in self._markers if marker[1] != MarkerType.LABEL]
+        types = [
+            marker[1]
+            for marker in self._markers
+            if marker[1] != MarkerType.LABEL
+        ]
 
         if not types:
             return Type.EMPTY
@@ -424,7 +435,10 @@ class Property:
         if types == [MarkerType.PATH]:
             return Type.PATH
 
-        if types == [MarkerType.UINT32, MarkerType.PHANDLE] and len(self.value) == 4:
+        if (
+            types == [MarkerType.UINT32, MarkerType.PHANDLE]
+            and len(self.value) == 4
+        ):
             return Type.PHANDLE
 
         if set(types) == {MarkerType.UINT32, MarkerType.PHANDLE}:
@@ -463,7 +477,11 @@ class Property:
             )
 
         if signed_aware:
-            return int.from_bytes(self.value, "big", signed=0 in self._signed_cell_offsets)
+            return int.from_bytes(
+                self.value,
+                "big",
+                signed=0 in self._signed_cell_offsets,
+            )
 
         return int.from_bytes(self.value, "big", signed=signed)
 
@@ -496,7 +514,11 @@ class Property:
         if signed_aware:
             offsets = self._signed_cell_offsets
             return [
-                int.from_bytes(self.value[i : i + 4], "big", signed=i in offsets)
+                int.from_bytes(
+                    self.value[i : i + 4],
+                    "big",
+                    signed=i in offsets,
+                )
                 for i in range(0, len(self.value), 4)
             ]
 
@@ -628,7 +650,9 @@ class Property:
             )
 
         return [
-            self.node.dt.phandle2node[int.from_bytes(self.value[i : i + 4], "big")]
+            self.node.dt.phandle2node[
+                int.from_bytes(self.value[i : i + 4], "big")
+            ]
             for i in range(0, len(self.value), 4)
         ]
 
@@ -719,7 +743,9 @@ class Property:
                     array_newline = "\n" + " " * array_start
 
                 while pos != end:
-                    num = int.from_bytes(self.value[pos : pos + elm_size], "big")
+                    num = int.from_bytes(
+                        self.value[pos : pos + elm_size], "big"
+                    )
                     if elm_size == 1:
                         s += f" {num:02X}"
                     else:
@@ -732,7 +758,8 @@ class Property:
 
                 if pos != 0 and (
                     not next_marker
-                    or next_marker[1] not in (MarkerType.PHANDLE, MarkerType.LABEL)
+                    or next_marker[1]
+                    not in (MarkerType.PHANDLE, MarkerType.LABEL)
                 ):
                     s += _N_BYTES_TO_END_STR[elm_size]
                     if pos != len(self.value):
@@ -741,7 +768,10 @@ class Property:
         return s + ";"
 
     def __repr__(self):
-        return f"<Property '{self.name}' on {self.node.path} in {self.filename}:{self.lineno}>"
+        return (
+            f"<Property '{self.name}' on {self.node.path} in"
+            f" {self.filename}:{self.lineno}>"
+        )
 
     #
     # Internal functions
@@ -769,7 +799,11 @@ class Property:
 #
 
 
-def to_num(data: bytes, length: Optional[int] = None, signed: bool = False) -> int:
+def to_num(
+    data: bytes,
+    length: Optional[int] = None,
+    signed: bool = False,
+) -> int:
     """
     Converts the 'bytes' array 'data' to a number. The value is expected to be
     in big-endian format, which is standard in devicetree.

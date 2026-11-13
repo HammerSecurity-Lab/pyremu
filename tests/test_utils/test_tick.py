@@ -17,7 +17,9 @@ from pyremu.utils import tick
 class TestFmtNowMs:
     def test_format_matches_layout(self):
         """取值为 YYYY/MM/DD/HH:MM:SS.mmm."""
-        assert re.fullmatch(r"\d{4}/\d{2}/\d{2}/\d{2}:\d{2}:\d{2}\.\d{3}", tick.fmt_now_ms())
+        assert re.fullmatch(
+            r"\d{4}/\d{2}/\d{2}/\d{2}:\d{2}:\d{2}\.\d{3}", tick.fmt_now_ms()
+        )
 
     def test_millisecond_field_is_three_digits(self, monkeypatch):
         """微秒不足一毫秒的整数倍时, 毫秒字段补前导零."""
@@ -40,7 +42,9 @@ class TestFmtNowMs:
 class TestYieldCpu:
     def test_select_receives_interval(self, monkeypatch):
         intervals: list[float] = []
-        monkeypatch.setattr(select, "select", lambda r, w, x, t: intervals.append(t))
+        monkeypatch.setattr(
+            select, "select", lambda r, w, x, t: intervals.append(t)
+        )
         tick.yield_cpu(0.25)
         assert intervals == [0.25]
 

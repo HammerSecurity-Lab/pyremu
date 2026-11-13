@@ -130,7 +130,10 @@ class TestCRNGConfig:
         crng_base = periph.crng_base
         crng_size = 0x1000
         # 两段 MMIO 区间无交集 (CRNG 恒位于 virtio 之上或之下).
-        assert crng_base + crng_size <= virtio_base or crng_base >= virtio_base + virtio_size
+        assert (
+            crng_base + crng_size <= virtio_base
+            or crng_base >= virtio_base + virtio_size
+        )
 
     def test_minimal_preset_disables_crng(self):
         """minimal 预设禁用 CRNG (基址 0), 保持 '仅 CLINT + UART' 语义."""
@@ -138,7 +141,9 @@ class TestCRNGConfig:
 
     def test_dtb_contains_crng_node(self):
         """CRNG 启用时 DTB 含 /soc/crng@... 节点, compatible 与 reg 正确."""
-        emu = Emulator(make_test_config(crng_base=CRNG_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(crng_base=CRNG_BASE), bootargs="console=ttySIF0"
+        )
         fdt = libfdt.Fdt(emu.build_default_dtb())
         node = fdt.path_offset(f"/soc/crng@{CRNG_BASE:x}")
         assert node >= 0

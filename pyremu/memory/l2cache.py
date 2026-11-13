@@ -46,7 +46,9 @@ class L2CacheLine(CacheLineBase):
     """
 
     mesi: MESIState = MESIState.INVALID
-    data: bytearray = field(default_factory=lambda: bytearray(DEFAULT_LINE_SIZE))
+    data: bytearray = field(
+        default_factory=lambda: bytearray(DEFAULT_LINE_SIZE)
+    )
 
 
 class L2Cache(CacheBase):
@@ -80,12 +82,14 @@ class L2Cache(CacheBase):
         )
 
         # 初始化: 每路一条空行, 按组预分区避免热路径上 list slice 分配
-        # _entries 存储 L2CacheLine, 覆盖父类的 CacheLineBase 类型 (静态检查忽略)
+        # _entries 存储 L2CacheLine, 覆盖父类的 CacheLineBase 类型 (静态
+        # 检查忽略)
         self._entries: list[L2CacheLine] = [
             self._make_line() for _ in range(self._num_sets * ways)
         ]
         self._sets: list[list[L2CacheLine]] = [
-            self._entries[i * ways : (i + 1) * ways] for i in range(self._num_sets)
+            self._entries[i * ways : (i + 1) * ways]
+            for i in range(self._num_sets)
         ]
         self._current_mdid: int = 0
         self._line_mask = line_size - 1  # 缓存内偏移掩码 (63)
@@ -168,7 +172,9 @@ class L2Cache(CacheBase):
                 return bytes(e.data[offset : offset + size])
             # 未命中 — 载入整行
             self._misses += 1
-            return self._load_line_and_read(addr, size, way_entries, tag, offset)
+            return self._load_line_and_read(
+                addr, size, way_entries, tag, offset
+            )
 
         # 访问跨缓存行时逐行读取
         result = bytearray()
@@ -225,7 +231,11 @@ class L2Cache(CacheBase):
         victim = way_entries[victim_idx]
 
         # 逐出旧行 (M 状态回写)
-        if victim.valid and victim.mesi == MESIState.MODIFIED and self._ram_write:
+        if (
+            victim.valid
+            and victim.mesi == MESIState.MODIFIED
+            and self._ram_write
+        ):
             pa = victim.tag << self._line_shift
             self._ram_write(pa, bytes(victim.data))
 
@@ -310,7 +320,9 @@ class L2Cache(CacheBase):
 
             if not hit:
                 self._misses += 1
-                self._write_allocate(cur_addr, chunk, cur_entries, cur_tag, cur_offset)
+                self._write_allocate(
+                    cur_addr, chunk, cur_entries, cur_tag, cur_offset
+                )
 
             remaining = remaining[chunk_sz:]
             cur_addr += chunk_sz
@@ -334,7 +346,11 @@ class L2Cache(CacheBase):
         victim = way_entries[victim_idx]
 
         # 逐出旧行
-        if victim.valid and victim.mesi == MESIState.MODIFIED and self._ram_write:
+        if (
+            victim.valid
+            and victim.mesi == MESIState.MODIFIED
+            and self._ram_write
+        ):
             pa = victim.tag << self._line_shift
             self._ram_write(pa, bytes(victim.data))
 
@@ -362,7 +378,9 @@ class L2Cache(CacheBase):
         victim.mesi = MESIState.MODIFIED
 
     def _pick_victim_in_set(self, way_entries: list[L2CacheLine]) -> int:
-        """在一组内选择要逐出的路: 先取无效条目, 全部有效时按 LRU 取最久未使用的."""
+        """在一组内选择要逐出的路: 先取无效条目, 全部有效时按 LRU 取最久
+        未使用的.
+        """
         # 优先选无效的
         for i, e in enumerate(way_entries):
             if not e.valid:
@@ -406,6 +424,37 @@ class L2Cache(CacheBase):
         e.valid = False
         e.mesi = MESIState.INVALID
 
+    def apply_device_write(self, addr: int, data: bytes) -> int:
+        """把设备对主存的直接写入应用到覆盖到的行, 返回受影响的行数.
+
+        与区间 [addr, addr + len(data)) 重叠的行在设备写入后必须与主存一致, 否则
+        此后经本缓存的读取会取到设备写入之前的字节. 脏行持有的较新字节先回写到
+        主存, 使区间未覆盖的字节不被主存中的写入取代; 区间覆盖的字节改写为设备的
+        取值, 行降级为 EXCLUSIVE. 未命中的行不分配.
+        """
+        if not data or not self._tag_to_idx:
+            return 0
+        end = addr + len(data)
+        count = 0
+        last_tag = (end - 1) >> self._line_shift
+        for tag in range(addr >> self._line_shift, last_tag + 1):
+            idx = self._tag_to_idx.get(tag)
+            if idx is None:
+                continue
+            e = self._entries[idx]
+            if not e.valid or e.tag != tag:
+                continue
+            line_pa = e.tag << self._line_shift
+            if e.mesi == MESIState.MODIFIED and self._ram_write:
+                self._ram_write(line_pa, bytes(e.data))
+            lo = max(addr, line_pa) - line_pa
+            hi = min(end, line_pa + self._line_size) - line_pa
+            e.data[lo:hi] = data[lo + line_pa - addr : hi + line_pa - addr]
+            e.mesi = MESIState.EXCLUSIVE
+            e.dirty = False
+            count += 1
+        return count
+
     def flush_all(self) -> int:
         """将全部脏行 (MODIFIED) 回写到 RAM, 保持有效 (降级为 EXCLUSIVE).
 
@@ -422,7 +471,8 @@ class L2Cache(CacheBase):
                 continue
             if self._ram_write is not None:
                 pa = e.tag << self._line_shift
-                self._ram_write(pa, e.data)  # bytearray 直接写入, 避免 bytes() 拷贝
+                # bytearray 直接写入, 避免 bytes() 拷贝
+                self._ram_write(pa, e.data)
             e.mesi = MESIState.EXCLUSIVE
             e.dirty = False
             count += 1
@@ -433,8 +483,8 @@ class L2Cache(CacheBase):
 
         调用动态链接库加速执行后: Rust 已直接修改 bytearray,
         L2 缓存中的旧缓存行全部过时, 无论是否为脏行, 必须无条件丢弃。
-        脏行数据已回写, 此处再写回会覆盖动态链接库在一轮加速过程中对同一物理地址的修改，
-        并污染页表/栈数据。
+        脏行数据已回写, 此处再写回会覆盖动态链接库在一轮加速过程中对同一
+        物理地址的修改，并污染页表/栈数据。
 
         Returns:
             失效的缓存行数.

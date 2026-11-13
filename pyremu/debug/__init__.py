@@ -64,7 +64,9 @@ class Debugger(
     _tlb_page_size = staticmethod(TlbCacheOps._tlb_page_size)
     _colorize_asm = staticmethod(MemoryOps._colorize_asm)
     _ctrl_flow_kind = staticmethod(MemoryOps._ctrl_flow_kind)
-    _ctrl_flow_kind_compressed = staticmethod(MemoryOps._ctrl_flow_kind_compressed)
+    _ctrl_flow_kind_compressed = staticmethod(
+        MemoryOps._ctrl_flow_kind_compressed
+    )
     _resolve_symbol = staticmethod(SymLookupOps._resolve_symbol)
 
 

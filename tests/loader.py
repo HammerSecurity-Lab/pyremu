@@ -116,7 +116,9 @@ class MultiProgramLoader:
         # 查找入口地址
         entry_pc = self._image.symbols.get(entry_symbol)
         if entry_pc is None:
-            raise KeyError(f"未找到符号 '{entry_symbol}' — 确保用户程序已链接到内核 ELF")
+            raise KeyError(
+                f"未找到符号 '{entry_symbol}' — 确保用户程序已链接到内核 ELF"
+            )
 
         # 分配 U 栈: STACK_BASE_U + pid * 2 * PAGE_SIZE 为栈页基址.
         #   栈页上方 = 保护页 (未映射), 栈页 = 实际可用页.

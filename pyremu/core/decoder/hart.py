@@ -2,16 +2,26 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 """RISC-V hart 的指令执行入口与 32 位指令处理器.
 
-exec_instr 解码字段并按 opcode 查表分发到各处理器. 压缩指令与特权指令的方法由同包的
-compressed.CompressedInstrOps 与 sys_ops.SysInstrOps 组合进来; 算术运算与访存取值
-委托给同包的 alu / mem_ops 模块.
+exec_instr 解码字段并按 opcode 查表分发到各处理器. 压缩指令与特权指令的方法由
+同包的 compressed.CompressedInstrOps 与 sys_ops.SysInstrOps 组合进来; 算术运算与
+访存取值委托给同包的 alu / mem_ops 模块.
 """
 
 from pyremu._native import decode_fields, fp_exec_fma, fp_exec_op
-from pyremu.core.decoder.alu import exec_alu, exec_op32, exec_op_imm, exec_op_imm32
+from pyremu.core.decoder.alu import (
+    exec_alu,
+    exec_op32,
+    exec_op_imm,
+    exec_op_imm32,
+)
 from pyremu.core.decoder.check_ext_isa import check_ext_isa
 from pyremu.core.decoder.compressed import CompressedInstrOps
-from pyremu.core.decoder.mem_ops import amo_result, amo_width, LD_READ_SIZE, load_value
+from pyremu.core.decoder.mem_ops import (
+    amo_result,
+    amo_width,
+    LD_READ_SIZE,
+    load_value,
+)
 from pyremu.core.decoder.sys_ops import SysInstrOps
 from pyremu.core.hart import HartWithRegs
 from pyremu.core.mem_check_aux import MemoryAccessError
@@ -32,7 +42,8 @@ from pyremu.utils.mask import mask16, mask64, sext, sext32, sint64
 
 
 class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
-    # 32-bit 指令分发表: opcode 映射到处理方法名, 索引取值为整数 0 到 127, 分发复杂度为 O(1)
+    # 32-bit 指令分发表: opcode 映射到处理方法名, 索引取值为整数 0 到 127,
+    # 分发复杂度为 O(1)
     _DISPATCH: dict[int, str] = {
         0b01100_11: "handle_alu",  # Opc.op
         0b00100_11: "handle_op_imm",  # Opc.op_imm
@@ -175,7 +186,12 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             data = bytes([val & 0xFF, (val >> 8) & 0xFF])
         elif f == StFn3.sw:
             data = bytes(
-                [val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF]
+                [
+                    val & 0xFF,
+                    (val >> 8) & 0xFF,
+                    (val >> 16) & 0xFF,
+                    (val >> 24) & 0xFF,
+                ]
             )
         elif f == StFn3.sd:
             data = bytes([(val >> (8 * i)) & 0xFF for i in range(8)])
@@ -185,7 +201,8 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         saved_pc = self.pc
         self.mem_write(addr, data)
         # mem_write may have delivered a trap (StPageFault / StAccessFault) and
-        # redirected PC to stvec.  If so, return 0 so the caller doesn't advance PC.
+        # redirected PC to stvec.  If so, return 0 so the caller doesn't advance
+        # PC.
         if self.pc != saved_pc:
             return 0
         return 4
@@ -194,8 +211,8 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
     #  F/D 浮点指令
     #
     #  计算委托给加速执行引擎的 softfloat, 入口为 fp_exec_op 与 fp_exec_fma,
-    #  单精度结果的高 32 位由该引擎填为全 1 以设置为 NaN; Python 侧仅负责寄存器与内存的路由,
-    #  并在 FLW 载入 32 位浮点数时做同样的填充.
+    #  单精度结果的高 32 位由该引擎填为全 1 以设置为 NaN; Python 侧仅负责寄存器
+    #  与内存的路由, 并在 FLW 载入 32 位浮点数时做同样的填充.
     # ----------------------------------------------------------
 
     _NANBOX_S = 0xFFFF_FFFF_0000_0000
@@ -208,7 +225,9 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
 
     def _fp_mark_dirty(self) -> None:
         """执行浮点指令后置 FS=Dirty 与 SD。"""
-        self.mstatus_val = self.mstatus_val | self._MSTATUS_FS | self._MSTATUS_SD
+        self.mstatus_val = (
+            self.mstatus_val | self._MSTATUS_FS | self._MSTATUS_SD
+        )
 
     def _fp_frm(self) -> int:
         """当前动态舍入模式 fcsr.frm。"""
@@ -240,7 +259,7 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         val = 0
         for i in range(size):
             val |= mem[i] << (8 * i)
-        self._fpr_bits[f.rd] = (self._NANBOX_S | val) if size == 4 else val
+        self.fpr_bits[f.rd] = (self._NANBOX_S | val) if size == 4 else val
         self._fp_mark_dirty()
         return 4
 
@@ -257,7 +276,7 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         else:
             raise ValueError(f"invalid funct3={fn3:#x} for FP store")
         addr = mask64((self.gprs[f.rs1] + f.imm_s))
-        val = self._fpr_bits[f.rs2]
+        val = self.fpr_bits[f.rs2]
         data = bytes([(val >> (8 * i)) & 0xFF for i in range(size)])
         saved_pc = self.pc
         self.mem_write(addr, data)
@@ -266,22 +285,33 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         return 4
 
     def handle_fp_op(self, instr: int) -> int:
-        """OP-FP — 算术、转换、比较、符号、分类、移动指令, 计算委托给加速执行引擎."""
+        """OP-FP — 算术、转换、比较、符号、分类、移动指令, 计算委托给加速执行
+        引擎."""
         if not self._fp_enabled():
             raise ValueError("FP disabled (mstatus.FS=Off)")
         f = self._f
         op5 = f.func7 >> 2
         # int->float (0x1A) 与 FMV.*.X (0x1E) 的 rs1 源为 GPR。
-        rs1_bits = self.gprs[f.rs1] if op5 in (0x1A, 0x1E) else self._fpr_bits[f.rs1]
-        rs2_bits = self._fpr_bits[f.rs2]
-        out = fp_exec_op(f.func7, f.func3, f.rs2, (rs1_bits, rs2_bits), self._fp_frm())
+        rs1_bits = (
+            self.gprs[f.rs1] if op5 in (0x1A, 0x1E) else self.fpr_bits[f.rs1]
+        )
+        rs2_bits = self.fpr_bits[f.rs2]
+        out = fp_exec_op(
+            f.func7,
+            f.func3,
+            f.rs2,
+            (rs1_bits, rs2_bits),
+            self._fp_frm(),
+        )
         if out.trap:
-            raise ValueError(f"invalid OP-FP funct7={f.func7:#x} funct3={f.func3:#x}")
+            raise ValueError(
+                f"invalid OP-FP funct7={f.func7:#x} funct3={f.func3:#x}"
+            )
         if out.to_gpr:
             if f.rd != 0:
                 self.gprs[f.rd] = out.value
         else:
-            self._fpr_bits[f.rd] = out.value
+            self.fpr_bits[f.rd] = out.value
         self._fp_accumulate_flags(out.fflags)
         self._fp_mark_dirty()
         return 4
@@ -295,12 +325,12 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             f.opcode,
             f.func3,
             f.fmt,
-            (self._fpr_bits[f.rs1], self._fpr_bits[f.rs2], self._fpr_bits[f.rs3]),
+            (self.fpr_bits[f.rs1], self.fpr_bits[f.rs2], self.fpr_bits[f.rs3]),
             self._fp_frm(),
         )
         if out.trap:
             raise ValueError(f"invalid FMA opcode={f.opcode:#x} fmt={f.fmt}")
-        self._fpr_bits[f.rd] = out.value
+        self.fpr_bits[f.rd] = out.value
         self._fp_accumulate_flags(out.fflags)
         self._fp_mark_dirty()
         return 4
@@ -323,7 +353,8 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         width = AMOW_MAP.get(f.func3)
         if op is None or width is None:
             raise ValueError(
-                f"invalid AMO encoding: funct5={funct5_val:#07b}, funct3={f.func3:#05b}"
+                f"invalid AMO encoding: funct5={funct5_val:#07b}, "
+                f"funct3={f.func3:#05b}"
             )
         addr = mask64(self.gprs[f.rs1])
         if op == AmoFunct5.LR:
@@ -377,7 +408,9 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         if self.pc != saved_pc:
             return 0
         if f.rd != 0:
-            self.gprs[f.rd] = sext(mem_val, 64) if width == AmoWidth.D else sext32(mem_val)
+            self.gprs[f.rd] = (
+                sext(mem_val, 64) if width == AmoWidth.D else sext32(mem_val)
+            )
         return 4
 
     def handle_jalr(self, instr: int) -> int:
@@ -474,7 +507,9 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             except MemoryAccessError:
                 pass
             except ValueError, NotImplementedError, CsrAccessError:
-                self.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
+                self.deliver_trap(
+                    TrapType.IllInstr, tval=instr, is_interrupt=False
+                )
             return 0
 
         # 32-bit 标准指令 — 所有未识别的编码一律触发非法指令陷态

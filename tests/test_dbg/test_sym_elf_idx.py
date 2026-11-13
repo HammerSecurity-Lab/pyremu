@@ -75,7 +75,9 @@ def _patch_section(
     """改写一个节头的某个字段."""
     buf = bytearray(data)
     shoff = struct.unpack_from("<Q", buf, 40)[0]
-    struct.pack_into(fmt, buf, shoff + index * SECTION_HEADER_SIZE + field_offset, value)
+    struct.pack_into(
+        fmt, buf, shoff + index * SECTION_HEADER_SIZE + field_offset, value
+    )
     return bytes(buf)
 
 
@@ -91,17 +93,23 @@ class TestElfHeaderValidation:
             elf_idx.ElfFile(path)
 
     def test_bad_magic_is_rejected(self, tmp_path):
-        data = build_elf(header=HeaderSpec(ident=b"XXXX\x02\x01\x01" + b"\x00" * 9))
+        data = build_elf(
+            header=HeaderSpec(ident=b"XXXX\x02\x01\x01" + b"\x00" * 9)
+        )
         with pytest.raises(ElfFormatError, match="不是 ELF 文件"):
             elf_idx.ElfFile(_write(tmp_path, data))
 
     def test_non_64bit_class_is_rejected(self, tmp_path):
-        data = build_elf(header=HeaderSpec(ident=b"\x7fELF\x01\x01\x01" + b"\x00" * 9))
+        data = build_elf(
+            header=HeaderSpec(ident=b"\x7fELF\x01\x01\x01" + b"\x00" * 9)
+        )
         with pytest.raises(ElfFormatError, match="不是 64 位 ELF"):
             elf_idx.ElfFile(_write(tmp_path, data))
 
     def test_big_endian_is_rejected(self, tmp_path):
-        data = build_elf(header=HeaderSpec(ident=b"\x7fELF\x02\x02\x01" + b"\x00" * 9))
+        data = build_elf(
+            header=HeaderSpec(ident=b"\x7fELF\x02\x02\x01" + b"\x00" * 9)
+        )
         with pytest.raises(ElfFormatError, match="不是小端 ELF"):
             elf_idx.ElfFile(_write(tmp_path, data))
 
@@ -157,7 +165,9 @@ class TestHeaderTables:
             filesz=0x20,
             memsz=0x40,
         )
-        data = build_symbol_elf(symbols=SYMBOLS, layout=LayoutSpec(programs=[program]))
+        data = build_symbol_elf(
+            symbols=SYMBOLS, layout=LayoutSpec(programs=[program])
+        )
         elf = elf_idx.ElfFile(_write(tmp_path, data))
         try:
             assert elf.entry == 0x1000
@@ -201,7 +211,9 @@ class TestFindSymbolTable:
             elf.close()
 
     def test_symtab_is_preferred(self, tmp_path):
-        elf = elf_idx.ElfFile(_write(tmp_path, build_symbol_elf(symbols=SYMBOLS)))
+        elf = elf_idx.ElfFile(
+            _write(tmp_path, build_symbol_elf(symbols=SYMBOLS))
+        )
         try:
             symtab, strtab = elf.find_symbol_table()
             assert symtab.sh_type == SHT_SYMTAB
@@ -210,7 +222,9 @@ class TestFindSymbolTable:
             elf.close()
 
     def test_dynsym_is_used_when_symtab_is_absent(self, tmp_path):
-        data = build_symbol_elf(symbols=SYMBOLS, symtab=SymTabSpec(is_dynsym=True))
+        data = build_symbol_elf(
+            symbols=SYMBOLS, symtab=SymTabSpec(is_dynsym=True)
+        )
         elf = elf_idx.ElfFile(_write(tmp_path, data))
         try:
             symtab, _ = elf.find_symbol_table()
@@ -234,7 +248,9 @@ class TestFindSymbolTable:
             elf.close()
 
     def test_symtab_beyond_file_is_rejected(self, tmp_path):
-        data = _patch_section(build_symbol_elf(symbols=SYMBOLS), 2, SH_OFFSET, 1 << 40)
+        data = _patch_section(
+            build_symbol_elf(symbols=SYMBOLS), 2, SH_OFFSET, 1 << 40
+        )
         elf = elf_idx.ElfFile(_write(tmp_path, data))
         try:
             with pytest.raises(ElfFormatError, match="符号表越出文件"):
@@ -243,7 +259,9 @@ class TestFindSymbolTable:
             elf.close()
 
     def test_strtab_beyond_file_is_rejected(self, tmp_path):
-        data = _patch_section(build_symbol_elf(symbols=SYMBOLS), 3, SH_OFFSET, 1 << 40)
+        data = _patch_section(
+            build_symbol_elf(symbols=SYMBOLS), 3, SH_OFFSET, 1 << 40
+        )
         elf = elf_idx.ElfFile(_write(tmp_path, data))
         try:
             with pytest.raises(ElfFormatError, match="字符串表越出文件"):
@@ -308,7 +326,9 @@ class TestAddressIndex:
 
     def test_symbol_table_is_scanned_in_chunks(self, tmp_path, monkeypatch):
         monkeypatch.setattr(elf_idx, "SCAN_CHUNK_BYTES", 48)
-        symbols = [(f"fn{i}", 0x1000 + 4 * i, 4, GLOBAL_FUNC, 1) for i in range(5)]
+        symbols = [
+            (f"fn{i}", 0x1000 + 4 * i, 4, GLOBAL_FUNC, 1) for i in range(5)
+        ]
         _, _, index = _open_index(tmp_path, build_symbol_elf(symbols=symbols))
         try:
             assert index.sym_count == 5
@@ -324,7 +344,9 @@ class TestAddressIndex:
             elf_idx.ElfSymbolIndex(elf, symtab, strtab)
         elf.close()
 
-    def test_local_non_functions_are_skipped_for_large_tables(self, tmp_path, monkeypatch):
+    def test_local_non_functions_are_skipped_for_large_tables(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setattr(elf_idx, "LOCAL_SYMBOL_SKIP_THRESHOLD", 1)
         symbols = [
             ("loc_data", 0x1000, 4, LOCAL_NOTYPE, 1),
@@ -367,7 +389,9 @@ class TestResolveAddr:
             (0x3004, "middle"),
         ],
     )
-    def test_symbol_is_resolved_by_range_and_predecessor(self, tmp_path, addr, expected):
+    def test_symbol_is_resolved_by_range_and_predecessor(
+        self, tmp_path, addr, expected
+    ):
         _, _, index = self._index(tmp_path)
         try:
             assert index.resolve_addr(addr) == expected

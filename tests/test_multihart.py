@@ -39,7 +39,9 @@ class TestMultiHartBoot:
             if emu.harts[0].mode.name == "S":
                 break
 
-        assert emu.harts[0].mode.name == "S", f"Hart 0 仍是 {emu.harts[0].mode.name}"
+        assert emu.harts[0].mode.name == "S", (
+            f"Hart 0 仍是 {emu.harts[0].mode.name}"
+        )
 
     def test_non_boot_harts_park(self, multi_hart_emu):
         """非启动 hart 保持 M 模式, 停在 park_hart 的 WFI 循环内."""
@@ -51,7 +53,9 @@ class TestMultiHartBoot:
         assert kernel is not None
         park_pc = kernel.symbols["park_hart"]
         for h in emu.harts[1:]:
-            assert h.mode.name == "M", f"Hart {h.id} 应为 M 模式, 实际 {h.mode.name}"
+            assert h.mode.name == "M", (
+                f"Hart {h.id} 应为 M 模式, 实际 {h.mode.name}"
+            )
             assert park_pc <= h.pc < park_pc + 8, f"Hart {h.id} PC=0x{h.pc:08x}"
 
     def test_harts_have_separate_csrs(self, multi_hart_emu):
@@ -62,7 +66,9 @@ class TestMultiHartBoot:
 
         emu.harts[1].csrs["mscratch"].val = 0x5A5A
         assert emu.harts[1].csrs["mscratch"].val == 0x5A5A
-        assert emu.harts[0].csrs["mscratch"].val != 0x5A5A, "CSR 状态不应跨 hart 共享"
+        assert emu.harts[0].csrs["mscratch"].val != 0x5A5A, (
+            "CSR 状态不应跨 hart 共享"
+        )
 
 
 class TestMultiHartTimer:
@@ -75,7 +81,9 @@ class TestMultiHartTimer:
         for _ in range(100):
             emu.step()
         mtime_after = emu.clint.get_mtime()
-        assert mtime_after > mtime_before, f"mtime 应推进，但 {mtime_before} >= {mtime_after}"
+        assert mtime_after > mtime_before, (
+            f"mtime 应推进，但 {mtime_before} >= {mtime_after}"
+        )
 
     def test_mtimecmp_writable(self, multi_hart_emu):
         """mtimecmp 可通过总线写入."""

@@ -162,13 +162,62 @@ class TestZbbRtype:
                 0x0123456789ABCDEF,
                 "ror",
             ),
-            # ---- OP-32 (opcode=0x3B): rolw/rorw, 32 位旋转, 结果 sign-extend ----
-            (0x80000001, 1, ZBB_FUNCT7_ROL_ROR, 0b001, OP32, 0x0000000000000003, "rolw"),
-            (0x40000000, 1, ZBB_FUNCT7_ROL_ROR, 0b001, OP32, 0xFFFFFFFF80000000, "rolw"),
-            (0x00000001, 1, ZBB_FUNCT7_ROL_ROR, 0b101, OP32, 0xFFFFFFFF80000000, "rorw"),
-            (0x12345678, 4, ZBB_FUNCT7_ROL_ROR, 0b101, OP32, 0xFFFFFFFF81234567, "rorw"),
-            (0x12345678, 0, ZBB_FUNCT7_ROL_ROR, 0b001, OP32, 0x12345678, "rolw"),
-            (0x12345678, 0, ZBB_FUNCT7_ROL_ROR, 0b101, OP32, 0x12345678, "rorw"),
+            # ---- OP-32 (opcode=0x3B): rolw/rorw, 32 位旋转,
+            # 结果 sign-extend ----
+            (
+                0x80000001,
+                1,
+                ZBB_FUNCT7_ROL_ROR,
+                0b001,
+                OP32,
+                0x0000000000000003,
+                "rolw",
+            ),
+            (
+                0x40000000,
+                1,
+                ZBB_FUNCT7_ROL_ROR,
+                0b001,
+                OP32,
+                0xFFFFFFFF80000000,
+                "rolw",
+            ),
+            (
+                0x00000001,
+                1,
+                ZBB_FUNCT7_ROL_ROR,
+                0b101,
+                OP32,
+                0xFFFFFFFF80000000,
+                "rorw",
+            ),
+            (
+                0x12345678,
+                4,
+                ZBB_FUNCT7_ROL_ROR,
+                0b101,
+                OP32,
+                0xFFFFFFFF81234567,
+                "rorw",
+            ),
+            (
+                0x12345678,
+                0,
+                ZBB_FUNCT7_ROL_ROR,
+                0b001,
+                OP32,
+                0x12345678,
+                "rolw",
+            ),
+            (
+                0x12345678,
+                0,
+                ZBB_FUNCT7_ROL_ROR,
+                0b101,
+                OP32,
+                0x12345678,
+                "rorw",
+            ),
             (
                 0x12345678,
                 0x104,  # rs2 低 5 位 = 4
@@ -205,7 +254,10 @@ class TestZbbRtype:
         hart.gprs[1] = 0xFF
         hart.gprs[2] = 0xFF
         instr = r_type(
-            OP_ALU, 0, pack_funct(ZBB_FUNCT7_ANDN_ORN_XNOR, 0b111), pack_src_regs(1, 2)
+            OP_ALU,
+            0,
+            pack_funct(ZBB_FUNCT7_ANDN_ORN_XNOR, 0b111),
+            pack_src_regs(1, 2),
         )
         hart.exec_instr(instr)
         assert hart.gprs[0] == 0
@@ -226,10 +278,12 @@ class TestZbbItype:
             # ---- OP-IMM (64 位语义) ----
             # clz
             (0x00FFFFFFFFFFFFFF, 0x600, 0b001, 8, "clz", OP_IMM),
-            (0xFFFFFFFFFFFFFF00, 0x600, 0b001, 0, "clz", OP_IMM),  # MSB=1 -> clz=0
+            # MSB=1 时 clz=0
+            (0xFFFFFFFFFFFFFF00, 0x600, 0b001, 0, "clz", OP_IMM),
             (0, 0x600, 0b001, 64, "clz", OP_IMM),
             (0xFFFFFFFFFFFFFFFF, 0x600, 0b001, 0, "clz", OP_IMM),
-            (0x123456789ABCDEF1, 0x600, 0b001, 3, "clz", OP_IMM),  # 0x1xxx -> 前导 3 个 0
+            # 0x1xxx 的前导 0 个数为 3
+            (0x123456789ABCDEF1, 0x600, 0b001, 3, "clz", OP_IMM),
             # cpop
             (0xFF, 0x602, 0b001, 8, "cpop", OP_IMM),
             (0xFFFFFFFFFFFFFFFF, 0x602, 0b001, 64, "cpop", OP_IMM),
@@ -240,20 +294,43 @@ class TestZbbItype:
             (0x7FFF, 0x605, 0b001, 0x7FFF, "sext.h", OP_IMM),
             (0x8000, 0x605, 0b001, 0xFFFFFFFFFFFF8000, "sext.h", OP_IMM),
             # rori
-            (0x8000000000000001, 0x601, 0b101, 0xC000000000000000, "rori", OP_IMM),
-            (0x123456789ABCDEF0, 0x604, 0b101, 0x0123456789ABCDEF, "rori", OP_IMM),
-            (0xDEADBEEFCAFEBABE, 0x600, 0b101, 0xDEADBEEFCAFEBABE, "rori", OP_IMM),
+            (
+                0x8000000000000001,
+                0x601,
+                0b101,
+                0xC000000000000000,
+                "rori",
+                OP_IMM,
+            ),
+            (
+                0x123456789ABCDEF0,
+                0x604,
+                0b101,
+                0x0123456789ABCDEF,
+                "rori",
+                OP_IMM,
+            ),
+            (
+                0xDEADBEEFCAFEBABE,
+                0x600,
+                0b101,
+                0xDEADBEEFCAFEBABE,
+                "rori",
+                OP_IMM,
+            ),
             # ---- OP-IMM-32: 仅看低 32 位, 结果按 32 位 sign-extend ----
             # clzw
             (0x00FFFFFF, 0x600, 0b001, 8, "clzw", OP_IMM32),
             (0, 0x600, 0b001, 32, "clzw", OP_IMM32),
-            (0xFFFFFFFF00000001, 0x600, 0b001, 31, "clzw", OP_IMM32),  # 高 32 位被忽略
+            # 高 32 位被忽略
+            (0xFFFFFFFF00000001, 0x600, 0b001, 31, "clzw", OP_IMM32),
             # ctzw
             (0xFFFFFF00, 0x601, 0b001, 8, "ctzw", OP_IMM32),
             (0, 0x601, 0b001, 32, "ctzw", OP_IMM32),
             # cpopw
             (0xFF, 0x602, 0b001, 8, "cpopw", OP_IMM32),
-            (0xFFFFFFFF0000000F, 0x602, 0b001, 4, "cpopw", OP_IMM32),  # 高 32 位被忽略
+            # 高 32 位被忽略
+            (0xFFFFFFFF0000000F, 0x602, 0b001, 4, "cpopw", OP_IMM32),
             # roriw
             (0x12345678, 0x604, 0b101, 0xFFFFFFFF81234567, "roriw", OP_IMM32),
             (0x80000000, 0x600, 0b101, 0xFFFFFFFF80000000, "roriw", OP_IMM32),
@@ -292,10 +369,25 @@ class TestZbbFixedImm:
     @pytest.mark.parametrize(
         "gpr1_val, imm, expect_rd, instruction",
         [
-            (0x0100_0200_0000_0300, ZBB_ORC_B_IMM, 0xFF00_FF00_0000_FF00, "orc.b"),
+            (
+                0x0100_0200_0000_0300,
+                ZBB_ORC_B_IMM,
+                0xFF00_FF00_0000_FF00,
+                "orc.b",
+            ),
             (0, ZBB_ORC_B_IMM, 0, "orc.b"),
-            (0xFFFF_FFFF_FFFF_FFFF, ZBB_ORC_B_IMM, 0xFFFF_FFFF_FFFF_FFFF, "orc.b"),
-            (0x0123_4567_89AB_CDEF, ZBB_REV8_IMM, 0xEFCD_AB89_6745_2301, "rev8"),
+            (
+                0xFFFF_FFFF_FFFF_FFFF,
+                ZBB_ORC_B_IMM,
+                0xFFFF_FFFF_FFFF_FFFF,
+                "orc.b",
+            ),
+            (
+                0x0123_4567_89AB_CDEF,
+                ZBB_REV8_IMM,
+                0xEFCD_AB89_6745_2301,
+                "rev8",
+            ),
             (0, ZBB_REV8_IMM, 0, "rev8"),
             (0xFF, ZBB_REV8_IMM, 0xFF00_0000_0000_0000, "rev8"),
         ],

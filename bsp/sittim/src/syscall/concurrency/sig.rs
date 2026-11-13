@@ -42,9 +42,8 @@ const SIGACTION_SIZE: u64 = 32;
 /// 约定一致。
 pub const SIGNAL_EXIT_OFFSET: u64 = 128;
 
-// ---------------------------------------------------------------
 //  信号帧布局
-// ---------------------------------------------------------------
+
 //
 // 帧在用户栈上自高地址向低地址生长, 全部字段 8 字节对齐。
 //
@@ -85,9 +84,7 @@ const SIGNAL_RESTORE_CODE: u64 = 0x0000_0073_08b0_0893;
 /// siginfo 的 si_code: SI_USER, 表示信号由 kill 一类调用产生。
 const SI_USER: i32 = 0;
 
-// ---------------------------------------------------------------
 //  信号状态
-// ---------------------------------------------------------------
 
 /// 每个进程一份的信号状态。随进程控制块保存, 随进程切换换入换出。
 #[derive(Clone, Copy)]
@@ -177,9 +174,7 @@ fn default_action(sig: usize) -> DefaultAction {
 	}
 }
 
-// ---------------------------------------------------------------
 //  rt_sigaction (134) 与 rt_sigprocmask (135)
-// ---------------------------------------------------------------
 
 /// rt_sigaction (134): 参数为 sig = a0, new_action = a1, old_action = a2,
 /// sigsetsize = a3。
@@ -192,22 +187,24 @@ pub fn action(st: &mut SigState, sig: u64, new_action: u64, old_action: u64) -> 
 		return EINVAL;
 	}
 	let s = sig as usize;
-	unsafe {
-		if old_action != 0 {
+	if old_action != 0 {
+		unsafe {
 			ptr::write_bytes(old_action as *mut u8, 0, SIGACTION_SIZE as usize);
 			ptr::write_volatile(
 				(old_action + SIGACTION_HANDLER_OFF) as *mut u64,
 				st.handler[s],
 			);
-		}
-		if new_action != 0 {
+		};
+	}
+	if new_action != 0 {
+		unsafe {
 			let handler = ptr::read_volatile((new_action + SIGACTION_HANDLER_OFF) as *const u64);
 			st.handler[s] = handler;
 			// 处置改回 SIG_DFL 或改为 SIG_IGN 时, 此前挂起的该信号不再有意义。
 			if handler == SIG_DFL || handler == SIG_IGN {
 				st.pending &= !(1u64 << s);
 			}
-		}
+		};
 	}
 	0
 }
@@ -230,41 +227,40 @@ pub fn procmask(st: &mut SigState, how: u64, set: u64, oldset: u64, sigsetsize: 
 		return EINVAL;
 	}
 	let n = core::cmp::min(sigsetsize, KERNEL_SIGSET_SIZE) as usize;
-
-	unsafe {
-		if oldset != 0 && n > 0 {
+	if oldset != 0 && n > 0 {
+		unsafe {
 			ptr::write_bytes(oldset as *mut u8, 0, n);
 			ptr::write_volatile(oldset as *mut u64, st.blocked);
-		}
-		if set != 0 && n > 0 {
-			let mut word: u64 = 0;
-			for i in 0..n {
+		};
+	}
+	if set != 0 && n > 0 {
+		let mut word: u64 = 0;
+		for i in 0..n {
+			unsafe {
 				let b = ptr::read_volatile((set as *const u8).add(i)) as u64;
 				word |= b << (8 * i);
+			};
+		}
+		// 0 号位不是有效信号; SIGKILL 与 SIGSTOP 不可屏蔽。
+		word &= !(1u64 << 0);
+		word &= !(1u64 << 9);
+		word &= !(1u64 << 19);
+		match how {
+			SIG_BLOCK => {
+				st.blocked |= word;
 			}
-			// 0 号位不是有效信号; SIGKILL 与 SIGSTOP 不可屏蔽。
-			word &= !(1u64 << 0);
-			word &= !(1u64 << 9);
-			word &= !(1u64 << 19);
-			match how {
-				SIG_BLOCK => {
-					st.blocked |= word;
-				}
-				SIG_UNBLOCK => {
-					st.blocked &= !word;
-				}
-				_ => {
-					st.blocked = word;
-				}
+			SIG_UNBLOCK => {
+				st.blocked &= !word;
+			}
+			_ => {
+				st.blocked = word;
 			}
 		}
 	}
 	0
 }
 
-// ---------------------------------------------------------------
 //  待投递集合
-// ---------------------------------------------------------------
 
 /// 把信号置入待投递集合。
 pub fn post(st: &mut SigState, sig: usize) {
@@ -283,9 +279,7 @@ pub fn take_pending(st: &mut SigState) -> Option<usize> {
 	Some(s)
 }
 
-// ---------------------------------------------------------------
 //  信号帧
-// ---------------------------------------------------------------
 
 /// 在用户栈上构造信号帧, 改写陷态栈帧使返回时进入处理函数, 返回处理函数地址
 /// (即应写入 sepc 的值)。

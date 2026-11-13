@@ -17,9 +17,7 @@ pub const SEPC: u16 = 0x141;
 pub const SCAUSE: u16 = 0x142;
 pub const STVAL: u16 = 0x143;
 
-// ---------------------------------------------------------------
 //  位掩码字段
-// ---------------------------------------------------------------
 
 // sstatus 字段
 pub const SSTATUS_UIE: u64 = 0x01;
@@ -33,11 +31,9 @@ pub const SSI: u64 = 0x2;
 pub const STI: u64 = 0x20;
 pub const SEI: u64 = 0x200;
 
-// ---------------------------------------------------------------
 //  CSR 读写宏
 //  用法: read_csr!(sstatus), write_csr!(sie, val), clear_csr!(sip, mask)
 //  `$csr:ident` -> `stringify!` -> 汇编器接收小写 CSR 寄存器名。
-// ---------------------------------------------------------------
 
 macro_rules! read_csr {
 	($csr:ident) => {
@@ -96,9 +92,7 @@ macro_rules! clear_csr {
 
 pub(crate) use clear_csr;
 
-// ---------------------------------------------------------------
 //  Named convenience wrappers
-// ---------------------------------------------------------------
 
 #[inline]
 pub fn read_sstatus() -> u64 {

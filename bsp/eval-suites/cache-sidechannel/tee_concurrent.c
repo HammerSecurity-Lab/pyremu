@@ -1,0 +1,642 @@
+/* tee_concurrent.c - 多个进程分别在不同 hart 上并发创建、进入、终止飞地
+ *
+ * 用法: tee_concurrent <payload> [num_procs]
+ *
+ * 每个子进程独立打开 /dev/tee_enclave, 各自创建一个飞地, 依次执行 CREATE_EX、
+ * 错误令牌试探、ENTER、SHUTDOWN. 子进程按在线 hart 轮流绑定, 使这些
+ * 请求确实由不同 hart 并发发起: CREATE 的编号分配由 M 模式的 create_lock 串行化,
+ * 令牌校验与飞地上文切换则由各 hart 并发执行.
+ *
+ * 各子进程登记互不相同的管理令牌, 把并发与令牌校验两条路径放在一起考察: 每个子进程
+ * 除用错误令牌试探自己的飞地外, 还用本进程的令牌去终止另一个子进程的飞地. 后者必须
+ * 被拒绝, 且目标飞地必须仍然存在 — 若令牌校验与其后的终止动作不在同一临界区内完成,
+ * 目标飞地就会被别的进程用错误令牌终止.
+ *
+ *   concurrent-two-harts       全部子进程绑定成功, 且至少用到两个 hart;
+ *   concurrent-lifecycle       全部子进程完成创建、进入与终止;
+ *   concurrent-token-rejected  错误令牌的 ENTER/RESUME/SHUTDOWN 均被拒绝 (EACCES),
+ *                              且被他人用错误令牌终止过的飞地仍然存在;
+ *   concurrent-no-leak         全部子进程结束后内存池的空闲分区数回到运行前的值.
+ *
+ * 编译: riscv64-linux-gnu-gcc -static -O2 tee_concurrent.c -o bin/tee_concurrent
+ */
+
+#define _GNU_SOURCE
+
+#include <errno.h>
+#include <fcntl.h>
+#include <sched.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "tee_enclave.h"
+
+/* 并发的子进程数上限 */
+#define MAX_PROCS 64
+
+/* 可绑定的 hart 数量上限 */
+#define MAX_HARTS 64
+
+/* 子进程间同步的等待上限. 某个子进程提前退出时, 其余子进程不应无限等待. */
+#define BARRIER_TIMEOUT_MS 10000
+
+/* 各子进程的管理令牌取 TOKEN_BASE + 进程序号, 互不相同.
+ * 错误令牌由 WRONG_TOKEN 翻转
+ * 高 32 位得到: 与任何一枚 TOKEN_BASE + 序号都不相等. */
+#define TOKEN_BASE		   0x1000ULL
+#define WRONG_TOKEN(token) ((token) ^ 0xFFFFFFFF00000000ULL)
+
+/* 每个子进程的各阶段结论, 由父进程在全部子进程退出后汇总判定.
+ * 错误码字段为 errno, -1 表示该阶段未能尝试.
+ */
+struct child_record {
+	uint64_t enclave_id;	/* 创建失败时为 UINT64_MAX */
+	int create_errno;		/* 0 为创建成功 */
+	int barrier_errno;		/* 0 为成功, ETIMEDOUT 为超时 */
+	int wrong_enter_errno;	/* 期望 EACCES */
+	int wrong_resume_errno; /* 期望 EACCES */
+	int cross_errno;		/* 期望 EACCES 用本进程令牌终止他人飞地 */
+	int target_alive_errno; /* 期望 EACCES 目标飞地存活探测 */
+	long enter_rc;			/* 正确令牌 ENTER 的返回值, 即运行状态枚举 */
+	int enter_errno;		/* 0 表示控制已交还 host */
+	int shutdown_errno;		/* 0 或 EIO 载荷已自行退出 */
+	int pin_hart;			/* 本子进程绑定到的 hart */
+	int obs_hart;			/* 本子进程实际观测到的 hart，不可读时为 -1 */
+};
+
+/* 父子进程共享的控制块 */
+struct shared_ctl {
+	volatile int published;	 /* 已公布飞地编号的子进程数 */
+	volatile int cross_done; /* 已完成跨飞地终止尝试的子进程数 */
+	struct child_record rec[MAX_PROCS];
+};
+
+//避免 libcioctl 包装的 int 截断.
+static inline long tee_ioctl(
+	int fd,
+	unsigned long req,
+	void *arg
+) {
+	return syscall(SYS_ioctl, fd, req, arg);
+}
+
+static inline int errno_of(long rc) {
+	return rc < 0 ? errno : 0;
+}
+
+static inline void report(
+	const char *name,
+	int ok
+) {
+	printf(">> regress-check %s: %s\n", name, ok ? "PASS" : "FAIL");
+}
+
+/* 把某一步的错误码写成可读文本: -1 表示该步未执行, 0 表示成功, 其余为 errno.
+ * 文本写入调用方提供的缓冲区, 故同一行若打印多个错误码需各备一个缓冲区. */
+static const char *errno_text(
+	int err,
+	char *buf,
+	size_t size
+) {
+	if (err < 0) {
+		snprintf(buf, size, "not run");
+	} else if (err == 0) {
+		snprintf(buf, size, "ok");
+	} else {
+		snprintf(buf, size, "%d (%s)", err, strerror(err));
+	}
+	return buf;
+}
+
+/* 飞地交还 Host 时的状态, 取自 enum tee_run_state. 仅在 ENTER 成功时有意义. */
+static const char *run_state_name(long state) {
+	switch (state) {
+	case TEE_RUN_SUSPENDED:
+		return "suspended (resumable)";
+	case TEE_RUN_EXITED:
+		return "self-exited, code 0";
+	case TEE_RUN_EXITED_ERR:
+		return "self-exited, code non-zero";
+	case TEE_RUN_ABORTED:
+		return "aborted";
+	case TEE_RUN_HOST_KILL:
+		return "killed by host";
+	default:
+		return "unknown state";
+	}
+}
+
+static uint8_t *load_file(
+	const char *path,
+	size_t *out_size
+) {
+	FILE *fp = fopen(path, "rb");
+	if (!fp) {
+		return NULL;
+	}
+	fseek(fp, 0, SEEK_END);
+	long size = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	if (size <= 0) {
+		fclose(fp);
+		return NULL;
+	}
+	uint8_t *buf = malloc((size_t)size);
+	if (!buf) {
+		fclose(fp);
+		return NULL;
+	}
+	if (fread(buf, 1, (size_t)size, fp) != (size_t)size) {
+		free(buf);
+		fclose(fp);
+		return NULL;
+	}
+	fclose(fp);
+	*out_size = (size_t)size;
+	return buf;
+}
+
+/* 取本进程可运行的 hart 集合, 返回个数, 编号写入 harts[]; 失败返回 -1. */
+static int online_harts(
+	int *harts,
+	int max
+) {
+	cpu_set_t set;
+
+	if (sched_getaffinity(0, sizeof(set), &set) != 0) {
+		return -1;
+	}
+	int count = 0;
+	for (int cpu = 0; cpu < CPU_SETSIZE && count < max; cpu++) {
+		if (CPU_ISSET(cpu, &set)) {
+			harts[count++] = cpu;
+		}
+	}
+	return count;
+}
+
+/* 把本进程绑定在一个 hart 上, 成功返回 0. */
+static int pin_to_hart(int hart) {
+	cpu_set_t set;
+
+	CPU_ZERO(&set);
+	CPU_SET(hart, &set);
+	return sched_setaffinity(0, sizeof(set), &set);
+}
+
+static int pin_and_settle(int hart) {
+	if (pin_to_hart(hart) != 0) {
+		return -2;
+	}
+	for (int i = 0; i < 1000; i++) {
+		int cpu = sched_getcpu();
+		if (cpu == hart || cpu < 0) {
+			return cpu;
+		}
+		sched_yield();
+		usleep(1000);
+	}
+	return sched_getcpu();
+}
+
+/* 等计数器到达 target, 超时返回 -1. */
+static int wait_until(
+	volatile int *counter,
+	int target
+) {
+	int waited_ms = 0;
+
+	while (__atomic_load_n(counter, __ATOMIC_SEQ_CST) < target) {
+		if (waited_ms >= BARRIER_TIMEOUT_MS) {
+			return -1;
+		}
+		usleep(1000);
+		waited_ms++;
+	}
+	return 0;
+}
+
+/* ---- 单个飞地的各步调用 ---- */
+
+static int do_create_ex(
+	int fd,
+	uint64_t token,
+	uint64_t *out_id
+) {
+	struct tee_enclave_token_args args = {
+		.enclave_id = 0,
+		.token		= token,
+	};
+	long rc = tee_ioctl(fd, TEE_IOC_CREATE_EX, &args);
+	if (rc < 0) {
+		return errno;
+	}
+	*out_id = args.enclave_id;
+	return 0;
+}
+
+/* 进入飞地: 令牌不符或飞地已被别的 hart 占用时, M 模式在占用锁内拒绝, 飞地状态
+ * 不变. 成功时 out_run_state 收到运行状态枚举 (控制已交还 host). */
+static int do_enter(
+	int fd,
+	uint64_t enclave_id,
+	uint64_t token,
+	const uint8_t *payload,
+	size_t payload_size,
+	long *out_run_state
+) {
+	struct tee_enclave_args args = {
+		.enclave_id			= enclave_id,
+		.enter.payload_ptr	= (uint64_t)(uintptr_t)payload,
+		.enter.payload_size = (uint64_t)payload_size,
+		.enter.argc			= 0,
+		.enter.argv_ptr		= 0,
+		.token				= token,
+	};
+	long rc = tee_ioctl(fd, TEE_IOC_ENTER, &args);
+	if (rc < 0) {
+		return errno;
+	}
+	if (out_run_state) {
+		*out_run_state = TEE_RUN_STATE(rc);
+	}
+	return 0;
+}
+
+static int do_resume(
+	int fd,
+	uint64_t enclave_id,
+	uint64_t token
+) {
+	struct tee_enclave_token_args args = {
+		.enclave_id = enclave_id,
+		.token		= token,
+	};
+	return errno_of(tee_ioctl(fd, TEE_IOC_RESUME, &args));
+}
+
+static int do_shutdown(
+	int fd,
+	uint64_t enclave_id,
+	uint64_t token
+) {
+	struct tee_enclave_token_args args = {
+		.enclave_id = enclave_id,
+		.token		= token,
+	};
+	return errno_of(tee_ioctl(fd, TEE_IOC_SHUTDOWN, &args));
+}
+
+static int do_get_mem(
+	int fd,
+	struct tee_mem_info *out
+) {
+	return errno_of(tee_ioctl(fd, TEE_IOC_GET_MEM, out));
+}
+
+/* ---- 子进程: 一个飞地的完整生命周期 ---- */
+
+static void child_main(
+	struct shared_ctl *ctl,
+	int idx,
+	int num_procs,
+	int hart,
+	const char *payload_path,
+	uint64_t token
+) {
+	struct child_record *rec = &ctl->rec[idx];
+	char buf[64]			 = {0};
+	char buf2[64]			 = {0};
+	int fd					 = -1;
+	uint8_t *payload		 = NULL;
+	size_t payload_size		 = 0;
+	uint64_t target			 = UINT64_MAX;
+	uint64_t wrong_token	 = WRONG_TOKEN(token);
+
+	rec->enclave_id			= UINT64_MAX;
+	rec->create_errno		= -1;
+	rec->barrier_errno		= -1;
+	rec->wrong_enter_errno	= -1;
+	rec->wrong_resume_errno = -1;
+	rec->cross_errno		= -1;
+	rec->target_alive_errno = -1;
+	rec->enter_rc			= -1;
+	rec->enter_errno		= -1;
+	rec->shutdown_errno		= -1;
+	rec->pin_hart			= hart;
+	rec->obs_hart			= -1;
+
+	/* 先绑定 hart: 本进程此后的全部 ecall 都在该 hart 上发起. */
+	rec->obs_hart = pin_and_settle(hart);
+	if (rec->obs_hart == -2) {
+		rec->pin_hart = -1;
+	}
+
+	fd = open(TEE_DEVICE_PATH, O_RDWR);
+	if (fd < 0) {
+		printf(
+			"[child %d pid=%d] open %s failed: %s\n", idx, getpid(), TEE_DEVICE_PATH,
+			strerror(errno)
+		);
+	}
+	payload = load_file(payload_path, &payload_size);
+
+	/* 1. 创建飞地. 创建后飞地停在引导挂起态, 令牌已登记, 尚未运行任何载荷. */
+	if (fd >= 0 && payload != NULL) {
+		rec->create_errno = do_create_ex(fd, token, &rec->enclave_id);
+		if (rec->create_errno == 0) {
+			printf(
+				"[child %d pid=%d hart=%d] CREATE_EX: ok, enclave_id %llu\n", idx,
+				getpid(), rec->obs_hart, (unsigned long long)rec->enclave_id
+			);
+		} else {
+			printf(
+				"[child %d pid=%d hart=%d] CREATE_EX: %s\n", idx, getpid(),
+				rec->obs_hart, errno_text(rec->create_errno, buf, sizeof(buf))
+			);
+		}
+	}
+
+	// 2. 拒绝携带错误令牌发起的 ENTER/RESUME且不改变飞地状态
+	if (rec->create_errno == 0) {
+		rec->wrong_enter_errno =
+			do_enter(fd, rec->enclave_id, wrong_token, payload, payload_size, NULL);
+		rec->wrong_resume_errno = do_resume(fd, rec->enclave_id, wrong_token);
+	}
+	__atomic_add_fetch(&ctl->published, 1, __ATOMIC_SEQ_CST);
+	int barrier_ok = (wait_until(&ctl->published, num_procs) == 0);
+
+	/*
+        3. 尝试用本进程的令牌去终止另一个子进程的飞地
+        预期：失败
+    */
+	if (rec->create_errno == 0) {
+		target = ctl->rec[(idx + 1) % num_procs].enclave_id;
+		if (target != UINT64_MAX) {
+			rec->cross_errno = do_shutdown(fd, target, token);
+			rec->target_alive_errno =
+				do_enter(fd, target, wrong_token, payload, payload_size, NULL);
+		}
+	}
+
+	/* 全部跨飞地尝试结束后才可终止各自的飞地 */
+	__atomic_add_fetch(&ctl->cross_done, 1, __ATOMIC_SEQ_CST);
+	barrier_ok &= (wait_until(&ctl->cross_done, num_procs) == 0);
+	rec->barrier_errno = barrier_ok ? 0 : ETIMEDOUT;
+
+	// 4. 传入正确的令牌随后终止自己的飞地.
+	if (barrier_ok && rec->create_errno == 0) {
+		long run_state = -1;
+		rec->enter_errno =
+			do_enter(fd, rec->enclave_id, token, payload, payload_size, &run_state);
+		rec->enter_rc		= (rec->enter_errno == 0) ? run_state : -1;
+		rec->shutdown_errno = do_shutdown(fd, rec->enclave_id, token);
+		printf(
+			"[child %d pid=%d hart=%d] ENTER: %s, SHUTDOWN: %s\n", idx, getpid(),
+			rec->obs_hart,
+			(rec->enter_errno == 0) ? run_state_name(rec->enter_rc)
+									: errno_text(rec->enter_errno, buf, sizeof(buf)),
+			errno_text(rec->shutdown_errno, buf2, sizeof(buf2))
+		);
+	}
+
+	if (fd >= 0) {
+		close(fd);
+	}
+	free(payload);
+}
+
+// 父进程: 汇总判定
+
+static int is_terminal_state(long run_state) {
+	return run_state == TEE_RUN_EXITED ||
+		   run_state == TEE_RUN_EXITED_ERR ||
+		   run_state == TEE_RUN_ABORTED ||
+		   run_state == TEE_RUN_HOST_KILL;
+}
+
+static int lifecycle_ok(const struct child_record *rec) {
+	if (rec->create_errno != 0 || rec->barrier_errno != 0 || rec->enter_errno != 0) {
+		return 0;
+	}
+	if (rec->shutdown_errno == 0) {
+		return 1;
+	}
+	return is_terminal_state(rec->enter_rc) && rec->shutdown_errno == EIO;
+}
+
+static int tokens_rejected(const struct child_record *rec) {
+	return rec->wrong_enter_errno == EACCES &&
+		   rec->wrong_resume_errno == EACCES &&
+		   rec->cross_errno == EACCES &&
+		   rec->target_alive_errno == EACCES;
+}
+
+/* 实际用到的 hart 个数: 统计在线集合中有几个 hart 被子进程绑定. */
+static int used_hart_count(
+	const struct shared_ctl *ctl,
+	const int *harts,
+	int hart_count,
+	int num_procs
+) {
+	int used = 0;
+
+	for (int i = 0; i < hart_count; i++) {
+		for (int j = 0; j < num_procs; j++) {
+			if (ctl->rec[j].pin_hart == harts[i]) {
+				used++;
+				break;
+			}
+		}
+	}
+	return used;
+}
+
+int main(
+	int argc,
+	char **argv
+) {
+	const char *payload = NULL;
+	int num_procs		= 2;
+
+	if (argc > 1) {
+		payload = argv[1];
+	}
+	if (argc > 2) {
+		num_procs = atoi(argv[2]);
+	}
+	if (num_procs < 1) {
+		num_procs = 1;
+	}
+	if (num_procs > MAX_PROCS) {
+		num_procs = MAX_PROCS;
+	}
+	if (!payload) {
+		fprintf(stderr, "Usage: %s <payload> [num_procs]\n", argv[0]);
+		return 2;
+	}
+
+	printf("=== enclave concurrency test (%d child processes) ===\n\n", num_procs);
+
+	/* 子进程按在线 hart 轮流绑定. 本 guest 的 CPU 编号与 hart 编号一一对应
+	 * (设备树 cpu@N 即 hart N). */
+	int harts[MAX_HARTS];
+	int hart_count = online_harts(harts, MAX_HARTS);
+	if (hart_count < 1) {
+		fprintf(stderr, "sched_getaffinity: %s\n", strerror(errno));
+		return 2;
+	}
+	printf("[info] %d online harts:", hart_count);
+	for (int i = 0; i < hart_count; i++) {
+		printf(" %d", harts[i]);
+	}
+	printf("\n\n");
+
+	int fd = open(TEE_DEVICE_PATH, O_RDWR);
+	if (fd < 0) {
+		fprintf(stderr, "open %s: %s\n", TEE_DEVICE_PATH, strerror(errno));
+		return 2;
+	}
+
+	struct tee_mem_info before = {0}, after = {0};
+	int baseline_ok = (do_get_mem(fd, &before) == 0);
+	printf(
+		"[info] mem pool free partitions: %llu (max contiguous %llu, 2 MiB each)\n\n",
+		(unsigned long long)before.free_total,
+		(unsigned long long)before.max_contiguous
+	);
+
+	struct shared_ctl *ctl = mmap(
+		NULL, sizeof(*ctl), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0
+	);
+	if (ctl == MAP_FAILED) {
+		fprintf(stderr, "mmap shared ctl: %s\n", strerror(errno));
+		close(fd);
+		return 2;
+	}
+	memset(ctl, 0, sizeof(*ctl));
+
+	pid_t *pids = calloc((size_t)num_procs, sizeof(pid_t));
+	if (!pids) {
+		fprintf(stderr, "calloc: %s\n", strerror(errno));
+		munmap(ctl, sizeof(*ctl));
+		close(fd);
+		return 2;
+	}
+
+	for (int i = 0; i < num_procs; i++) {
+		pid_t pid = fork();
+		if (pid < 0) {
+			fprintf(stderr, "fork: %s\n", strerror(errno));
+			for (int j = 0; j < i; j++) {
+				kill(pids[j], SIGTERM);
+			}
+			free(pids);
+			munmap(ctl, sizeof(*ctl));
+			close(fd);
+			return 2;
+		}
+		if (pid == 0) {
+			free(pids);
+			/* 每个子进程一枚独有的令牌 (非 0, 与纯 CREATE 登记的 0 区分开). */
+			child_main(
+				ctl, i, num_procs, harts[i % hart_count], payload,
+				TOKEN_BASE + (uint64_t)i
+			);
+			_exit(0);
+		}
+		pids[i] = pid;
+	}
+
+	int abnormal = 0;
+	for (int i = 0; i < num_procs; i++) {
+		int status = 0;
+		waitpid(pids[i], &status, 0);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			printf("[parent] child %d exited abnormally (status=%d)\n", i, status);
+			abnormal++;
+		}
+	}
+	free(pids);
+
+	int lifecycle = 1, tokens = 1, harts_ok = 1;
+	char buf[64] = {0};
+
+	for (int i = 0; i < num_procs; i++) {
+		const struct child_record *rec = &ctl->rec[i];
+
+		printf(
+			"[parent] child %d: enclave_id %llu, pinned hart %d, observed hart %d\n",
+			i, (unsigned long long)rec->enclave_id, rec->pin_hart, rec->obs_hart
+		);
+		printf("  CREATE_EX: %s\n", errno_text(rec->create_errno, buf, sizeof(buf)));
+		printf(
+			"  wrong-token ENTER: %s\n",
+			errno_text(rec->wrong_enter_errno, buf, sizeof(buf))
+		);
+		printf(
+			"  wrong-token RESUME: %s\n",
+			errno_text(rec->wrong_resume_errno, buf, sizeof(buf))
+		);
+		printf("  barrier: %s\n", errno_text(rec->barrier_errno, buf, sizeof(buf)));
+		printf(
+			"  shutdown others: %s\n", errno_text(rec->cross_errno, buf, sizeof(buf))
+		);
+		printf(
+			"  target enclave alive probe: %s\n",
+			errno_text(rec->target_alive_errno, buf, sizeof(buf))
+		);
+		if (rec->enter_errno == 0) {
+			printf("  right-token ENTER: %s\n", run_state_name(rec->enter_rc));
+		} else {
+			printf(
+				"  right-token ENTER: %s\n",
+				errno_text(rec->enter_errno, buf, sizeof(buf))
+			);
+		}
+		printf(
+			"  SHUTDOWN: %s\n", errno_text(rec->shutdown_errno, buf, sizeof(buf))
+		);
+
+		lifecycle &= lifecycle_ok(rec);
+		tokens &= tokens_rejected(rec);
+		// 绑定成功, 且实测 hart 与绑定的 hart 一致.
+		harts_ok &= (rec->pin_hart >= 0) &&
+					(rec->obs_hart < 0 || rec->obs_hart == rec->pin_hart);
+	}
+
+	// 至少两个 hart: 单 hart 上这些请求只能串行, 并发的前提不成立.
+	int two_harts =
+		harts_ok && (used_hart_count(ctl, harts, hart_count, num_procs) >= 2);
+
+	int pool_ok = baseline_ok &&
+				  (do_get_mem(fd, &after) == 0) &&
+				  before.free_total == after.free_total &&
+				  before.max_contiguous == after.max_contiguous;
+	printf(
+		"\n[info] mem pool free partitions: "
+		"before %llu (max contiguous %llu), "
+		"after %llu (max contiguous %llu)\n",
+		(unsigned long long)before.free_total,
+		(unsigned long long)before.max_contiguous,
+		(unsigned long long)after.free_total,
+		(unsigned long long)after.max_contiguous
+	);
+
+	report("concurrent-two-harts", two_harts);
+	report("concurrent-lifecycle", lifecycle && abnormal == 0);
+	report("concurrent-token-rejected", tokens);
+	report("concurrent-no-leak", pool_ok);
+
+	munmap(ctl, sizeof(*ctl));
+	close(fd);
+	return (two_harts && lifecycle && tokens && pool_ok && abnormal == 0) ? 0 : 1;
+}

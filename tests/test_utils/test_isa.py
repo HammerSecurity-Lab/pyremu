@@ -9,7 +9,12 @@
 单字母扩展、``g`` 的展开、末尾版本号、下划线分段、大小写与空值.
 """
 
-from pyremu.utils.isa import encode_isa_exts, encode_misa, ISA_EXT_FIELDS, isa_ext_list
+from pyremu.utils.isa import (
+    encode_isa_exts,
+    encode_misa,
+    ISA_EXT_FIELDS,
+    isa_ext_list,
+)
 
 
 class TestIsaString:
@@ -50,7 +55,13 @@ class TestIsaString:
         ]
 
     def test_uppercase_normalized(self):
-        assert isa_ext_list("RV64IMAC_ZIFENCEI") == ["i", "m", "a", "c", "zifencei"]
+        assert isa_ext_list("RV64IMAC_ZIFENCEI") == [
+            "i",
+            "m",
+            "a",
+            "c",
+            "zifencei",
+        ]
 
     def test_rv32_prefix_stripped(self):
         assert isa_ext_list("rv32im_zbb") == ["i", "m", "zbb"]
@@ -65,7 +76,9 @@ class TestIsaString:
         chip.dts 声明 "rv64imafdcbzicsr", 按单个字母切分会得到 z、i、c、s、r
         五个并不存在的扩展, 并丢掉 zicsr.
         """
-        got = isa_ext_list("rv64imafdcbzicsr_zifencei_zihpm_zfh_zba_zbb_zbs_xrocket")
+        got = isa_ext_list(
+            "rv64imafdcbzicsr_zifencei_zihpm_zfh_zba_zbb_zbs_xrocket"
+        )
         assert got == [
             "i",
             "m",
@@ -163,9 +176,13 @@ class TestEncodeMisa:
 
     def test_multi_letter_extensions_add_nothing(self):
         """多字母扩展不在 misa 中表达."""
-        value = encode_misa(isa_ext_list("rv64imac_zba_zbb_zbs_zicsr_zifencei_sstc"))
+        value = encode_misa(
+            isa_ext_list("rv64imac_zba_zbb_zbs_zicsr_zifencei_sstc")
+        )
         assert value == encode_misa(["i", "m", "a", "c"])
 
     def test_versioned_and_uppercase_input(self):
         """带版本号与大小写混写的字符串经归一化后取值不变."""
-        assert encode_misa(isa_ext_list("RV64I2P1_M2P0_ZBB")) == encode_misa(["i", "m"])
+        assert encode_misa(isa_ext_list("RV64I2P1_M2P0_ZBB")) == encode_misa(
+            ["i", "m"]
+        )

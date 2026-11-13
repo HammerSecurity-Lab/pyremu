@@ -102,7 +102,10 @@ class TestSignExtend:
     def test_sext_result_stays_unsigned(self):
         """符号扩展的结果非负, 不出现负的 Python 整数."""
         for val in (0x80, 0xFF, 0x8000, 0xFFFF, 0x8000_0000, 0xFFFF_FFFF):
-            assert sext(val, 8 if val < 0x100 else 16 if val < 0x1_0000 else 32) >= 0
+            assert (
+                sext(val, 8 if val < 0x100 else 16 if val < 0x1_0000 else 32)
+                >= 0
+            )
 
     def test_sext64_keeps_bit_pattern(self):
         """64 位的 sext 与 mask64 结果一致: 该位宽下不再有更宽的高位."""

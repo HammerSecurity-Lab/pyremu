@@ -5,6 +5,7 @@
 """测试 pyremu.debug.base — 输出、信号处理、终端模式与 stdin 转发."""
 
 import os
+from pathlib import Path
 import select
 import signal
 import termios
@@ -12,7 +13,7 @@ import types
 
 import pytest
 
-from pyremu.debug import Debugger
+from pyremu.debug import base, Debugger
 from pyremu.debug.utils import trap_cause_name
 from pyremu.peripheral.uart import RX_FIFO_SIZE
 from tests.conftest import make_test_dbg_buffered
@@ -165,7 +166,9 @@ class TestEnterRunMode:
         monkeypatch.setattr(os, "isatty", lambda _fd: True)
         monkeypatch.setattr(termios, "tcgetattr", lambda _fd: list(saved))
         monkeypatch.setattr(
-            termios, "tcsetattr", lambda fd, when, attrs: applied.append((fd, when, attrs))
+            termios,
+            "tcsetattr",
+            lambda fd, when, attrs: applied.append((fd, when, attrs)),
         )
         monkeypatch.setattr(signal, "signal", _Recorder())
         dbg._enter_run_mode()
@@ -176,7 +179,13 @@ class TestEnterRunMode:
         assert attrs[2] & termios.PARENB == 0
         assert (
             attrs[3]
-            & (termios.ECHO | termios.ECHONL | termios.ICANON | termios.IEXTEN | termios.ISIG)
+            & (
+                termios.ECHO
+                | termios.ECHONL
+                | termios.ICANON
+                | termios.IEXTEN
+                | termios.ISIG
+            )
             == 0
         )
         assert attrs[0] & termios.ICRNL == termios.ICRNL
@@ -215,7 +224,9 @@ class TestRestoreTerm:
         applied: list = []
         dbg._saved_term_attrs = saved
         monkeypatch.setattr(
-            termios, "tcsetattr", lambda fd, when, attrs: applied.append((fd, when, attrs))
+            termios,
+            "tcsetattr",
+            lambda fd, when, attrs: applied.append((fd, when, attrs)),
         )
         dbg._restore_term()
         assert applied == [(dbg._stdin_fd, termios.TCSANOW, saved)]
@@ -244,7 +255,9 @@ class TestEnterReplMode:
         dbg, emu, _ = make_test_dbg_buffered()
         order: list[str] = []
         emu._stdin_forward_callback = dbg._idle_poll
-        monkeypatch.setattr(dbg, "_stop_stdin_daemon", lambda: order.append("daemon"))
+        monkeypatch.setattr(
+            dbg, "_stop_stdin_daemon", lambda: order.append("daemon")
+        )
         monkeypatch.setattr(dbg, "_restore_term", lambda: order.append("term"))
         monkeypatch.setattr(signal, "signal", _Recorder())
         dbg._enter_repl_mode()
@@ -491,7 +504,9 @@ class TestFeedUartStdin:
         """接收缓冲区装满后剩余的字节留在待转发数据内."""
         dbg, emu, _ = make_test_dbg_buffered()
         monkeypatch.setattr(select, "select", lambda *a: ([0], [], []))
-        monkeypatch.setattr(os, "read", lambda _fd, _n: b"B" * (RX_FIFO_SIZE + 4))
+        monkeypatch.setattr(
+            os, "read", lambda _fd, _n: b"B" * (RX_FIFO_SIZE + 4)
+        )
         assert dbg._feed_uart_stdin() is True
         assert len(emu.uart._rx_fifo) == RX_FIFO_SIZE
         assert dbg._stdin_pending == b"B" * 4
@@ -693,7 +708,10 @@ class TestRepl:
         dbg, _, buf = make_test_dbg_buffered()
         log: list = []
         session = _prepare_repl(
-            dbg, [KeyboardInterrupt(), "quit"], monkeypatch, _ending_dispatch(log=log)
+            dbg,
+            [KeyboardInterrupt(), "quit"],
+            monkeypatch,
+            _ending_dispatch(log=log),
         )
         dbg.repl()
         assert len(session.prompts) == 2
@@ -704,7 +722,9 @@ class TestRepl:
         """首条输入为空时不执行任何命令."""
         dbg, _, buf = make_test_dbg_buffered()
         log: list = []
-        _prepare_repl(dbg, ["", "status", "quit"], monkeypatch, _ending_dispatch(log=log))
+        _prepare_repl(
+            dbg, ["", "status", "quit"], monkeypatch, _ending_dispatch(log=log)
+        )
         dbg.repl()
         assert log == [["status"], ["quit"]]
         assert dbg._last_command == "status"
@@ -713,7 +733,10 @@ class TestRepl:
         dbg, _, _ = make_test_dbg_buffered()
         log: list = []
         _prepare_repl(
-            dbg, ["   ", "  status  ", "quit"], monkeypatch, _ending_dispatch(log=log)
+            dbg,
+            ["   ", "  status  ", "quit"],
+            monkeypatch,
+            _ending_dispatch(log=log),
         )
         dbg.repl()
         assert log == [["status"], ["quit"]]
@@ -721,7 +744,9 @@ class TestRepl:
     def test_empty_input_repeats_last_command(self, monkeypatch):
         dbg, _, buf = make_test_dbg_buffered()
         log: list = []
-        _prepare_repl(dbg, ["status", "", "quit"], monkeypatch, _ending_dispatch(log=log))
+        _prepare_repl(
+            dbg, ["status", "", "quit"], monkeypatch, _ending_dispatch(log=log)
+        )
         dbg.repl()
         assert log == [["status"], ["status"], ["quit"]]
 
@@ -787,3 +812,22 @@ class TestRepl:
         _prepare_repl(dbg, [EOFError()], monkeypatch, signals=signals)
         dbg.repl()
         assert signals.last[0] == (signal.SIGINT, signal.SIG_DFL)
+
+
+# ============================================================
+#  命令历史文件
+# ============================================================
+
+
+class TestHistoryFilePath:
+    def test_unconfigured_path_falls_back_to_home(self, monkeypatch):
+        monkeypatch.setattr(base, "cfg_str", lambda name: "")
+        assert base.history_file_path() == Path.home() / ".pyremu_history"
+
+    def test_environment_path_is_expanded(self, monkeypatch):
+        monkeypatch.setenv("PYREMU_HISTORY_FILE", "~/logs/hist")
+        assert base.history_file_path() == Path.home() / "logs" / "hist"
+
+    def test_absolute_path_is_used_as_given(self, monkeypatch):
+        monkeypatch.setenv("PYREMU_HISTORY_FILE", "/var/tmp/pyremu_history")
+        assert base.history_file_path() == Path("/var/tmp/pyremu_history")

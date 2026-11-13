@@ -2,7 +2,8 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # Author: <kisfg@hotmail.com> 2026
 #
-# 由 PEM 形式的私钥生成扩展模块映像的签名密钥常量, 供主机目标上的用例在签名映像时恢复。
+# 由 PEM 形式的私钥生成扩展模块映像的签名密钥常量, 供主机目标上的用例在
+# 签名映像时恢复。
 #
 # 调用方式: 以私钥路径为唯一参数执行本脚本, 由调用方重定向标准输出
 #
@@ -11,8 +12,9 @@
 #   t[i] = ((s[i] << 3) | (s[i] >> 5)) & 0xFF      循环左移 3 位
 #   t[i] = t[i] ^ MASK[i % 8]                      与位置相关的掩码异或
 #
-# 恢复即逆运算: 先异或掩码, 再循环右移 3 位, 见 bsp/sittim/tests/ext_mod_host.rs。本脚本由
-# bsp/sittim/Makefile 在 make test 之前调用, 生成物写为 bsp/sittim/tests/configs_gen.rs
+# 恢复即逆运算: 先异或掩码, 再循环右移 3 位, 见
+# bsp/sittim/tests/ext_mod_host.rs。本脚本由 bsp/sittim/Makefile 在
+# make test 之前调用, 生成物写为 bsp/sittim/tests/configs_gen.rs
 
 import base64
 import sys
@@ -67,7 +69,9 @@ def private_scalar(der: bytes) -> bytes:
     if len(key) == SCALAR_LEN + 1 and key[0] == 0:
         key = key[1:]
     if len(key) != SCALAR_LEN:
-        raise ValueError(f"the private key is {len(key)} bytes, expected {SCALAR_LEN}")
+        raise ValueError(
+            f"the private key is {len(key)} bytes, expected {SCALAR_LEN}"
+        )
     return key
 
 
@@ -101,9 +105,11 @@ def encode(scalar: bytes) -> bytes:
 def render(encoded: list):
     fields = ", ".join(f"0x{byte:02x}" for byte in encoded)
     return (
-        "/// generated from the private key by tools/gen_attest_key.py — do not edit\n\n"
+        "/// generated from the private key by tools/gen_attest_key.py "
+        "— do not edit\n\n"
         "/// 受简易异或算法保护的私钥字节取值。\n"
-        f"pub const ATTEST_PRIV_KEY_ENCODED: [u8; {len(encoded)}] = [{fields}];\n"
+        f"pub const ATTEST_PRIV_KEY_ENCODED: [u8; {len(encoded)}] = "
+        f"[{fields}];\n"
     )
 
 
@@ -116,11 +122,17 @@ if __name__ == "__main__":
         with open(key_path, encoding="utf-8") as handle:
             pem = handle.read()
     except OSError as err:
-        print(f"cannot read the private key at {key_path}: {err}", file=sys.stderr)
+        print(
+            f"cannot read the private key at {key_path}: {err}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     try:
         encoded = encode(private_scalar(pem_body(pem)))
     except ValueError as err:
-        print(f"cannot decode the private key at {key_path}: {err}", file=sys.stderr)
+        print(
+            f"cannot decode the private key at {key_path}: {err}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     sys.stdout.write(render(encoded))

@@ -23,9 +23,7 @@ use std::thread::Thread;
 pub(crate) const IID_S_IPI: u32 = 1; // OpenSBI 的 IPI 中断编号
 pub(crate) const IID_M_IPI: u32 = 3; // M 文件的 IPI 中断编号
 
-// ============================================================
 //  跨 hart 操作 IMSIC eip
-// ============================================================
 
 /// 置位目标 hart 的 IMSIC eip 位, 并置位对应文件的 eip_ext_any 与该 hart 的 mip 位.
 ///
@@ -104,9 +102,7 @@ pub(crate) fn imsic_eip_clear(
 	}
 }
 
-// ============================================================
 //  地址解码
-// ============================================================
 
 /// 解码后的 IMSIC MMIO 目标.
 pub(crate) struct ImsicAddr {
@@ -203,9 +199,7 @@ pub(crate) fn imsic_handle_clreipnum(
 	imsic_eip_clear(hart_states, tgt_hart, file_tag, eip_num);
 }
 
-// ============================================================
 //  MMIO 写入与读取的处理入口
-// ============================================================
 
 /// 在加速执行引擎中直接处理一次 IMSIC MMIO 写入.
 ///
@@ -258,9 +252,7 @@ pub(crate) fn try_handle_imsic_read_concurrent(pa: u64, num_harts: u32) -> Optio
 	decode_imsic_addr(pa, num_harts as u64).map(|_| 0)
 }
 
-// ============================================================
 //  mip 同步
-// ============================================================
 
 /// 按 eip 数组的当前内容重设 eip_ext_any: 遇到第一个非 0 的字时置 1 并返回,
 /// 全部字为 0 时置 0.
@@ -345,9 +337,7 @@ pub(crate) fn sync_imsic_one(state: &mut HartState, mfile: bool) {
 	}
 }
 
-// ============================================================
 //  topei 与最高优先级外部中断的辅助函数
-// ============================================================
 
 /// 中断编号的上界加 1, AIA 规范的最大编号为 2047.
 const _MAX_IID: u32 = 2048;
@@ -369,9 +359,7 @@ const _SEL_CLREIPNUM: u32 = 0x59;
 const _SEL_SETEIENUM: u32 = 0x5A;
 const _SEL_CLREIENUM: u32 = 0x5B;
 
-// ============================================================
 //  IMSIC CSR 间接寄存器辅助函数, mireg 与 sireg
-// ============================================================
 
 /// 读取由 miselect 或 siselect 选中的 IMSIC 寄存器.
 pub(crate) fn imsic_reg_read(file: &ImsicFile, select: u32) -> (u64, u8) {
@@ -559,46 +547,6 @@ pub(crate) fn imsic_topei_claim_iid(file: &mut ImsicFile, iid: u32) {
 	}
 }
 
-/// 陷态进入时清除软件中断在 IMSIC 中的 eip 位.
-///
-/// 调用方在对应文件的 eidelivery 为 0 时调用本函数. eidelivery 非 0 时 IPI 经
-/// MEIP 与 SEIP 投递, eip 由回写 MTOPEI 与 STOPEI 清除, 陷态进入不清除 eip.
-///
-/// 发生 MSIP 陷态时清除 M 文件中编号 1 与编号 3 的 eip 位, 以及 S 文件中编号 1
-/// 的 eip 位; 发生 SSIP 陷态时清除 S 文件中编号 1 的 eip 位. 不清除时
-/// ``compute_mtopi`` 与 ``compute_stopi`` 会读到残留的中断编号, 反复投递同一个 IPI.
-///
-/// 清除后调用 ``imsic_update_eip_ext_any`` 重算外部中断标记, 不直接置 0, 使其余
-/// eip 字中待处理的外部中断不被丢弃.
-#[inline]
-pub(crate) fn imsic_clear_ipi_on_trap(state: &mut HartState, cause: u64) {
-	let clear_eip = |file: &mut ImsicFile, iid: u32| {
-		let w = (iid >> 5) as usize;
-		let b = iid & 31;
-		if w < file.eip.len() {
-			file.eip[w].fetch_and(!(1u32 << b), Ordering::Release);
-			imsic_update_eip_ext_any(file);
-		}
-	};
-	match cause {
-		3 => {
-			if state.imsic_m.present != 0 {
-				clear_eip(&mut state.imsic_m, IID_M_IPI);
-				clear_eip(&mut state.imsic_m, IID_S_IPI);
-			}
-			if state.imsic_s.present != 0 {
-				clear_eip(&mut state.imsic_s, IID_S_IPI);
-			}
-		}
-		1 => {
-			if state.imsic_s.present != 0 {
-				clear_eip(&mut state.imsic_s, IID_S_IPI);
-			}
-		}
-		_ => {}
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -759,9 +707,7 @@ mod tests {
 		);
 	}
 
-	// ============================================================
 	//  与 IPI 相关的测试
-	// ============================================================
 
 	/// 创建一个 HartState, 两个 IMSIC 文件都存在且 eidelivery 为 0.
 	fn make_state_no_delivery() -> HartState {
@@ -1256,9 +1202,7 @@ mod tests {
 		);
 	}
 
-	// ============================================================
 	//  多 hart 集成: 跨 hart 的 IPI 经 compute_stopi 与 compute_mtopi 报告
-	// ============================================================
 
 	fn make_hart1_state() -> HartState {
 		let mut s: HartState = unsafe { std::mem::zeroed() };

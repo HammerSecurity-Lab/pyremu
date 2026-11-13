@@ -3,7 +3,7 @@
 //! 本模块同时承载进程类与信号类系统调用的粘合层: 只做寄存器参数到本模块原语的
 //! 搬运, 与线程类系统调用落在 thread.rs 的分工一致。
 //!
-//! 与 `thread` 模块的分工: 线程表 (槽位、内核栈、就绪队列、切换) 在 thread.rs,
+//! 与 `thread` 模块的分工: 线程表在 thread.rs,
 //! 本模块只维护进程级状态 —— 地址空间根表、父子关系与退出状态、间隔定时器。
 //! 信号自身的状态与信号帧在 sig.rs, 本模块只做投递决策与进程终止。
 //! 每个线程经 `ThreadCtl::proc` 归属一个进程, 线程组即进程。
@@ -11,10 +11,8 @@
 //! 调度模型
 //! - 进程表是 BSS 中的定长数组, 槽下标即内部进程标识, 0 为启动进程。对用户可见
 //!   的进程标识 (getpid) 自 1 起单调递增, 与槽下标无关: 槽位会被回收复用, 而
-//!   载荷会把 pid 当作长期有效的键 (stress-ng 以 getpid() 判定自己是父进程还是
-//!   子进程)。
-//! - 地址空间之间共享 S 模式的那一半页表 (管理器 VA 区段、线性窗口、内核栈与页
-//!   池), U 模式的那一半在进程式 clone 时逐页复制
+//!   载荷会把 pid 当作长期有效的键。
+//! - 地址空间之间共享 S 模式的那一半页表, U 模式的另一半在进程 clone 时逐页复制
 //!   进程切换时由 thread::finalize_switch 经 activate 写 satp 完成地址空间切换。
 //! - 间隔定时器 (ITIMER_REAL) 的检查在每次定时器中断时进行, 且遍历全部进程而不
 //!   只当前进程 —— 父进程的 SIGALRM 常在子进程正在运行时到期。
@@ -33,7 +31,7 @@ use crate::{csr, ecall_aux, paging};
 /// 进程表容量。启动进程占用槽位 0。
 pub const NUM_PROCS: usize = 8;
 
-/// 无父进程 (启动进程) 的 parent 取值。
+/// 启动进程的 parent 取值。
 const NO_PARENT: usize = !0;
 
 /// wait4 的阻塞地址基址。该地址与 futex 的等待地址同属一类: 只参与唤醒匹配,
@@ -45,9 +43,7 @@ const WAIT_ADDR_BASE: u64 = 0x7fff_0000_0000;
 const CLONE_VM: u64 = 0x0000_0100;
 const CLONE_VFORK: u64 = 0x0000_4000;
 
-// ---------------------------------------------------------------
 //  进程控制块
-// ---------------------------------------------------------------
 
 /// 进程控制块。所有字段都在 BSS 中, 跨 SUSPEND/RESUME 存活。
 #[derive(Clone, Copy)]
@@ -128,11 +124,9 @@ static mut NEXT_PID: u64 = 1;
 /// rt_sigreturn 恢复出的 sepc, 由 trap.rs 在系统调用返回后取走。
 static mut SIGRETURN_SEPC: Option<u64> = None;
 
-// ---------------------------------------------------------------
 //  登记与查询
-// ---------------------------------------------------------------
 
-/// 登记启动进程 (槽位 0) 及其地址空间。
+/// 登记启动进程及其地址空间。
 ///
 /// 由 rust_main_after_mmu 在首次 sret 前调用。启动页表根不是从 S 模式页池分配的,
 /// 其可解引用地址是 `context::root_pa()` 在当前映射下取到的值, 物理地址则从 satp
@@ -181,8 +175,8 @@ pub fn getppid() -> u64 {
 
 /// 按对用户可见的标识查找进程槽位。
 fn slot_of_pid(pid: u64) -> Option<usize> {
-	unsafe {
-		for s in 0..NUM_PROCS {
+	for s in 0..NUM_PROCS {
+		unsafe {
 			let p = &*core::ptr::addr_of!(PROCS[s]);
 			if p.used && p.pid == pid {
 				return Some(s);
@@ -194,8 +188,8 @@ fn slot_of_pid(pid: u64) -> Option<usize> {
 
 /// 自 1 起找第一个空闲进程槽位。
 fn next_free_proc_slot() -> Option<usize> {
-	unsafe {
-		for s in 1..NUM_PROCS {
+	for s in 1..NUM_PROCS {
+		unsafe {
 			let p = &*core::ptr::addr_of!(PROCS[s]);
 			if !p.used {
 				return Some(s);
@@ -211,14 +205,12 @@ fn wait_addr(slot: usize) -> u64 {
 	WAIT_ADDR_BASE + (slot as u64) * 8
 }
 
-// ---------------------------------------------------------------
 //  地址空间切换
-// ---------------------------------------------------------------
 
 /// 正在运行的可信应用的内存上下文。
 ///
-/// 取 EnclaveContext 中的实时取值。进程控制块中的同名副本由 save_cursors 在应用被
-/// 切换走时写入, 正在运行的应用在其中的副本停留在它上一次被切换走时的取值 ——
+/// 取 EnclaveContext 中的实时取值。进程控制块中的同名副本在应用被
+/// 切换时写入, 正在运行的应用在其中的副本停留在它上一次被切换走时的取值
 /// 启动应用自引导起从未被切换走, 副本仍是初值。
 fn current_ta_mem_ctx() -> TaMemCtx {
 	let ctx = crate::context::ctx();
@@ -254,23 +246,6 @@ fn forked_mem_ctx(parent: TaMemCtx) -> TaMemCtx {
 	}
 }
 
-/// 把正在运行的应用的内存上下文保存进其进程控制块。
-fn save_cursors(slot: usize) {
-	unsafe {
-		PROCS[slot].mem_ctx = current_ta_mem_ctx();
-	}
-}
-
-/// 把进程控制块中的内存上下文装入 EnclaveContext, 使其成为正在运行的应用的取值。
-fn load_cursors(slot: usize) {
-	let mem_ctx = unsafe { PROCS[slot].mem_ctx };
-	let ctx = crate::context::ctx_mut();
-	ctx.umode_heap_top = mem_ctx.heap_top;
-	ctx.umode_heap_mapped_end = mem_ctx.heap_mapped_end;
-	ctx.umode_mmap_pages_used = mem_ctx.mmap_pages_used;
-	ctx.umode_curr_mmap_pa = mem_ctx.curr_mmap_pa;
-}
-
 /// 切换到某进程的地址空间。
 ///
 /// 由 thread::finalize_switch 在目标线程属于另一个进程时调用。两个地址空间共享
@@ -281,8 +256,15 @@ pub fn activate(slot: usize) {
 	if from == slot {
 		return;
 	}
-	save_cursors(from);
-	load_cursors(slot);
+	unsafe {
+		PROCS[from].mem_ctx = current_ta_mem_ctx();
+	}
+	let mem_ctx = unsafe { PROCS[slot].mem_ctx };
+	let ctx = crate::context::ctx_mut();
+	ctx.umode_heap_top = mem_ctx.heap_top;
+	ctx.umode_heap_mapped_end = mem_ctx.heap_mapped_end;
+	ctx.umode_mmap_pages_used = mem_ctx.mmap_pages_used;
+	ctx.umode_curr_mmap_pa = mem_ctx.curr_mmap_pa;
 
 	let root_pa = unsafe { PROCS[slot].root_pa };
 	paging::set_root(paging::pool_root_va(root_pa));
@@ -290,15 +272,11 @@ pub fn activate(slot: usize) {
 	// satp 的 ASID 恒为 0, 硬件不区分地址空间, 切换后必须整体刷新 TLB。
 	unsafe {
 		core::arch::asm!("sfence.vma");
-	}
-	unsafe {
 		CURRENT_PROC = slot;
 	}
 }
 
-// ---------------------------------------------------------------
 //  进程式 clone (fork)
-// ---------------------------------------------------------------
 
 /// clone 是否为进程式: 未请求共享地址空间。
 ///
@@ -361,22 +339,20 @@ pub fn clone_process(gprs: &TrapGprs, flags: u64) -> u64 {
 		child.root_pa = child_root;
 		child.parent = parent_slot;
 		child.sig = PROCS[parent_slot].sig.inherited_from();
-		// 间隔定时器不随 fork 继承 (Linux 的 ITIMER_REAL 亦不继承)。
+		// 间隔定时器不随 fork 继承。
 		child.itimer_next = 0;
 		child.itimer_interval = 0;
 		child.mem_ctx = child_mem_ctx;
 		let child_pid = child.pid;
 		PROCS[child_slot] = child;
 
-		// 子进程先运行 (与 Linux 一致); 父进程现场由 finalize_switch 保存。
+		// 子进程先运行; 父进程现场由 finalize_switch 保存。
 		thread::set_pending_target(child_thread);
 		child_pid
 	}
 }
 
-// ---------------------------------------------------------------
 //  退出与回收
-// ---------------------------------------------------------------
 
 /// 终止整个进程 (exit_group 94, 以及信号默认处置为终止时)。
 ///
@@ -482,9 +458,7 @@ pub fn wait4(pid: u64, status: u64, options: u64) -> u64 {
 	}
 }
 
-// ---------------------------------------------------------------
 //  信号: 处置、屏蔽与投递
-// ---------------------------------------------------------------
 
 /// rt_sigaction (134)。
 pub fn sigaction(sig_num: u64, new_action: u64, old_action: u64) -> u64 {
@@ -571,9 +545,7 @@ pub fn take_sigreturn() -> Option<u64> {
 	}
 }
 
-// ---------------------------------------------------------------
 //  模块故障反馈
-// ---------------------------------------------------------------
 
 /// 处置一次由模块引起的故障: 注销该模块并清空它的操作表缓存, 把该次故障交回用户态。
 ///

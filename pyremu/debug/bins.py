@@ -53,7 +53,9 @@ class BinsInfoOps(SharedAttrs):
                 Text(fmt_display_name(image.path)),
             )
         self._console.print(tbl)
-        self._console.print(Text("区间按 [起始, 结束) 计; 结束为不包含的上界", style="dim"))
+        self._console.print(
+            Text("区间按 [起始, 结束) 计; 结束为不包含的上界", style="dim")
+        )
 
     def _print_ram_caption(self) -> None:
         bus = self._emu.bus

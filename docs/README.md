@@ -61,11 +61,11 @@ git config core.hooksPath tools/git-hooks
 | **指令集** | RV64 IMAFDC：基础整数、乘除（M）、原子操作与 LR/SC（A）、单精度与双精度浮点（F/D）、压缩指令（C） |
 | **扩展** | Zicsr：CSR 读写；Zifencei：FENCE.I；Zbb：位操作；Sstc：`stimecmp` 与 `stimecmph` |
 | **特权级** | U/S/M 三级；ECALL、EBREAK、MRET、SRET；陷态经 `medeleg` 与 `mideleg` 委派到 S 模式；WFI 使 hart 停止取指与执行，中断到达后唤醒，`mstatus.TW` 置位时非 M 模式执行 WFI 引起非法指令陷态 |
-| **虚拟内存** | Sv39 三级页表遍历，4 KiB 页与 2 MiB 超级页；每 hart 独立的指令 TLB 与数据 TLB，全相联，FIFO 或 LRU 替换；SFENCE.VMA 刷新全部 hart 的 TLB |
+| **虚拟内存** | Sv39 三级页表遍历，4 KiB 页与 2 MiB、1 GiB 超级页；每 hart 独立的指令 TLB 与数据 TLB，全相联，FIFO 或 LRU 替换；SFENCE.VMA 刷新全部 hart 的 TLB |
 | **内存保护** | PMP 默认由 `PlatformConfig.pmp_entries` 配置；NAPOT、NA4、TOR 匹配；`mstatus.MPRV` 置位且 `MPP` 为 S 或 U 时按该特权级检查；PMA 按 RAM 窗口与设备 MMIO 路由，未落入任何窗口的访问报告访问故障 |
 | **缓存** | 共享 L2 缓存，MESI 一致性协议 |
 | **中断** | CLINT：`mtime`/`mtimecmp` 定时器与 MSIP 核间中断；PLIC：电平语义，每 hart 一对 M/S context；AIA：每 hart 一个 IMSIC M 文件与一个 S 文件，APLIC 的 S 域与 M 域把有线中断转为 MSI；投递优先级 MEI > MSI > MTI > SEI > SSI > STI |
-| **外设** | UART、SPI、I2C、GPIO、看门狗、随机数发生器；virtio-mmio 块设备与网卡，网卡分宿主侧与飞地侧两个实例；终端输入输出桥接 |
+| **外设** | UART、SPI、I2C、GPIO、看门狗、随机数发生器、关机与复位请求设备；virtio-mmio 块设备与网卡，网卡分宿主侧与飞地侧两个实例；终端输入输出桥接 |
 | **平台** | FDT 设备树生成；PlatformConfig 预设 qemu\_virt 与 sifive\_u54，支持从 JSON、TOML、YAML 反序列化 |
 
 未实现：
@@ -81,7 +81,7 @@ pyremu/                       模拟器包
   debugger.py                 rvdb 交互式调试器入口
   platform.py                 PlatformConfig 平台配置, 支持 JSON、TOML 与 YAML 反序列化
   configs_aux.py              配置读取, 环境变量优先, 回退到 configs_gen
-  configs_gen.py              由 mk/ 下配置分片生成的常量, 不手工编辑
+  configs_gen.py              由 mk/ 下配置自动生成的定义
   emu/                        执行循环、状态同步与装配的拆分实现
     setup.py                  总线、中断控制器、外设与 hart 的装配
     load.py                   固件、设备树与初始内存盘的装载
@@ -135,6 +135,7 @@ pyremu/                       模拟器包
     gpio.py                   通用输入输出
     watchdog.py               看门狗
     crng.py                   随机数发生器
+    power_ctrl.py             关机与复位请求设备
     virtio_mmio.py            virtio-mmio 传输层
     virtio_blk.py             virtio 块设备
     virtio_net.py             virtio 网卡
@@ -149,6 +150,7 @@ pyremu/                       模拟器包
     wrapper.py                异常处理装饰器
     regname.py                寄存器名称查找
     tick.py                   时钟辅助
+    counter.py                顺序编号计数器
     file_ops.py               文件路径操作
   env_inject/                 运行时注入
     preload.py                把预置代码片段写入 RAM
@@ -157,35 +159,18 @@ pyremu/                       模拟器包
 bsp/                          板级支持包
   sittim/                     可嵌入 OpenSBI 的 S 模式运行时
   kei-boot/                   模拟器的零阶段加载器
-  tee_aux_tools/              辅助驱动、签名工具与评测套件
+  linux_tee_drvs/             Linux 飞地驱动与模块工具
     linux-driver/             Linux 飞地交互内核驱动, 提供 /dev/tee_enclave
-    ext-mod-loader/           扩展模块加载器
     ext-mod-svc/              扩展模块服务
     sign-mod/                 为扩展模块文件追加 ECDSA 签名
-    cache-probe-exploit/      TEE 评测套件, 部署到根文件系统的 /eval/cache-probe-exploit
-    stress-test/              TEE 压力测试套件, 部署到根文件系统的 /eval/stress-test
+  eval-suites/                TEE 评测工具, 部署到根文件系统的 /eval
+    cache-sidechannel/        TEE 缓存侧信道评测套件, 部署到 /eval/cache-sidechannel
+    basic-test/               TEE 飞地生命周期批处理测试套件, 部署到 /eval/basic-test
+    app-loader/               应用装载器, 部署到 /eval/app-loader
+    mod-loader/               模块装载器, 部署到 /eval/mod-loader
+	fn_apps/                  可信应用载荷
   linux/                      内核源码树, 需要自行复制到本仓库
   setup-rootfs/               用 debootstrap 构建根文件系统, 并打包测试程序与驱动
-
-fn_apps/                      可信应用载荷
-  orbit/                      轨道动力学的多体积分载荷
-  chem/                       量子化学的 Hartree-Fock 载荷
-  graphene/                   石墨烯紧束缚能带的计算载荷
-  ising/                      二维 Ising 模型的蒙特卡洛载荷
-  fem/                        二维 Poisson 方程的有限元载荷
-  dsp/                        FFT 谱分析、FIR 滤波与 OFDM 基带载荷
-  linalg/                     稠密 Cholesky 分解载荷
-  dune/                       DUNE 有限元库的计算载荷
-  Langlands/                  模形式与 L 函数的计算载荷, 依赖 FLINT、MPFR 与 GMP
-  knots/                      Jones 多项式的计算载荷
-  cfrac/                      连分数分解载荷, 分配大量短生命周期的小对象
-  chibicc/                    C 编译器载荷
-  json_calc/                  以多份 JSON 文档为输入的解析载荷, C 与 C++ 两种实现
-  nc_udp/                     以 busybox 的 nc 实现 UDP 自收自发的通路载荷
-  malloc-churn/               多线程 malloc 压力测试载荷
-  stress-ng/                  上游压力测试工具
-  bin/                        构建产物
-  build/                      构建产物
 
 tests/                        pytest 套件与部分测试项的源码
   test_*.py                   顶层单元与集成测试
@@ -250,7 +235,6 @@ cargo test --manifest-path pyremu/_native/Cargo.toml   # Rust 侧单元测试
 ```
 
 构建依赖: Rust 工具链 (edition 2021), 通过 CPython 内置 `ctypes` 加载。
-
 当 `.so` 缺失或不兼容时，模拟器将回退到纯 Python 执行路径。
 但执行用时较长，且目前缺乏维护。
 
@@ -278,11 +262,12 @@ uv run pytest tests/test_emulator.py::TestNativeBatchLayout   # Python 侧
 | **Ctrl+Q** | 运行中暂停，回到调试器 |
 
 #### 代码质量规范
-本仓库对所编写代码存在要求：
-1. 单个函数内，**缩进在原则上不应超过 $4$ 层**，且行数不应超过 $100$ 行，每列字符不应超过 $100$ 个。
+
+本仓库对所编写代码要求：
+1. 单个函数内，**缩进在原则上不应超过 $4$ 层**，且行数不应超过 $100$ 行，每列字符不应超过 $85$ 个。
    1. 如果不可避免超过 $4$ 层而小于等于 $5$ 层，则该层内连同注释的行数，不应连续超过 $10$ 行。
    2. 拒绝评阅与通过达到或超过 $6$ 层嵌套的实现逻辑。
 2. 对于函数签名/函数定义，传入与传出参数的总和不应超过 $6$ 个。且当定义过长时，应使用下列参考格式而完成你的实现。
 3. 在满足前三条约束的情形下，请在发起分支拉取请求前，用本地的lint或代码格式检查器自动格式化你的实现代码。
 5. 除自动化生成的代码实现以及单元测试代码，每个文件的代码实现建议不超过 $1500$ 行。
-6. 如有必要，可补充文档说明。
+6. 如有必要，可修改或补充文档说明。

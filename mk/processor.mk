@@ -8,7 +8,7 @@
 # ISA 字符串
 ISA                  ?= rv64imacfd_sstc_zba_zbb_zbs_zicsr_zifencei
 # hart 数量
-NUM_HARTS            ?= 3
+NUM_HARTS            ?= 1
 # 通过 makefile 生成 pyremu/configs_gen.py, 替代各处硬编码与 os.environ.get.
 # TLB 条目数
 TLB_ENTRIES          ?= 256

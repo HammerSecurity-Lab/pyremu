@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 从 vendor/musl 重建 bsp/musl-gc-sysroot (riscv64gc/lp64d 静态 musl sysroot)。
 #
-# 该 sysroot 是 fn_apps/*/Makefile 交叉编译飞地载荷时链接的目标:
+# 该 sysroot 是 bsp/eval-suites/fn_apps/*/Makefile 交叉编译飞地载荷时链接的目标:
 #   - libc.a / libm.a / crt1.o / crti.o / crtn.o / Scrt1.o  来自 musl 构建
 #   - libgcc.a / crtbeginT.o / crtend.o                      来自 glibc 交叉 GCC 14
 #   - libgcc_s.a                                            来自裸机 riscv64-unknown-elf GCC
@@ -14,6 +14,25 @@
 # 该脚本从 vendor/musl 生成 sysroot;
 # 全新 clone 需先 `git submodule update --init vendor/musl` 取源码。
 set -euo pipefail
+
+usage() {
+    cat <<EOF
+用法: $0
+
+从 vendor/musl 重建 bsp/musl-gc-sysroot, 即 riscv64gc/lp64d 静态 musl sysroot.
+无参数, 无选项.
+
+前置: git submodule update --init vendor/musl;
+      需要 clang、llvm-ar、llvm-ranlib、riscv64-linux-gnu-gcc 与 riscv64-unknown-elf-gcc.
+EOF
+}
+
+case "${1:-}" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MUSL_SRC="$ROOT/vendor/musl"

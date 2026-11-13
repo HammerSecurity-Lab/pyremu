@@ -19,8 +19,8 @@ cfg 与 addr 按 hart_id 偏移 hid*64, 而非所有 hart 共享 hart0 的 PMP�
 
 run() 无指令配额, 对纯 WFI 无停机固件按设计持续阻塞, 即等待 stdin、定时器
 或看门狗唤醒, 永不返回。以下用例一律以 WFI 作全 hart 同步屏障, 经设备暂停事件
-notify_processor 终止 — 见 ``_run_wfi_firmware``。该方式不依赖 semihosting 编译开关,
-固件是否执行 SYS_EXIT 序列不影响用例的结束。
+notify_processor 终止 — 见 ``_run_wfi_firmware``。该方式不依赖 semihosting
+编译开关, 固件是否执行 SYS_EXIT 序列不影响用例的结束。
 """
 
 import ctypes
@@ -35,7 +35,8 @@ from pyremu.emulator import Emulator
 from tests.conftest import make_test_emu
 
 pytestmark = pytest.mark.skipif(
-    not native_available(), reason="native 加速库不可用, 跳过 native 并发 PMP 测试"
+    not native_available(),
+    reason="native 加速库不可用, 跳过 native 并发 PMP 测试",
 )
 
 RAM_BASE = 0x8000_0000
@@ -115,7 +116,8 @@ def test_four_hart_pmp_all_distinct():
 
     _run_wfi_firmware(emu)
 
-    # 修复前: 仅 hart0 的 PMP 被 marshal 并镜像到全部 hart, 所有 hart 的 PMP 均为 0x1000。
+    # 修复前: 仅 hart0 的 PMP 被 marshal 并镜像到全部 hart,
+    # 所有 hart 的 PMP 均为 0x1000。
     for i, h in enumerate(emu.harts):
         assert h.csrs["pmpaddr1"].val == vals[i], (
             f"hart{i} pmpaddr1=0x{h.csrs['pmpaddr1'].val:x} 期望 0x{vals[i]:x}"

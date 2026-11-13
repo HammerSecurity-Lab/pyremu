@@ -46,7 +46,11 @@ def sym_rm(dbg, rest: str) -> None:
         return
     registry.remove_module(dbg, mod)
     dbg._console.print(
-        Text.assemble(("sym", "bold"), " 已移除 ", (fmt_display_name(mod.file_name), "green"))
+        Text.assemble(
+            ("sym", "bold"),
+            " 已移除 ",
+            (fmt_display_name(mod.file_name), "green"),
+        )
     )
 
 
@@ -55,7 +59,9 @@ def sym_info(dbg) -> None:
     if not dbg._sym_symbols:
         dbg._console.print("[dim]未加载外部调试符号[/]")
         if dbg._sym_mods:
-            dbg._console.print(f"  符号模块: {len(dbg._sym_mods)} 个; 执行 sym detail 查看")
+            dbg._console.print(
+                f"  符号模块: {len(dbg._sym_mods)} 个; 执行 sym detail 查看"
+            )
         return
 
     entry_va = min(dbg._sym_symbols.values())
@@ -121,7 +127,10 @@ def _print_module_table(dbg) -> None:
         dbg._console.print("[dim]没有已加载的符号模块; 执行 sym load 加载[/]")
         return
 
-    tbl = Table(title=f"符号模块 ({len(dbg._sym_mods)} 项)", border_style="blue")
+    tbl = Table(
+        title=f"符号模块 ({len(dbg._sym_mods)} 项)",
+        border_style="blue",
+    )
     tbl.add_column("#", style="yellow", justify="right")
     tbl.add_column("状态", justify="center")
     tbl.add_column("文件名", style="cyan")
@@ -148,7 +157,12 @@ def _print_cover_table(dbg, addr: int) -> None:
     name = dbg._resolve_any_symbol_name(addr)
     shown = name if name else "(无)"
     dbg._console.print(
-        Text.assemble("地址 ", (f"0x{addr:x}", "yellow"), " 的符号: ", (shown, "green"))
+        Text.assemble(
+            "地址 ",
+            (f"0x{addr:x}", "yellow"),
+            " 的符号: ",
+            (shown, "green"),
+        )
     )
 
     selected = model.select_module(registry.lookup_modules(dbg), addr)
@@ -190,7 +204,13 @@ def _cover_rows(
             link = model.link_addr_of(mod, addr, space)
             if link is None:
                 continue
-            symbol = mod.index.resolve_addr(link) if mod.index is not None else None
-            is_selected = selected is not None and selected[0] is mod and selected[1] == space
+            symbol = (
+                mod.index.resolve_addr(link) if mod.index is not None else None
+            )
+            is_selected = (
+                selected is not None
+                and selected[0] is mod
+                and selected[1] == space
+            )
             rows.append((number, mod, space, link, symbol, is_selected))
     return rows

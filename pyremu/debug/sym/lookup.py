@@ -113,7 +113,11 @@ class SymLookupOps(SharedAttrs):
             return None
         return _symbol_predecessor(symbols, addr)
 
-    def load_kernel_symbols(self, path: str, base_pa: int | None = None) -> bool:
+    def load_kernel_symbols(
+        self,
+        path: str,
+        base_pa: int | None = None,
+    ) -> bool:
         """从 vmlinux ELF 加载调试符号 (不加载段到 RAM)."""
         if not Path(path).exists():
             self._err(f"符号文件不存在: {path}")
@@ -172,7 +176,10 @@ class SymLookupOps(SharedAttrs):
         cover_start = min(values)
         cover_end = max(values) + 1
         if self._sym_ranges:
-            cover_end = max(cover_end, *(end for _start, end, _name in self._sym_ranges))
+            cover_end = max(
+                cover_end,
+                *(end for _start, end, _name in self._sym_ranges),
+            )
         mod = model.SymMod(
             file_name=Path(self._sym_path).name if self._sym_path else "",
             path=self._sym_path or "",
@@ -217,7 +224,8 @@ class SymLookupOps(SharedAttrs):
 
         先按原值在模块的物理区间与虚拟区间中查找. 未命中而当前特权级不是 M 时,
         把 *runtime_addr* 当作虚拟地址翻译为物理地址, 再按物理地址查找一次.
-        只在 pa: 部署的模块没有虚拟区间, S 模式与 U 模式的虚拟地址只能经这次查找命中.
+        只在 pa: 部署的模块没有虚拟区间, S 模式与 U 模式的虚拟地址只能经这次
+        查找命中.
         """
         mods = registry.lookup_modules(self)
         hit = model.select_module(mods, runtime_addr)

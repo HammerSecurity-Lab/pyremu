@@ -22,9 +22,11 @@ RAM 与其访问路径由两个独立的类承担, Bus 只保留设备表与地�
 
 PMA (Physical Memory Attributes):
   地址空间按硬件属性分为三类区域:
-  - Main Memory  : [ram_base, ram_base + ram_size) — 可缓存、支持原子操作、全位宽访问
+  - Main Memory  : [ram_base, ram_base + ram_size) — 可缓存、支持原子操作、
+    全位宽访问
   - I/O (Device) : 通过 add_device() 注册 — 不可缓存、读写可能有副作用
-  - Empty / Hole : 其余地址 — 触发 AccessFault (该行为在 Hart._mem_read/_mem_write 中实现)
+  - Empty / Hole : 其余地址 — 触发 AccessFault
+    (该行为在 Hart.mem_read/mem_write 中实现)
 
 关键设计: 设备 MMIO 地址具有读写副作用 (读可能改变硬件状态),
 必须排除于所有缓存机制之外 — 不走 TLB 缓存, 不走 L2 缓存, 直通设备。
@@ -101,15 +103,16 @@ class AccessFaultError(Exception):
         self.addr = addr
         self.is_write = is_write
         super().__init__(
-            f"PMA AccessFault: addr=0x{addr:016x} ({'write' if is_write else 'read'})"
+            f"PMA AccessFault: addr=0x{addr:016x} "
+            f"({'write' if is_write else 'read'})"
         )
 
 
 class BootRom(Device):
     """引导只读存储器 — 存放零阶段引导程序与交付给下一级的设备树.
 
-    hart 经总线读取本对象的内容; 对它的写入按访问故障投递陷态. 固件与设备树的装载
-    调用 load 写入, 不经过总线写路径.
+    hart 经总线读取本对象的内容; 对它的写入按访问故障投递陷态. 固件与设备树
+    的装载调用 load 写入, 不经过总线写路径.
     """
 
     def __init__(self, size: int) -> None:
@@ -173,10 +176,11 @@ class DirectRam:
         self._ram_size = ram_size
 
         # PIE 装载偏移 — 固件按链接地址给出的取值落在 [pie_ofs_base,
-        # pie_ofs_base + pie_ofs_size) 内的部分, 经 _pie_ofs_to_ram 换算为 RAM 偏移.
-        # 由 apply_pie_ofs 在装载固件时写入一次; 此后每一次 RAM 访问与加速执行引擎的
-        # 每一轮都要读取它, 故不能留作装载函数内的局部量. 字节数为 0 表示未施加装载
-        # 偏移, 此时基址取值无意义 (固件的链接基址可以取 0).
+        # pie_ofs_base + pie_ofs_size) 内的部分, 经 _pie_ofs_to_ram 换算为
+        # RAM 偏移. 由 apply_pie_ofs 在装载固件时写入一次; 此后每一次 RAM 访问
+        # 与加速执行引擎的每一轮都要读取它, 故不能留作装载函数内的局部量.
+        # 字节数为 0 表示未施加装载偏移, 此时基址取值无意义
+        # (固件的链接基址可以取 0).
         self._pie_ofs_base: int = 0
         self._pie_ofs_size: int = 0
 
@@ -196,7 +200,9 @@ class DirectRam:
         if self._use_native:
             # 两处地址用 ctypes.addressof 取得;
             # 取地址不用 ctypes.cast, 后者会与所转换的对象构成引用环.
-            self._ram_native_ptr = ctypes.addressof(ctypes.c_uint8.from_buffer(self._ram))
+            self._ram_native_ptr = ctypes.addressof(
+                ctypes.c_uint8.from_buffer(self._ram)
+            )
             self._read_out = ctypes.c_uint64(0)
             self._read_out_ptr = ctypes.addressof(self._read_out)
             self._ram_win = (
@@ -213,8 +219,8 @@ class DirectRam:
         固件链接在低地址而 RAM 在高地址时, 各段被写在链接地址加上装载偏移的物理
         地址上; 固件按链接地址给出的取值落在本区间内, 与那些段指同一段字节.
         装载固件时调用一次; 此后每一次 RAM 访问经 _pie_ofs_to_ram 使用本区间,
-        加速执行引擎的每一轮经 pie_ofs_pair 取本区间的两个端点, 故本区间在该调用返回
-        之后不能失效.
+        加速执行引擎的每一轮经 pie_ofs_pair 取本区间的两个端点, 故本区间在该
+        调用返回之后不能失效.
         """
         self._pie_ofs_base = link_base
         self._pie_ofs_size = link_size
@@ -233,7 +239,12 @@ class DirectRam:
         """
         if self._pie_ofs_size == 0:
             return None
-        if self._addr_in_range(addr, size, self._pie_ofs_base, self._pie_ofs_size):
+        if self._addr_in_range(
+            addr,
+            size,
+            self._pie_ofs_base,
+            self._pie_ofs_size,
+        ):
             return addr - self._pie_ofs_base
         return None
 
@@ -249,13 +260,16 @@ class DirectRam:
 
     def is_ram_range(self, addr: int, size: int) -> bool:
         """
-        判断区间 [addr, addr + size) 是否完整落在 RAM 的范围[ram_base, ram_base + ram_size)内
+        判断区间 [addr, addr + size) 是否完整落在 RAM 的范围
+        [ram_base, ram_base + ram_size)内
         """
         return self._addr_in_range(addr, size, self._ram_base, self._ram_size)
 
     @staticmethod
     def _addr_in_range(addr: int, size: int, base: int, extent: int) -> bool:
-        """判定区间 [*addr*, *addr* + *size*) 是否落在 [*base*, *base* + *extent*) 之内."""
+        """判定区间 [*addr*, *addr* + *size*) 是否落在
+        [*base*, *base* + *extent*) 之内.
+        """
         return base <= addr and addr + size <= base + extent
 
     def _ram_offset(self, addr: int, size: int) -> int | None:
@@ -336,15 +350,17 @@ class MainMem:
     def _bypass_l2(self, addr: int, data_len: int) -> bool:
         """RAM 地址是否应绕过 L2 缓存, 直写 bytearray.
 
-        调用动态链接库加速时，直接修改 bytearray, 不经过 L2 缓存。若 Python 侧 L2 缓存行
-        覆盖同一 PA 的字节, 写命中时合并旧数据并回写, 会污染 Rust
-        的修改, 表现为页表 PTE 或栈数据被覆写为旧值。
+        调用动态链接库加速时，直接修改 bytearray, 不经过 L2 缓存。若 Python 侧
+        L2 缓存行覆盖同一 PA 的字节, 写命中时合并旧数据并回写, 会污染 Rust 的
+        修改, 表现为页表 PTE 或栈数据被覆写为旧值。
 
         绕过条件:
           - PYREMU_NO_L2=1: 排查专用, RAM 访问全部绕过 L2 缓存以隔离问题。
           - data_len > 8: DMA/批量传输不经过 CPU 缓存。
         """
-        return (NO_L2 or data_len > self._MAX_CPU_STORE) and self._ram.is_ram_addr(addr)
+        return (
+            NO_L2 or data_len > self._MAX_CPU_STORE
+        ) and self._ram.is_ram_addr(addr)
 
     def read(self, addr: int, size: int) -> bytes:
         """主存读: 先取 L2 缓存, 未命中时经 RAM 后端取得."""
@@ -359,6 +375,10 @@ class MainMem:
     def write(self, addr: int, data: bytes) -> None:
         """主存写: 批量与 DMA 传输直写 bytearray, 其余经 L2 缓存写入."""
         if self._bypass_l2(addr, len(data)):
+            # 设备写入在真实硬件上经总线送达缓存: 覆盖到的行先同步, 否则此后经
+            # 缓存的读取会取到写入之前的字节, 脏行的回写还会覆盖设备的取值.
+            if self._l2 is not None:
+                self._l2.apply_device_write(addr, data)
             self._ram.write(addr, data)
             return
 
@@ -397,30 +417,31 @@ class Bus:
         l2_cache=None,  # L2Cache 实例或 None
     ) -> None:
         self._ram_direct = DirectRam(ram_size=ram_size, ram_base=ram_base)
-        # RAM 缓冲区别名 — 调试器、批量加载与加速执行引擎按同一 bytearray 直接读写
+        # RAM 缓冲区别名 — 调试器、批量加载与加速执行引擎按同一 bytearray
+        # 直接读写
         self._ram = self._ram_direct._ram
         self._l2 = l2_cache
         self._mem = MainMem(self._ram_direct, l2_cache)
         self._devices: dict[int, Device] = {}  # base_addr -> device
 
-        # 已发生的 TLB 刷新次数. 使既有翻译条目失效的动作各算一次, 由执行该动作的
-        # 一方经 note_tlb_flush 加一. 加速执行引擎在两次调用之间保留该取值, 故引擎
-        # 之外发生的刷新对引擎内既有的条目同样生效; 反过来, 引擎内发生的刷新经每轮
-        # 结束时的写回使 Python 侧的两个 TLB 作废.
+        # 已发生的 TLB 刷新次数. 使既有翻译条目失效的动作各算一次, 由执行该
+        # 动作的一方经 note_tlb_flush 加一. 加速执行引擎在两次调用之间保留该
+        # 取值, 故引擎之外发生的刷新对引擎内既有的条目同样生效; 反过来,
+        # 引擎内发生的刷新经每轮结束时的写回使 Python 侧的两个 TLB 作废.
         self.tlb_flush_cnt = ctypes.c_uint64(0)
 
         # 设备查找缓存 — 按基址排序的 (base, end, device) 列表, 用于二分查找.
         # add_device 后置 None, 首次 _find_device 时重建.
         self._device_cache: list[tuple[int, int, Device]] | None = None
 
-        # 引导只读存储器 — 未注册时保持 None. 它同时位于设备表中, 由 add_boot_rom
-        # 登记.
+        # 引导只读存储器 — 未注册时保持 None. 它同时位于设备表中, 由
+        # add_boot_rom 登记.
         self._boot_rom: BootRom | None = None
 
         # 存放映像的存储区间 — 每项为 (名称, 起址, 字节数). 主存在构造时登记,
-        # 引导只读存储器由 add_boot_rom 登记; 其余存储器 (例如静态随机存取存储器与
-        # 闪存) 注册时按同一形式登记. 调试器按这些区间判定符号文件能否部署到给定的
-        # 物理地址.
+        # 引导只读存储器由 add_boot_rom 登记; 其余存储器 (例如静态随机存取存储器
+        # 与闪存) 注册时按同一形式登记. 调试器按这些区间判定符号文件能否部署到
+        # 给定的物理地址.
         self._storage_intervals: list[tuple[str, int, int]] = [
             ("主存", ram_base, ram_size),
         ]
@@ -460,7 +481,9 @@ class Bus:
         self._device_cache = None  # 下次 _find_device 时重建
 
     def _check_overlap(self, base_addr: int, size: int) -> None:
-        """断言 [base_addr, base_addr + size) 不与 RAM 及已注册设备的范围重叠."""
+        """断言 [base_addr, base_addr + size) 不与 RAM 及已注册设备
+        的范围重叠.
+        """
         end = base_addr + size
         assert end <= self.ram_base or base_addr >= self.ram_end, (
             f"设备地址范围 [0x{base_addr:x}, 0x{end:x}) "
@@ -469,8 +492,9 @@ class Bus:
         for other_base, other in self._devices.items():
             other_end = other_base + other.size
             assert end <= other_base or base_addr >= other_end, (
-                f"设备地址范围 [0x{base_addr:x}, 0x{end:x}) 与基址 0x{other_base:x} "
-                f"的设备地址范围 [0x{other_base:x}, 0x{other_end:x}) 重叠"
+                f"设备地址范围 [0x{base_addr:x}, 0x{end:x}) 与基址 "
+                f"0x{other_base:x} 的设备地址范围 "
+                f"[0x{other_base:x}, 0x{other_end:x}) 重叠"
             )
 
     def add_boot_rom(self, base_addr: int, size: int) -> BootRom:
@@ -489,7 +513,8 @@ class Bus:
         """二分查找地址对应的设备及设备内偏移"""
         if self._device_cache is None:
             self._device_cache = sorted(
-                (base, base + dev.size, dev) for base, dev in self._devices.items()
+                (base, base + dev.size, dev)
+                for base, dev in self._devices.items()
             )
         cache = self._device_cache
 
@@ -530,7 +555,9 @@ class Bus:
 
     def is_rom_range(self, addr: int, size: int) -> bool:
         """判断区间 [addr, addr + size) 是否完整落在引导只读存储器的窗口内."""
-        return self._boot_rom is not None and self._boot_rom.contains_range(addr, size)
+        return self._boot_rom is not None and self._boot_rom.contains_range(
+            addr, size
+        )
 
     def is_device_addr(self, addr: int) -> bool:
         """判断物理地址是否属于 MMIO 设备区域 (不可缓存).
@@ -540,6 +567,11 @@ class Bus:
         """
         dev, _ = self._find_device(addr)
         return dev is not None
+
+    def is_device_range(self, addr: int, size: int) -> bool:
+        """判断区间 [addr, addr + size) 是否完整落在某个设备窗口内."""
+        dev, _ = self._find_device(addr)
+        return dev is not None and addr + size <= dev.base_addr + dev.size
 
     def is_rom_addr(self, addr: int) -> bool:
         """判断物理地址是否属于引导只读存储器的地址范围."""
@@ -553,6 +585,15 @@ class Bus:
             空洞地址 (Empty/Hole) 返回 False, 上层应触发 AccessFault.
         """
         return self.is_ram_addr(addr) or self.is_device_addr(addr)
+
+    def pma_check(self, addr: int, size: int) -> bool:
+        """PMA 检查: 区间 [addr, addr + size) 是否完整落在主存或某个设备窗口内.
+
+        Returns:
+            True 若整个区间属于主存或同一个已注册的 I/O 设备.
+            区间越过窗口边界或落在空洞中返回 False, 上层应触发 AccessFault.
+        """
+        return self.is_ram_range(addr, size) or self.is_device_range(addr, size)
 
     @property
     def storage_intervals(self) -> tuple[tuple[str, int, int], ...]:
@@ -615,10 +656,11 @@ class Bus:
     def write_ram_direct(self, addr: int, data: bytes) -> None:
         """绕过 L2 缓存和设备 MMIO, 直接向 RAM 写入数据.
 
-        用于固件/内核镜像等大批量数据加载场景.
-        调用方需确保写入完成后 L2 缓存中无目标地址的脏行
-        (加载前 hart 尚未运行, 故天然安全).
+        用于固件/内核镜像等大批量数据加载场景. 覆盖到的缓存行按设备的直接写入
+        同步: 脏行先回写, 区间内的字节改写为本次写入的取值.
         """
+        if self._l2 is not None:
+            self._l2.apply_device_write(addr, data)
         self._ram_direct.write(addr, data)
 
     def flush_l2(self) -> int:

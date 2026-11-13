@@ -54,9 +54,10 @@ class HartWatchdog(Device):
     ) -> None:
         """按中断源编号、投递目标与 hart 数构造.
 
-        ``irq_sink`` 取 ``(中断源编号, 投递目标)`` 二元组. 投递目标取设备中断投递
-        目标对象, 不取 Emulator 的绑定方法, 理由见 DeviceIrqSink. ``clock_ns``
-        给出当前时刻的纳秒数, 用例据此注入可控时钟.
+        ``irq_sink`` 取 ``(中断源编号, 投递目标)`` 二元组.
+        投递目标取设备中断投递目标对象, 不取 Emulator 的绑定方法,
+        理由见 DeviceIrqSink. ``clock_ns`` 给出当前时刻的纳秒数,
+        用例据此注入可控时钟.
         """
         self.base_addr = base
         self._num_harts = num_harts
@@ -145,7 +146,8 @@ class HartWatchdog(Device):
         # COUNT 只读, 其余偏移无字段
 
     def _write_ctrl(self, hart: int, val: int) -> None:
-        """使能位由 0 变为 1 时装载计数, 由 1 变为 0 时清零; 两种变化都撤销到期标志."""
+        """使能位由 0 变为 1 时装载计数, 由 1 变为 0 时清零;
+        两种变化都撤销到期标志."""
         was_enabled = bool(self._ctrl[hart] & _CTRL_ENABLE)
         self._ctrl[hart] = val
         is_enabled = bool(val & _CTRL_ENABLE)
@@ -173,7 +175,8 @@ class HartWatchdog(Device):
         self._publish(level)
 
     def _tick_hart(self, hart: int, ticks: int) -> None:
-        """递减一个 hart 的计数, 归零时置到期标志并按需自动重装; 调用方持有 _lock."""
+        """递减一个 hart 的计数, 归零时置到期标志并按需自动重装;
+        调用方持有 _lock."""
         if not self._ctrl[hart] & _CTRL_ENABLE:
             return
         self._count[hart] -= ticks
@@ -189,7 +192,8 @@ class HartWatchdog(Device):
             self._count[hart] += timeout
 
     def _sync_level(self) -> bool | None:
-        """按各 hart 的到期标志更新中断线电平; 电平变化时返回新电平, 否则返回 None."""
+        """按各 hart 的到期标志更新中断线电平;
+        电平变化时返回新电平, 否则返回 None."""
         level = any(self._is_expired)
         if level == self._is_irq_high:
             return None

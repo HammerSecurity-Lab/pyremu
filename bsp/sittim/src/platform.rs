@@ -8,8 +8,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// 可写 stimecmp, 即 S 模式定时器不经机器模式的 mtimecmp 设置。
 const FEATURE_SSTC: u64 = 1 << 0;
-/// time CSR 存在且可读。
-const FEATURE_ZICNTR: u64 = 1 << 1;
+/// 平台提供时间扩展与涉及时间相关的寄存器或设备, S 模式可取得时钟源读数。
+const FEATURE_TIME_CSR: u64 = 1 << 1;
 
 /// 本平台的特性字。启动阶段写入一次, 此后只读。
 static FEATURES: AtomicU64 = AtomicU64::new(0);
@@ -32,10 +32,10 @@ impl PlatformFeatures {
 		self.0 & FEATURE_SSTC != 0
 	}
 
-	/// 平台是否提供 time CSR。
+	/// 平台是否提供时间扩展与涉及时间相关的寄存器或设备。
 	#[inline]
-	pub fn has_zicntr(self) -> bool {
-		self.0 & FEATURE_ZICNTR != 0
+	pub fn has_time_csr(self) -> bool {
+		self.0 & FEATURE_TIME_CSR != 0
 	}
 }
 

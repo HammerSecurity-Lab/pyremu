@@ -136,7 +136,10 @@ class RegisterOps(SharedAttrs):
             # 视图, time 与 timeh 取 CLINT 的当前计数值, 直接取 csrs[n].val 得到
             # 的只是这些 CSR 对象自身的存储值.
             val = h.read_csr_by_name(n)
-            line = f" [cyan]{n:<{max_w}}[/] = [green]{hex_addr(val)}[/] (dec: {val})"
+            line = (
+                f" [cyan]{n:<{max_w}}[/] = [green]{hex_addr(val)}[/]"
+                f" (dec: {val})"
+            )
             if n in ("mstatus", "mstatush"):
                 line += f"  [dim]模式 [bold]{h.mode.name}[/][/]"
             elif n in ("mcause", "scause"):
@@ -165,5 +168,6 @@ class RegisterOps(SharedAttrs):
             csr = h.csrs[name]
             old, csr.val = csr.val, v
         self._console.print(
-            f"[cyan]{name}[/]: [yellow]{hex_addr(old)}[/] -> [green]{hex_addr(v)}[/]"
+            f"[cyan]{name}[/]: [yellow]{hex_addr(old)}[/] -> "
+            f"[green]{hex_addr(v)}[/]"
         )

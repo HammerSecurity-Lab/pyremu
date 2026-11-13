@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pyremu.configs_aux import cfg_bool
 from pyremu.memory.cache_base import CacheBase, CacheLineBase, ReplacementPolicy
 
-# PYREMU_NO_TLB 关闭 TLB: 查询与插入一并跳过, 与 Bus 中 PYREMU_NO_L2 对 L2 缓存的
-# 整体旁路一致, 每次地址翻译都完整遍历 Sv39 页表.
+# PYREMU_NO_TLB 关闭 TLB: 查询与插入一并跳过, 与 Bus 中 PYREMU_NO_L2 对
+# L2 缓存的整体旁路一致, 每次地址翻译都完整遍历 Sv39 页表.
 
 
 @dataclass

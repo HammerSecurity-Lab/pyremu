@@ -51,7 +51,11 @@ class DiskViewOps(SharedAttrs):
             self._err(escape(str(exc)))
             return
         except OSError as exc:
-            self._err(escape(f"无法读取 {fmt_display_name(path)}: {exc.strerror or exc}"))
+            self._err(
+                escape(
+                    f"无法读取 {fmt_display_name(path)}: {exc.strerror or exc}"
+                )
+            )
             return
         if layout is None:
             self._warn(f"未识别的映像格式: {fmt_display_name(path)}")
@@ -98,7 +102,11 @@ class DiskViewOps(SharedAttrs):
             tbl.add_row(Text(key), Text(value))
         self._console.print(tbl)
 
-        props = Table(title="文件系统属性", border_style="blue", show_header=False)
+        props = Table(
+            title="文件系统属性",
+            border_style="blue",
+            show_header=False,
+        )
         props.add_column("项", style="cyan", justify="right", no_wrap=True)
         props.add_column("值", justify="left")
         for key, value in summary.properties:

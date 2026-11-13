@@ -295,7 +295,12 @@ class ElfSymbolIndex:
     def _build_address_index(self) -> None:
         skip_local = self.entry_count > LOCAL_SYMBOL_SKIP_THRESHOLD
         packed: list[int] = []
-        for sym_index, _st_name, st_value, st_size in self._iter_accepted_records(skip_local):
+        for (
+            sym_index,
+            _st_name,
+            st_value,
+            st_size,
+        ) in self._iter_accepted_records(skip_local):
             packed.append((st_value << 32) | sym_index)
             self._track_span(st_value, st_size)
 
@@ -310,11 +315,20 @@ class ElfSymbolIndex:
         end = st_value + (st_size if st_size > 0 else 1)
         self.value_max_end = max(self.value_max_end, end)
 
-    def _read_record(self, data: bytes, offset: int) -> tuple[int, int, int, int] | None:
+    def _read_record(
+        self,
+        data: bytes,
+        offset: int,
+    ) -> tuple[int, int, int, int] | None:
         """从已读入的符号表数据中取出一条记录; 不满足过滤条件时返回 None."""
-        st_name, st_info, _st_other, st_shndx, st_value, st_size = struct.unpack_from(
-            ELF64_SYM_FMT, data, offset
-        )
+        (
+            st_name,
+            st_info,
+            _st_other,
+            st_shndx,
+            st_value,
+            st_size,
+        ) = struct.unpack_from(ELF64_SYM_FMT, data, offset)
         if st_shndx == 0 or st_value == 0:
             return None
         if st_name == 0 or st_name >= self._strtab_size:
@@ -345,7 +359,10 @@ class ElfSymbolIndex:
         avail = self._strtab_size - st_name
         if avail <= 0:
             return None
-        data = self._elf.pread(self._strtab_offset + st_name, min(NAME_READ_LIMIT, avail))
+        data = self._elf.pread(
+            self._strtab_offset + st_name,
+            min(NAME_READ_LIMIT, avail),
+        )
         end = data.find(b"\x00")
         if end <= 0:
             return None
@@ -381,7 +398,9 @@ class ElfSymbolIndex:
             if name is None or len(name) == 0:
                 pos -= 1
                 continue
-            is_inside_symbol = st_value == addr or (st_size > 0 and addr < st_value + st_size)
+            is_inside_symbol = st_value == addr or (
+                st_size > 0 and addr < st_value + st_size
+            )
             if is_inside_symbol or not name.startswith(_LOCAL_NAME_PREFIXES):
                 return name
             pos -= 1
@@ -398,7 +417,12 @@ class ElfSymbolIndex:
         skip_local = self.entry_count > LOCAL_SYMBOL_SKIP_THRESHOLD
         packed = [
             (st_name << 32) | sym_index
-            for sym_index, st_name, _value, _size in self._iter_accepted_records(skip_local)
+            for (
+                sym_index,
+                st_name,
+                _value,
+                _size,
+            ) in self._iter_accepted_records(skip_local)
         ]
         packed.sort()
 
@@ -407,7 +431,13 @@ class ElfSymbolIndex:
         for chunk_start, chunk in self._iter_strtab_chunks():
             if pos >= len(packed):
                 break
-            pos = self._consume_strtab_chunk(packed, pos, chunk_start, chunk, entries)
+            pos = self._consume_strtab_chunk(
+                packed,
+                pos,
+                chunk_start,
+                chunk,
+                entries,
+            )
 
         entries.sort()
         self._name_index = array("Q", entries)
@@ -417,7 +447,13 @@ class ElfSymbolIndex:
         """按块产出字符串表, 每项为 (起始偏移, 字节)."""
         for chunk_start in range(0, self._strtab_size, SCAN_CHUNK_BYTES):
             take = min(SCAN_CHUNK_BYTES, self._strtab_size - chunk_start)
-            yield chunk_start, self._elf.pread(self._strtab_offset + chunk_start, take)
+            yield (
+                chunk_start,
+                self._elf.pread(
+                    self._strtab_offset + chunk_start,
+                    take,
+                ),
+            )
 
     def _consume_strtab_chunk(
         self,
@@ -437,7 +473,9 @@ class ElfSymbolIndex:
             if local >= 0:
                 raw = self._name_bytes(chunk, local, st_name)
                 if raw:
-                    entries.append((_name_hash(raw) << 32) | (item & 0xFFFFFFFF))
+                    entries.append(
+                        (_name_hash(raw) << 32) | (item & 0xFFFFFFFF)
+                    )
             # 释放临时列表中的大整数, 保留列表槽位供后续遍历
             packed[pos] = 0
             pos += 1

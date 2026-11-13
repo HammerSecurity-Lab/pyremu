@@ -8,7 +8,8 @@ from tests.conftest import make_test_emu
 
 
 def test_python_write_visible_to_native_read():
-    """Data written via bus.write() (L2 path) must be readable by native batch."""
+    """Data written via bus.write() (L2 path) must be readable by native
+    batch."""
     emu = make_test_emu(ram_size=32 * 1024 * 1024, uart_base=0)
 
     # Write a 64-bit value through the L2 cache

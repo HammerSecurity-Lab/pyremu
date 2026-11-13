@@ -5,8 +5,8 @@
 
 """AIA 模块入口测试.
 
-``pyremu.interrupt.aia`` 只把 IMSIC 转出, 供旧调用方按原路径导入. 本文件锁住该转出
-关系, 使拆分实现之后旧路径不至于静默失效.
+``pyremu.interrupt.aia`` 只把 IMSIC 转出, 供旧调用方按原路径导入. 本文件锁住
+该转出关系, 使拆分实现之后旧路径不至于静默失效.
 """
 
 from pyremu.interrupt import aia, imsic

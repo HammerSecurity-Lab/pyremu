@@ -164,11 +164,28 @@ class TestBusPMA:
         bus.add_device(0xC000_0000, dev)
         assert bus.is_valid_addr(0xC000_0000)
 
+    def test_pma_check_rejects_range_crossing_ram_end(self, bus):
+        """区间越过 RAM 末尾: 起始地址在 RAM 内也不放行."""
+        ram_end = self.RAM_BASE + 16 * 1024 * 1024
+        assert bus.pma_check(ram_end - 8, 8)
+        assert not bus.pma_check(ram_end - 4, 8)
+        assert not bus.pma_check(ram_end, 1)
+
+    def test_pma_check_rejects_range_crossing_device_end(self, bus):
+        """区间越过设备窗口末尾: 起始地址在窗口内也不放行."""
+        dev = _DummyDevice(base=0x0200_0000, sz=0x1000)
+        bus.add_device(0x0200_0000, dev)
+        assert bus.pma_check(0x0200_0FFC, 4)
+        assert not bus.pma_check(0x0200_0FFC, 8)
+        assert not bus.pma_check(0x0200_0FF4, 16)
+
     # -------- 存储区间 --------
 
     def test_storage_intervals_include_ram(self, bus):
         """主存在构造时即登记为存储区间."""
-        assert bus.storage_intervals == (("主存", self.RAM_BASE, 16 * 1024 * 1024),)
+        assert bus.storage_intervals == (
+            ("主存", self.RAM_BASE, 16 * 1024 * 1024),
+        )
 
     def test_storage_intervals_include_boot_rom(self, bus):
         """引导只读存储器注册后成为存储区间, 与主存并列."""

@@ -69,18 +69,16 @@
     addi sp, sp, 264
 .endm
 
-# ================================================================
 #  入口
-# ================================================================
 #
-#  PIE 寻址约定: 全部使用显式 %pcrel_hi / %pcrel_lo, 绝不通过 GOT.
+#  PIE 寻址约定: 全部使用显式 %pcrel_hi / %pcrel_lo
 #  二进制链接在 0x0, 运行时可在任意物理地址正常工作.
 
 .align 4
 .section ".text.init"
 .global _start
 _start:
-    # ---- 保存 M-mode 传入的参数, 即 callee-saved 寄存器 ----
+    # 保存 M-mode 传入的参数, 即 callee-saved 寄存器
     # M-mode 在 CREATE ecall 返回前设置:
     mv   s0, a0                 # s0 = enclave_id
     mv   s1, a1                 # s1 = base_pa
@@ -88,21 +86,21 @@ _start:
     mv   s3, a3                 # s3 = 授予的分区总数
     mv   s4, a4                 # s4 = 64类平台特性使能记录
 
-    # ---- 设置临时栈 ----
 _setup_tmp_stk:
+    # 设置临时栈
     auipc sp, %pcrel_hi(tmp_stack_top)
     addi  sp, sp, %pcrel_lo(_setup_tmp_stk)
     # 为 BootInfo 分配 24 字节栈空间
     addi sp, sp, -32
 
-    # ---- 应用 R_RISCV_RELATIVE 重定位 (PIE) ----
+    # 应用 R_RISCV_RELATIVE 重定位
     # s1 = base_pa (运行时加载地址), link base = 0.
     # 条目表的两端 _rela_dyn_start / _rela_dyn_end 由链接脚本给出,
-    # 循环逐个处理该区间内的全部 R_RISCV_RELATIVE (type=3) 条目.
+    # 循环逐个处理该区间内的全部 R_RISCV_RELATIVE  条目.
 .L0_reloc_s:
     auipc t0, %pcrel_hi(_rela_dyn_start)
     addi  t0, t0, %pcrel_lo(.L0_reloc_s)
-    # auipc+addi 已通过 PC 相对寻址得到运行时地址 (PC 含 base_pa),
+    # auipc+addi 已通过 PC 相对寻址得到运行时地址,
     # 无需再加 s1, 否则会 double-count base_pa.
 .L0_reloc_e:
     auipc t1, %pcrel_hi(_rela_dyn_end)
@@ -117,11 +115,10 @@ _setup_tmp_stk:
     addi  t0, t0, 24               # sizeof(Elf64_Rela) = 24
     bltu  t0, t1, .L_reloc_loop
 .L_reloc_done:
-
-    # MMU使能前让 BSS 清零
+.L0_bss_s:
+	# MMU使能前让 BSS 清零
     # PIE 重定位后, _bss_start / _bss_end 的地址为运行时 PA.
     # 含 page_table_root的EnclaveContext位于 BSS 内, 必须初始化为零.
-.L0_bss_s:
     auipc t0, %pcrel_hi(_bss_start)
     addi  t0, t0, %pcrel_lo(.L0_bss_s)
 .L0_bss_e:
@@ -151,7 +148,7 @@ setup_early_stvec:
     auipc t0, %pcrel_hi(early_trap)
     addi  t0, t0, %pcrel_lo(setup_early_stvec)
     csrw stvec, t0
-    # Bare 模式调用阶段一 (PC 相对 call)
+    # Bare 模式调用阶段一
     call main_before_mmu
     # 从栈上加载返回的 BootInfo 字段
     ld   a0, 0(sp)              # a0 = satp
@@ -217,7 +214,7 @@ save_kern_ctx:
     # 内核陷态的帧存放于临时栈之内: 帧的起始地址不低于 tmp_stack, 末端不高于 tmp_stack_top,
     # 整帧因而落在临时栈之内, 与陷入前的 sp 的取值无关.
     #
-    # 帧的末端按下列取值: 陷入前的 sp 落在 [tmp_stack + 264, tmp_stack_top) 之内时取该值,
+    # 帧的末端按下列取值: 陷入前的 sp 处于区间 [tmp_stack + 264, tmp_stack_top) 时取该值,
     # 帧自该值向低地址生长; 该值不在此区间之内时取 tmp_stack_top, 帧自栈顶向低地址生长.
     #
     # 进入本段时 sp 为 0, 陷入前的 sp 存放在 sscratch 内. 本段借用 t1 存放它: 与 sscratch 交换
@@ -241,7 +238,7 @@ save_kern_ctx:
 .L_kern_frame_ready:
     csrrw t1, sscratch, t1      # t1 取回原值, sscratch 取回陷入前的 sp
     SAVE_CONTEXT
-    # 记下陷入前的 sp: 由 sscratch 取出后存入陷入前的 sp 槽位, sscratch 同时清零
+    # 记下陷入前的 sp: 由 sscratch 取出后存入陷入前的上下文, sscratch 同时清零
     csrrw t1, sscratch, x0
     sd    t1, 256(sp)
     j     trap_common
@@ -249,7 +246,7 @@ save_kern_ctx:
 save_user_ctx:
     # 保存全部寄存器
     SAVE_CONTEXT
-    # 记下陷入前的 sp: 用户 sp 由 sscratch 取出后存入陷入前的 sp 槽位
+    # 记下陷入前的 sp: 用户 sp 由 sscratch 取出后存入陷入前的上下文
     csrrw t1, sscratch, x0
     sd   t1, 256(sp)
 
@@ -262,7 +259,7 @@ trap_common:
     call  trap_dispatch
 
     # a0 = trap_dispatch 返回: 0 表示不切换; 非 0 为目标线程陷态栈帧基址.
-    # 切换即 mv sp, a0 (sp 由当前帧换到目标帧), 随后统一走恢复路径.
+    # 切换即 mv sp, a0, 随后统一走恢复路径.
     beqz  a0, not_alter_thread
     mv    sp, a0
 not_alter_thread:
@@ -292,9 +289,7 @@ ret_to_user:
 .globl tmp_stack
 tmp_stack:
     .zero 0x4000
-# ================================================================
 #  临时栈, 16 KiB, 位于 .bss
 #  MMU 使能之前由 _start 使用; MMU 使能之后由陷态入口存放内核陷态的陷态栈帧,
 #  陷态分发所用的栈也取自本栈. 本栈尺寸与线程内核栈相同.
-# ================================================================
 tmp_stack_top:

@@ -4,53 +4,62 @@
 
 日志来自 ``CONFIG_DBG_ENCLAVE_STATS`` 之下的三项统计:
 
-  ``encl_stat<cycle>``       ``CONFIG_DBG_CYCLE_COUNT``     飞地执行区间的累计周期数
-  ``encl_stat<alloc-info>``  ``CONFIG_DBG_MEM_INTERACT``    内存申请、被拒绝的申请与释放
-  ``encl_stat<pmp-...>``     ``CONFIG_DBG_PMP_CACHE``       PMP 条目组的淘汰、装入与故障
+  ``encl_stat<cycle>``       ``CONFIG_DBG_CYCLE_COUNT``
+    飞地执行区间的累计周期数
+  ``encl_stat<alloc-info>``  ``CONFIG_DBG_MEM_INTERACT``
+    内存申请、被拒绝的申请与释放
+  ``encl_stat<pmp-...>``     ``CONFIG_DBG_PMP_CACHE``
+    PMP 条目组的淘汰、装入与故障
 
-每个飞地输出一行。飞地编号即一次测试项的执行; ``test`` 列取该飞地全部统计行之后
-(``--name-position after``, 默认) 或之前 (``before``) 的第一条 ``regress-check`` 行。
-默认取 ``after``, 与现有回归脚本先打印统计、再打印检查结果的次序一致。找不到时该列留空。
+每个飞地输出一行。飞地编号即一次测试项的执行; ``test`` 列取该飞地全部统计行
+之后 (``--name-position after``, 默认) 或之前 (``before``) 的第一条
+``regress-check`` 行。默认取 ``after``, 与现有回归脚本先打印统计、再打印检查
+结果的次序一致。找不到时该列留空。
 
 PMP 列按类别 (``data`` 或 ``instr``) 分开:
 
-  ``evict``  被替换出窗口的条目数, 含访问故障装入时按策略淘汰的条目与整组重装、终止之前
-             窗口内的占用条目; 后两者按条目所属的飞地计入
-  ``load``   写入本组条目的次数, 含切入飞地时整组重装写下的条目与访问故障装入的条目
-  ``fault``  506 号调用的往返次数, 一次调用计一次; 取指故障归 ``instr``, 读与写故障归
-             ``data``, 与装入的节点所属的类别无关
+  ``evict``  被替换出窗口的条目数, 含访问故障装入时按策略淘汰的条目与整组
+             重装、终止之前窗口内的占用条目; 后两者按条目所属的飞地计入
+  ``load``   写入本组条目的次数, 含切入飞地时整组重装写下的条目与访问故障
+             装入的条目
+  ``fault``  506 号调用的往返次数, 一次调用计一次; 取指故障归 ``instr``,
+             读与写故障归 ``data``, 与装入的节点所属的类别无关
 
 兼容两种较早的日志格式: ``[dbg-mem-interact] ...`` 内存报告与
-``encl_stat<pmp>: (eid,attr): ...`` 的 PMP 报告; 后者带有一项命中计数, 本工具不再输出该列。
+``encl_stat<pmp>: (eid,attr): ...`` 的 PMP 报告; 后者带有一项命中计数,
+本工具不再输出该列。
 
-``auto`` 模式下只输出日志中实际出现的统计组; 某项统计整份日志都未出现时, 对应列留空,
-与"该统计已启用但本测试项的计数为零"区分开。
+``auto`` 模式下只输出日志中实际出现的统计组; 某项统计整份日志都未出现时,
+对应列留空, 与"该统计已启用但本测试项的计数为零"区分开。
 
 输出格式:
 
-  默认生成 xlsx, 一份日志对应一张工作表。``--format csv`` 生成原先的 CSV, 可写标准输出;
-  xlsx 是二进制格式, 合并模式必须用 ``-o`` 指定路径。
+  默认生成 xlsx, 一份日志对应一张工作表。``--format csv`` 生成原先的 CSV,
+  可写标准输出; xlsx 是二进制格式, 合并模式必须用 ``-o`` 指定路径。
 
-  xlsx 中全部数字写为数值单元格, 全部单元格水平与垂直居中; 某项统计整份日志都未出现时,
-  该单元格留空。
+  xlsx 中全部数字写为数值单元格, 全部单元格水平与垂直居中;
+  某项统计整份日志都未出现时, 该单元格留空。
 
 测试项名称经 ``canonical_name`` 写为规范写法: 连续空白合并为单个空格, 再把
 ``malloc_churn p=1`` 写作 ``malloc_churn-p1``、``malloc_churn p=2`` 写作
 ``malloc_churn-p2``, 其余名称原样保留。
-规范写法为 chibicc、dsp、dune、fem、graphene、json_calc、knots、malloc_churn-p1、
-malloc_churn-p2、modular_form、nc_udp、orbit、stress_ng 512M、stress_ng 1G、stress_ng 2G、
-dune-poisson。
+规范写法为 chibicc、dsp、dune、fem、graphene、json_calc、knots、
+malloc_churn-p1、malloc_churn-p2、modular_form、nc_udp、orbit、stress_ng 512M、
+stress_ng 1G、stress_ng 2G、dune-poisson。
 输出哪些行仍由日志中出现的飞地决定, 不按该清单筛选。
 
-日志中的控制字符按空白处理, 写表时替换为空格, 使日志带有 NUL 等损坏字节时仍可解析并
-写出表格。
+日志中的非可见控制字符按空白处理, 使日志带有NUL等时仍可解析并输出表格。
 
 用法:
 
-    uv run python tools/parse_dbg_stats.py output/rec.log -o build/dbg_stats.xlsx
-    uv run python tools/parse_dbg_stats.py output/*.log --split --out-dir build/stats
-    uv run python tools/parse_dbg_stats.py output/rec.log --format csv -o build/dbg_stats.csv
-    uv run python tools/parse_dbg_stats.py output/rec.log --format csv --features cycle,mem,pmp
+    uv run python tools/parse_dbg_stats.py output/rec.log
+        -o build/dbg_stats.xlsx
+    uv run python tools/parse_dbg_stats.py output/*.log --split
+        --out-dir build/stats
+    uv run python tools/parse_dbg_stats.py output/rec.log --format csv
+        -o build/dbg_stats.csv
+    uv run python tools/parse_dbg_stats.py output/rec.log --format csv
+        --features cycle,mem,pmp
 """
 
 import argparse
@@ -121,7 +130,15 @@ TERM_NAMES = {
     1: "HOST_SHUTDOWN",
 }
 
-BASE_COLUMNS = ("test", "enclave_id", "status", "term", "exit_code", "source", "first_line")
+BASE_COLUMNS = (
+    "test",
+    "enclave_id",
+    "status",
+    "term",
+    "exit_code",
+    "source",
+    "first_line",
+)
 
 FEATURE_GROUPS = ("cycle", "mem", "pmp")
 
@@ -306,7 +323,10 @@ def parse_record(line: str, line_no: int) -> Record | None:
     return None
 
 
-def match_name(line: str, patterns: tuple[re.Pattern[str], ...]) -> tuple[str, str] | None:
+def match_name(
+    line: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[str, str] | None:
     for pattern in patterns:
         match = pattern.search(line)
         if match:
@@ -359,12 +379,15 @@ def parse_log(
 def attach_names(items, names: list[NameHit], name_position: str) -> None:
     """按行序把测试项标记关联到飞地。
 
-    ``after`` 取该飞地最后一条统计行之后的第一条标记; ``before`` 取第一条统计行之前
-    的最后一条标记。同一份日志内飞地按终止次序打印, 故该关联与串行执行的测试次序一致。
+    ``after`` 取该飞地最后一条统计行之后的第一条标记; ``before`` 取第一条统计
+    行之前的最后一条标记。同一份日志内飞地按终止次序打印, 故该关联与串行执行的
+    测试次序一致。
     """
     for item in items:
         if name_position == "before":
-            candidates = [hit for hit in names if hit.line_no <= item.first_line]
+            candidates = [
+                hit for hit in names if hit.line_no <= item.first_line
+            ]
             chosen = candidates[-1] if candidates else None
         else:
             candidates = [hit for hit in names if hit.line_no > item.last_line]
@@ -396,7 +419,9 @@ def expand_inputs(raw_paths: list[str]) -> list[Path]:
     return paths
 
 
-def compile_patterns(raw_patterns: list[str] | None) -> tuple[re.Pattern[str], ...]:
+def compile_patterns(
+    raw_patterns: list[str] | None,
+) -> tuple[re.Pattern[str], ...]:
     """编译名称正则; 每条须含 ``name`` 组, ``status`` 组可省略。"""
     source = raw_patterns or DEFAULT_NAME_PATTERNS
     compiled: list[re.Pattern[str]] = []
@@ -461,11 +486,16 @@ def build_rows(
     return rows
 
 
-def write_csv(stream, rows: list[dict[str, object]], columns: list[str]) -> None:
+def write_csv(
+    stream,
+    rows: list[dict[str, object]],
+    columns: list[str],
+) -> None:
     writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\n")
     writer.writeheader()
     writer.writerows(
-        {column: sanitize_cell(row.get(column)) for column in columns} for row in rows
+        {column: sanitize_cell(row.get(column)) for column in columns}
+        for row in rows
     )
 
 
@@ -490,8 +520,12 @@ def write_xlsx(
 
     for index, column in enumerate(columns, 1):
         lengths = [len(column)]
-        lengths += [len(str(row[column])) for row in rows if row.get(column) is not None]
-        sheet.column_dimensions[get_column_letter(index)].width = min(max(lengths), 60)
+        lengths += [
+            len(str(row[column])) for row in rows if row.get(column) is not None
+        ]
+        sheet.column_dimensions[get_column_letter(index)].width = min(
+            max(lengths), 60
+        )
 
     workbook.save(path)
 
@@ -515,7 +549,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="解析飞地调试统计日志并生成 xlsx 或 CSV, 每个飞地一行",
     )
-    parser.add_argument("logs", nargs="+", help="日志文件或目录 (目录取其中的 *.log)")
+    parser.add_argument(
+        "logs", nargs="+", help="日志文件或目录 (目录取其中的 *.log)"
+    )
     parser.add_argument(
         "--format",
         choices=("xlsx", "csv"),
@@ -532,16 +568,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="每份日志各生成一份文件, 文件名为 <日志名>_stats.<格式>",
     )
-    parser.add_argument("--out-dir", help="--split 的输出目录; 默认为各日志所在目录")
+    parser.add_argument(
+        "--out-dir", help="--split 的输出目录; 默认为各日志所在目录"
+    )
     parser.add_argument(
         "--features",
         default="auto",
-        help="输出哪些统计组: auto (默认, 取日志中出现的组) 或 cycle,mem,pmp 的组合",
+        help="输出哪些统计组: auto (默认, 取日志中出现的组) 或 "
+        "cycle,mem,pmp 的组合",
     )
     parser.add_argument(
         "--name-pattern",
         action="append",
-        help="测试项名称正则, 须含 name 组; 可重复. 省略时使用内置的 regress-check 规则",
+        help="测试项名称正则, 须含 name 组; 可重复. "
+        "省略时使用内置的 regress-check 规则",
     )
     parser.add_argument(
         "--name-position",
@@ -549,7 +589,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="after",
         help="测试项标记相对统计行的位置 (默认 after)",
     )
-    parser.add_argument("--no-names", action="store_true", help="不解析测试项名称")
+    parser.add_argument(
+        "--no-names", action="store_true", help="不解析测试项名称"
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -576,8 +618,15 @@ def main() -> int:
 
     try:
         patterns = () if args.no_names else compile_patterns(args.name_pattern)
-        probe = [parse_log(path, patterns, args.name_position) for path in paths]
-        present = {group for parsed in probe for item in parsed.items for group in item.groups}
+        probe = [
+            parse_log(path, patterns, args.name_position) for path in paths
+        ]
+        present = {
+            group
+            for parsed in probe
+            for item in parsed.items
+            for group in item.groups
+        }
         enabled = resolve_enabled(args.features, present)
     except ValueError as exc:
         parser.error(str(exc))
@@ -595,7 +644,11 @@ def main() -> int:
             write_table(destination, rows, columns, args.format)
             print(f"  -> {destination}", file=sys.stderr)
     else:
-        rows = [row for parsed in probe for row in build_rows(parsed, enabled, forced)]
+        rows = [
+            row
+            for parsed in probe
+            for row in build_rows(parsed, enabled, forced)
+        ]
         if args.out:
             destination = Path(args.out)
             write_table(destination, rows, columns, args.format)
@@ -610,7 +663,10 @@ def main() -> int:
         file=sys.stderr,
     )
     if skipped:
-        print("未识别的行可能是格式变更, 用 --strict 可将其视为错误", file=sys.stderr)
+        print(
+            "未识别的行可能是格式变更, 用 --strict 可将其视为错误",
+            file=sys.stderr,
+        )
     return 1 if args.strict and skipped else 0
 
 

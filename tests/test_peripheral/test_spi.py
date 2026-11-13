@@ -5,7 +5,8 @@
 
 """SPI 主模式控制器测试.
 
-覆盖: 寄存器读写 / STATUS 的位语义 / 全双工镜像 / DIV 掩码 / 未定义偏移 / Bus 集成 /
+覆盖: 寄存器读写 / STATUS 的位语义 / 全双工镜像 / DIV 掩码 /
+未定义偏移 / Bus 集成 /
 平台配置与 DTB 节点生成.
 """
 
@@ -145,13 +146,17 @@ class TestSPIConfig:
 
     def test_emulator_registers_device(self):
         """基址非零时 Emulator 创建 SPI 并挂到 Bus 上."""
-        emu = Emulator(make_test_config(spi_base=SPI_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(spi_base=SPI_BASE), bootargs="console=ttySIF0"
+        )
         assert emu.spi is not None
         assert emu.bus.is_device_addr(SPI_BASE)
 
     def test_dtb_contains_spi_node(self):
         """DTB 含 /soc/spi@... 节点, compatible 与 reg 正确."""
-        emu = Emulator(make_test_config(spi_base=SPI_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(spi_base=SPI_BASE), bootargs="console=ttySIF0"
+        )
         fdt = libfdt.Fdt(emu.build_default_dtb())
         node = fdt.path_offset(f"/soc/spi@{SPI_BASE:x}")
         assert node >= 0

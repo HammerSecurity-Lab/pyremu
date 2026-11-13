@@ -1,0 +1,16 @@
+# 数字信号处理载荷
+#
+# FFT 谱分析 + FIR 低通滤波 + OFDM 基带收发。
+#
+# 测试项：
+#    Parseval 能量守恒
+#    单一正弦频谱峰
+#    IFFT(FFT(x)) 往返一致;
+#    FIR 通带/阻带增益; OFDM 无噪信道误比特率 = 0。
+[package]
+name = "dsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rustfft = "6"

@@ -59,20 +59,22 @@ pub(crate) fn atomic_minmax_u64(atomic: &AtomicU64, funct5: u8, rs2: u64) -> u64
 /// LR.W 与 LR.D: 从 off 读取一个字或双字, 并把读出的值、地址 pa 与有效标志分别写入
 /// state.reservation_value、state.reservation_addr 与 state.reservation_valid.
 ///
-/// RISC-V 规范 §8.2: 在 RV64 上 LR.W 把读出的 32 位值符号扩展到 64 位.
+/// RISC-V 规范 §8.2: 在 RV64 上 LR.W 把写入 rd 的 32 位值符号扩展到 64 位;
+/// state.reservation_value 记录读出的 32 位值本身, 与解释器一致.
 #[inline]
 fn exec_lr(state: &mut HartState, width: u8, rd: u8, pa: u64, off: usize, ctx: &WalkCtx) {
-	let loaded: u64 = if width == 4 {
+	let (raw, loaded): (u64, u64) = if width == 4 {
 		let atomic = unsafe { &*(ctx.ram.add(off) as *const AtomicU32) };
-		let raw = atomic.load(Ordering::Acquire);
-		raw as i32 as i64 as u64
+		let v = atomic.load(Ordering::Acquire);
+		(v as u64, v as i32 as i64 as u64)
 	} else {
 		let atomic = unsafe { &*(ctx.ram.add(off) as *const AtomicU64) };
-		atomic.load(Ordering::Acquire)
+		let v = atomic.load(Ordering::Acquire);
+		(v, v)
 	};
 	state.reservation_valid = 1;
 	state.reservation_addr = pa;
-	state.reservation_value = loaded;
+	state.reservation_value = raw;
 	// 经 lr_set 把 pa 写入各 hart 共享的预留地址数组, 其他 hart 的存储操作经
 	// lr_clear_all 将该条目清零.
 	lr_set(ctx, state.mhartid as u8, pa);
@@ -81,6 +83,9 @@ fn exec_lr(state: &mut HartState, width: u8, rd: u8, pa: u64, off: usize, ctx: &
 
 /// SC.W 与 SC.D: 若 state.reservation_valid 为 1 且 state.reservation_addr 等于 pa,
 /// 且 lr_check 确认共享预留地址数组中本 hart 的条目仍为 pa, 则把 rs2_val 写入 off.
+///
+/// 成功条件只比较地址与预留是否仍然有效, 不比较内存中的值: 宽度与 LR 不同的 SC
+/// 同样可以成功, 与解释器以及 handle_amo 一致.
 #[inline]
 fn exec_sc(
 	state: &mut HartState,
@@ -99,34 +104,20 @@ fn exec_sc(
 		}
 		return;
 	}
-	// 在 CAS 前清除全部 hart 的预留地址数组条目, 并设置 SeqCst 屏障,
+	// 在写入前清除全部 hart 的预留地址数组条目, 并设置 SeqCst 屏障,
 	// 使其他 hart 在观察到新值之前或同时观察到清除.
 	lr_clear_all(ctx);
 	std::sync::atomic::fence(Ordering::SeqCst);
-	let success = if width == 4 {
+	if width == 4 {
 		let atomic = unsafe { &*(ctx.ram.add(off) as *const AtomicU32) };
-		atomic
-			.compare_exchange(
-				state.reservation_value as u32,
-				rs2_val as u32,
-				Ordering::Release,
-				Ordering::Relaxed,
-			)
-			.is_ok()
+		atomic.store(rs2_val as u32, Ordering::Release);
 	} else {
 		let atomic = unsafe { &*(ctx.ram.add(off) as *const AtomicU64) };
-		atomic
-			.compare_exchange(
-				state.reservation_value,
-				rs2_val,
-				Ordering::Release,
-				Ordering::Relaxed,
-			)
-			.is_ok()
-	};
+		atomic.store(rs2_val, Ordering::Release);
+	}
 	state.reservation_valid = 0;
 	if rd != 0 {
-		state.gprs[rd as usize] = if success { 0 } else { 1 };
+		state.gprs[rd as usize] = 0;
 	}
 }
 
@@ -170,7 +161,12 @@ fn exec_amo_rmw(
 		old_val
 	};
 	if rd != 0 {
-		state.gprs[rd as usize] = if width == 4 { old as u64 } else { old };
+		// RISC-V 规范 §8.2: 在 RV64 上 AMO.W 把写入前读出的 32 位值符号扩展到 64 位.
+		state.gprs[rd as usize] = if width == 4 {
+			(old as i32 as i64) as u64
+		} else {
+			old
+		};
 	}
 }
 
@@ -224,12 +220,8 @@ pub(crate) fn handle_amo_concurrent(
 	};
 
 	// 对齐检查: RISC-V AMO 要求自然对齐
-	if (pa & ((width as u64) - 1)) != 0 {
+	if (pa & ((width as u64) - 1)) != 0 || !pmp_ok(state, pa, width as u32, true, false, pmp) {
 		return 0; // 由调用方投递不对齐陷态
-	}
-
-	if !pmp_ok(state, pa, width as u32, true, false, pmp) {
-		return 0;
 	}
 
 	if is_device_addr(pa, dev) {

@@ -180,13 +180,17 @@ class TestGPIOConfig:
 
     def test_emulator_registers_device(self):
         """基址非零时 Emulator 创建 GPIO 并挂到 Bus 上."""
-        emu = Emulator(make_test_config(gpio_base=GPIO_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(gpio_base=GPIO_BASE), bootargs="console=ttySIF0"
+        )
         assert emu.gpio is not None
         assert emu.bus.is_device_addr(GPIO_BASE)
 
     def test_dtb_contains_gpio_node(self):
         """DTB 含 /soc/gpio@... 节点, compatible 与 reg 正确."""
-        emu = Emulator(make_test_config(gpio_base=GPIO_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(gpio_base=GPIO_BASE), bootargs="console=ttySIF0"
+        )
         fdt = libfdt.Fdt(emu.build_default_dtb())
         node = fdt.path_offset(f"/soc/gpio@{GPIO_BASE:x}")
         assert node >= 0

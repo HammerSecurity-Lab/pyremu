@@ -23,27 +23,46 @@ NC='\033[0m' # No Color
 GCC_CROSS="riscv64-linux-gnu-gcc"
 QEMU_BIN="/usr/bin/qemu-riscv64-static"
 
-TOY_SRC="$(cd "$(dirname "$0")/../../../tests/src-rv8" && pwd)"
+# Source trees: this script sits at bsp/setup-rootfs/debootstrap, so the repository
+# root is three levels up. Resolve both once and derive every other directory from
+# them; a path that does not exist yet must not be resolved with cd, since a failed
+# cd ends the script under set -e.
+CURR_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "${CURR_DIR}/../../.." && pwd)"
+
+TOY_SRC="${REPO_DIR}/tests/src-rv8"
 TOY_DEST="${ROOTFS_DIR}/eval/toy-progs"
-FNAPP_SRC="$(cd "$(dirname "$0")/../../../fn_apps" && pwd)"
-TEE_DEST="${ROOTFS_DIR}/eval/cache-probe-exploit"
-FNAPP_DEST="${TEE_DEST}/fn_apps"
-STRESS_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/stress-test" && pwd)"
-STRESS_DEST="${ROOTFS_DIR}/eval/stress-test"
+FNAPP_SRC="${REPO_DIR}/bsp/eval-suites/fn_apps"
+SIDECHANNEL_DEST="${ROOTFS_DIR}/eval/cache-sidechannel"
+FNAPP_DEST="${ROOTFS_DIR}/eval/fn_apps"
+BASIC_SRC="${REPO_DIR}/bsp/eval-suites/basic-test"
+BASIC_DEST="${ROOTFS_DIR}/eval/basic-test"
 # Headless regression entry, installed as /eval/regress.sh and booted as the
 # kernel init by the headless test.
-REGRESS_SRC="$(cd "$(dirname "$0")" && pwd)/regress.sh"
+REGRESS_SRC="${CURR_DIR}/regress.sh"
 # Enclave modules: the images are installed into /modules; the id-to-file mapping is
 # compiled into the regression tool and the module loader.
-MODULE_SRC="$(cd "$(dirname "$0")/../../../bsp/sittim/modules" && pwd)"
+MODULE_SRC="${REPO_DIR}/bsp/sittim/modules"
 MODULE_DEST="${ROOTFS_DIR}/modules"
 # The module build invokes the signer as its last step, so that tree receives build
 # products from this script too.
-MODULE_SIGN_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/sign-mod" && pwd)"
-# Module loader: a host program, deployed as /eval/ext-mod-loader together with its
+MODULE_SIGN_SRC="${REPO_DIR}/bsp/tee-tools/signer"
+# Application loader: a host program, deployed as /eval/app-loader together with its
 # eval.mk (installed as that directory's Makefile).
-EXT_MOD_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/ext-mod-loader" && pwd)"
-EXT_MOD_DEST="${ROOTFS_DIR}/eval/ext-mod-loader"
+EXT_APP_SRC="${REPO_DIR}/bsp/eval-suites/app-loader"
+EXT_APP_DEST="${ROOTFS_DIR}/eval/app-loader"
+# Bodies kept next to this script: the in-chroot setup and the top-level
+# /eval/Makefile, which delegates to the per-tool makefiles.
+CHROOT_SETUP_SRC="${CURR_DIR}/chroot-setup.sh"
+EVAL_MK_SRC="${CURR_DIR}/eval.mk"
+CROSS_CC=""
+TEE_DRV_SRC="${REPO_DIR}/bsp/tee-tools/linux-driver"
+SIDECHANNEL_SRC="${REPO_DIR}/bsp/eval-suites/cache-sidechannel"
+KDIR="${REPO_DIR}/bsp/linux"
+CARGO_BIN="$(command -v cargo 2>/dev/null || true)"
+INVOKER_HOME=""
+LANGLANDS_SYSROOT="${FNAPP_SRC}/Langlands/build/sysroot/lib/libflint.a"
+CARGO_ENV=()
 
 cleanup_mount() {
     mountpoint -q "${ROOTFS_DIR}/tmp" && umount -l "${ROOTFS_DIR}/tmp"
@@ -53,6 +72,28 @@ cleanup_mount() {
     mountpoint -q "${ROOTFS_DIR}/proc" && umount -l "${ROOTFS_DIR}/proc"
 	echo "unmount done"
 }
+
+usage() {
+	cat <<EOF
+用法: $0
+
+构建 Debian trixie riscv64 的根文件系统归档与块设备镜像, 需以 root 执行.
+无参数, 无选项.
+
+产物, 相对当前工作目录:
+    debian-riscv-initrd.cpio.gz   根文件系统归档
+    riscv-sd.ext4                 块设备镜像
+
+先删除 tmp-rootfs 并覆盖上述两个产物; 测试程序与驱动按可用的工具链选择性构建.
+EOF
+}
+
+case "${1:-}" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+esac
 
 # executed by root
 if [ "$(id -u)" -ne 0 ]; then
@@ -96,7 +137,9 @@ echo ">> qemu-riscv64-static: ${QEMU_BIN}"
 debootstrap --arch=riscv64 --foreign --variant=minbase "${SUITE}" "${ROOTFS_DIR}" "${MIRROR}"
 # qemu for emulating the basic target environment
 install -D -m755 "${QEMU_BIN}" "${ROOTFS_DIR}/usr/bin/qemu-riscv64-static"
-DEBIAN_FRONTEND=noninteractive LANG=C chroot "${ROOTFS_DIR}" /debootstrap/debootstrap --second-stage
+
+DEBIAN_FRONTEND=noninteractive LANG=C \
+chroot "${ROOTFS_DIR}" /debootstrap/debootstrap --second-stage
 
 # mount devices in host
 mount -t proc none "${ROOTFS_DIR}/proc"
@@ -105,81 +148,17 @@ mount --bind /dev "${ROOTFS_DIR}/dev"
 mount --bind /dev/pts "${ROOTFS_DIR}/dev/pts"
 mount --bind /tmp "${ROOTFS_DIR}/tmp"
 
-# setup basic environment
-# ---- replace the deb sources
-# ---- update host sources
-# ---- zsh will be set as default shell
-# ---- install oh-my-zsh
-# ---- plugins ----
-# RUNZSH=no   zsh
-# CHSH=no     shell
-# Gitee for Chinese Networking Environment:
-#   OH_MY_ZSH_URL=https://gitee.com/mirrors/oh-my-zsh/raw/master/tools/install.sh
-#   ZSH_PLUGIN_PREFIX=https://gitee.com/mirrors
-LANG=C DEBIAN_FRONTEND=noninteractive chroot "${ROOTFS_DIR}" /bin/bash <<EOF
-cat > /etc/apt/sources.list <<'SRC'
-deb ${MIRROR} trixie main contrib non-free non-free-firmware
-deb ${MIRROR} trixie-updates main contrib non-free non-free-firmware
-deb ${MIRROR}-security trixie-security main contrib non-free non-free-firmware
-SRC
-
-apt update -y
-apt install -y dialog libterm-readline-perl-perl systemd systemd-sysv \
-	gcc build-essential flex bison vim python3 libc6 zsh git curl wget \
-		clang llvm lld kmod
-apt clean
-rm -rf /var/cache/apt/archives/*
-
-echo "root:${ROOT_PASSWD}" | chpasswd
-
-echo "${HOSTNAME}" > /etc/hostname
-cat > /etc/hosts <<'HOST'
-127.0.0.1   localhost ${HOSTNAME}
-::1         localhost
-HOST
-
-cat > /etc/fstab <<'FS'
-proc    /proc   proc    defaults    0 0
-sysfs   /sys    sysfs   defaults    0 0
-devtmpfs /dev  devtmpfs defaults    0 0
-tmpfs   /tmp    tmpfs   size=64M    0 0
-tmpfs   /var/run tmpfs  defaults    0 0
-FS
-
-chsh -s /bin/zsh root
-
-OH_MY_ZSH_URL="\${OH_MY_ZSH_URL:-https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh}"
-curl -fsSL "\${OH_MY_ZSH_URL}" | RUNZSH=no CHSH=no sh
-
-ZSH_PLUGIN_PREFIX="\${ZSH_PLUGIN_PREFIX:-https://github.com}"
-ZSH_CUSTOM="/root/.oh-my-zsh/custom"
-git clone --depth=1 \
-	"\${ZSH_PLUGIN_PREFIX}/zsh-users/zsh-autosuggestions" \
-	"\${ZSH_CUSTOM}/plugins/zsh-autosuggestions"
-git clone --depth=1 \
-	"\${ZSH_PLUGIN_PREFIX}/zsh-users/zsh-syntax-highlighting" \
-	"\${ZSH_CUSTOM}/plugins/zsh-syntax-highlighting"
-
-if [ ! -f /root/.oh-my-zsh/templates/zshrc.zsh-template ]; then
-	mkdir -p /root/.oh-my-zsh/templates
-	echo "export ZSH=\"/root/.oh-my-zsh\"" > /root/.oh-my-zsh/templates/zshrc.zsh-template
-	echo "ZSH_THEME=\"gentoo\"" >> /root/.oh-my-zsh/templates/zshrc.zsh-template
-	echo "plugins=(git)" >> /root/.oh-my-zsh/templates/zshrc.zsh-template
-	echo "source \$ZSH/oh-my-zsh.sh" >> /root/.oh-my-zsh/templates/zshrc.zsh-template
-fi
-cp /root/.oh-my-zsh/templates/zshrc.zsh-template /root/.zshrc
-
-sed -i "s/^plugins=(git)$/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/" \
-	/root/.zshrc || true
-
-sed -i "s/^ZSH_THEME=\".*\"$/ZSH_THEME=\"gentoo\"/" /root/.zshrc || true
-
-EOF
+# setup basic environment: the body lives in chroot-setup.sh, executed inside the
+# chroot with MIRROR, ROOT_PASSWD and HOSTNAME taken from the environment.
+LANG=C \
+DEBIAN_FRONTEND=noninteractive \
+MIRROR="${MIRROR}" ROOT_PASSWD="${ROOT_PASSWD}" \
+HOSTNAME="${HOSTNAME}" \
+chroot "${ROOTFS_DIR}" /bin/bash -s < "${CHROOT_SETUP_SRC}"
 
 # toy benchmark programs -> /eval/toy-progs
 mkdir -p "${TOY_DEST}"
 
-CROSS_CC=""
 # prefer clang >=16, fall back to riscv64-linux-gnu-gcc
 for cc in clang-19 clang-18 clang-17 clang-16 clang riscv64-linux-gnu-gcc; do
     if command -v "$cc" >/dev/null 2>&1; then
@@ -190,16 +169,18 @@ done
 
 if [ -n "${CROSS_CC}" ] && [ -f "${TOY_SRC}/Makefile" ]; then
     echo ">> Cross-compiling toy programs with ${CROSS_CC} ..."
+
     case "${CROSS_CC}" in
-        clang*)
-            make -C "${TOY_SRC}" -j"$(nproc)" \
-                CC="${CROSS_CC}" CXX="${CROSS_CC}++" STRIP="llvm-strip" || true
-            ;;
-        *)
-            make -C "${TOY_SRC}" -j"$(nproc)" \
-                CC="${CROSS_CC}" CXX="${CROSS_CC/cc/++}" STRIP="${CROSS_CC/gcc/strip}" || true
-            ;;
+    clang*)
+        make -C "${TOY_SRC}" -j"$(nproc)" \
+            CC="${CROSS_CC}" CXX="${CROSS_CC}++" STRIP="llvm-strip" || true
+        ;;
+    *)
+        make -C "${TOY_SRC}" -j"$(nproc)" \
+            CC="${CROSS_CC}" CXX="${CROSS_CC/cc/++}" STRIP="${CROSS_CC/gcc/strip}" || true
+        ;;
     esac
+
     # install stripped binaries, rename (drop _O3_stripped suffix)
     for f in "${TOY_SRC}/bin/riscv64/"*_stripped.o; do
         [ -f "$f" ] || continue
@@ -209,7 +190,13 @@ if [ -n "${CROSS_CC}" ] && [ -f "${TOY_SRC}/Makefile" ]; then
     # install unstripped copies for debugging
     for f in "${TOY_SRC}/bin/riscv64/"*.o; do
         [ -f "$f" ] || continue
-        case "$(basename "$f")" in *_stripped.o) continue ;; esac
+
+        case "$(basename "$f")" in
+        *_stripped.o)
+            continue
+            ;;
+        esac
+
         name="$(basename "$f" .o)"
         [ -f "${TOY_DEST}/${name}_stripped" ] || install -m755 "$f" "${TOY_DEST}/${name}"
     done
@@ -221,14 +208,12 @@ fi
 echo ">> Toy programs installed:"
 ls -la "${TOY_DEST}"
 
-# 8. TEE enclave driver + userspace test programs
+# 8. TEE enclave driver + cache side-channel test programs
 echo ">> Building TEE enclave driver & test programs ..."
-TEE_DRV_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/linux-driver" && pwd)"
-TEE_TEST_SRC="$(cd "$(dirname "$0")/../../../bsp/tee_aux_tools/cache-probe-exploit" && pwd)"
-mkdir -p "${TEE_DEST}"
+mkdir -p "${SIDECHANNEL_DEST}"
 
-# Build kernel module (requires linux tree at ../../linux).
-KDIR="$(cd "$(dirname "$0")/../../../bsp/linux" && pwd)"
+# Build kernel module (the Linux tree at ${KDIR} is optional; the build is skipped
+# when it is absent).
 if command -v "${GCC_CROSS}" >/dev/null 2>&1 && [ -d "${KDIR}" ]; then
     make -C "${KDIR}" M="${TEE_DRV_SRC}" ARCH=riscv \
         CROSS_COMPILE="${GCC_CROSS/gcc/}" modules 2>&1 | tail -3
@@ -242,23 +227,21 @@ fi
 # require to build musl payload (hello_payload / victim_cache / attacker_cache):
 # Otherwise, Makefile under /eval will execute as expected.
 if command -v "${GCC_CROSS}" >/dev/null 2>&1; then
-    make -C "${TEE_TEST_SRC}" -j"$(nproc)" CROSS_CC="${GCC_CROSS}" all musl
-    install -m755 "${TEE_TEST_SRC}"/bin/* "${TEE_DEST}/"
-    cp -v "${TEE_TEST_SRC}/tee_enclave.h" "${TEE_DEST}/"
-    cp -v "${TEE_TEST_SRC}/eval.mk" "${TEE_DEST}/Makefile"
+    make -C "${SIDECHANNEL_SRC}" -j"$(nproc)" CROSS_CC="${GCC_CROSS}" all musl
+    install -m755 "${SIDECHANNEL_SRC}"/bin/* "${SIDECHANNEL_DEST}/"
+    cp -v "${SIDECHANNEL_SRC}/tee_enclave.h" "${SIDECHANNEL_DEST}/"
+    cp -v "${SIDECHANNEL_SRC}/eval.mk" "${SIDECHANNEL_DEST}/Makefile"
 else
     echo ">> SKIP test programs: ${GCC_CROSS} not found"
 fi
 
-# 8b. fn_apps enclave payloads (all 7), loaded at runtime by tee_ecall_regress.
-# depends on cargo + riscv64gc-unknown-linux-musl + vendor/musl submodule.
-# Kept in a dedicated fn_apps/ subdir: tee_ecall_regress scans the whole dir as
-# payloads, so it must be isolated from the host programs (cross_enclave_cache /
-# tee_test / ...) and musl probe payloads (hello_payload / victim_*).
+# 8b. Enclave payloads from bsp/eval-suites/fn_apps, loaded at runtime by
+# tee_ecall_regress. Depends on cargo + riscv64gc-unknown-linux-musl + the
+# vendor/musl submodule. Installed as /eval/fn_apps rather than under a suite
+# directory: tee_ecall_regress scans every file in the payload directory, so
+# that directory must hold payloads only.
 #
 # ensure root can compile rust code when lacking of rust environment
-CARGO_BIN="$(command -v cargo 2>/dev/null || true)"
-INVOKER_HOME=""
 if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
     INVOKER_HOME="$(getent passwd "${SUDO_USER}" | cut -d: -f6)"
 fi
@@ -268,7 +251,6 @@ fi
 
 # Run cargo with the invoker's HOME: root's HOME holds no rustup toolchain.
 # Shared by fn_apps, the enclave modules and the module signer.
-CARGO_ENV=()
 if [ -n "${INVOKER_HOME}" ]; then
     CARGO_ENV=(env HOME="${INVOKER_HOME}" RUSTUP_HOME="${INVOKER_HOME}/.rustup" \
         CARGO_HOME="${INVOKER_HOME}/.cargo")
@@ -290,7 +272,6 @@ else
     echo ">> SKIP fn_apps: cargo not found"
 fi
 
-LANGLANDS_SYSROOT="${FNAPP_SRC}/Langlands/build/sysroot/lib/libflint.a"
 if [ -f "${LANGLANDS_SYSROOT}" ]; then
     echo ">> Building Langlands payloads ..."
     if make -C "${FNAPP_SRC}" langlands 2>&1 | tail -4; then
@@ -310,7 +291,7 @@ if [ -f "${LANGLANDS_SYSROOT}" ]; then
         echo ">> WARN: Langlands build failed; skipping"
     fi
 else
-    echo ">> SKIP Langlands: run fn_apps/Langlands/build-deps.sh first"
+    echo ">> SKIP Langlands: run bsp/eval-suites/fn_apps/Langlands/build-deps.sh first"
 fi
 
 # 8c. Enclave module images (bsp/sittim/modules). The host hands a module to the
@@ -339,14 +320,14 @@ else
     echo ">> SKIP enclave modules: cargo not found"
 fi
 
-# 8d. Module loader: the smallest host program that drives the load path on its own.
+# 8d. Application loader: the smallest host program that drives the load path on its own.
 if command -v "${GCC_CROSS}" >/dev/null 2>&1; then
-    make -C "${EXT_MOD_SRC}" CROSS_CC="${GCC_CROSS}" all
-    mkdir -p "${EXT_MOD_DEST}"
-    install -m755 "${EXT_MOD_SRC}/bin/ext_mod_loader" "${EXT_MOD_DEST}/"
-    cp -v "${EXT_MOD_SRC}/eval.mk" "${EXT_MOD_DEST}/Makefile"
+    make -C "${EXT_APP_SRC}" CROSS_CC="${GCC_CROSS}" all
+    mkdir -p "${EXT_APP_DEST}"
+    install -m755 "${EXT_APP_SRC}/bin/app-loader" "${EXT_APP_DEST}/"
+    cp -v "${EXT_APP_SRC}/eval.mk" "${EXT_APP_DEST}/Makefile"
 else
-    echo ">> SKIP module loader: ${GCC_CROSS} not found"
+    echo ">> SKIP application loader: ${GCC_CROSS} not found"
 fi
 
 # 8e. Headless regression entry — installed from regress.sh, which sits next to
@@ -355,55 +336,27 @@ fi
 # [regress] ... markers are asserted from UART.
 install -m755 "${REGRESS_SRC}" "${ROOTFS_DIR}/eval/regress.sh"
 
-echo ">> TEE components:"
-ls -la "${TEE_DEST}"
+echo ">> Cache side-channel components:"
+ls -la "${SIDECHANNEL_DEST}"
 
-# TEE enclave stress test programs
+# TEE enclave lifecycle batch tests
 
-mkdir -p "${STRESS_DEST}"
+mkdir -p "${BASIC_DEST}"
 
 if command -v "${GCC_CROSS}" >/dev/null 2>&1; then
-    make -C "${STRESS_SRC}" -j"$(nproc)" CROSS_CC="${GCC_CROSS}" all
-    install -m755 "${STRESS_SRC}"/bin/* "${STRESS_DEST}/"
-    cp -v "${STRESS_SRC}/tee_enclave.h" "${STRESS_DEST}/"
-    cp -v "${STRESS_SRC}/eval.mk" "${STRESS_DEST}/Makefile"
+    make -C "${BASIC_SRC}" -j"$(nproc)" CROSS_CC="${GCC_CROSS}" all
+    install -m755 "${BASIC_SRC}"/bin/* "${BASIC_DEST}/"
+    cp -v "${BASIC_SRC}/tee_enclave.h" "${BASIC_DEST}/"
+    cp -v "${BASIC_SRC}/eval.mk" "${BASIC_DEST}/Makefile"
 else
-    echo ">> SKIP stress tests: ${GCC_CROSS} not found"
+    echo ">> SKIP basic tests: ${GCC_CROSS} not found"
 fi
 
-echo ">> Stress test components:"
-ls -la "${STRESS_DEST}"
+echo ">> Basic test components:"
+ls -la "${BASIC_DEST}"
 
-# Top-level /eval/Makefile — delegates to subdirectories
-cat > "${ROOTFS_DIR}/eval/Makefile" <<'EVALMK'
-# /eval/Makefile — TEE test suite entry point
-#
-#   make help                  Show this help
-#   make probe                 Side-channel probe & exploit tests
-#   make stress                Batch enclave lifecycle stress tests
-#   make modules               Load an enclave module through the standalone loader
-
-.PHONY: help probe stress modules
-
-help:
-	@echo "=== /eval TEE Test Suite ==="
-	@echo "  make probe    cache-probe-exploit (全部缓存侧信道: Flush+Reload + 生命周期 + 并发 + TLB/integrity)"
-	@echo "  make stress   stress-test (batch enclave lifecycle 2/20/200/2000/20000)"
-	@echo "  make modules  ext-mod-loader (one payload, one module from /modules)"
-	@echo ""
-	@echo "  cd cache-probe-exploit && make help   for attack details (含阻塞式 DoS: malice-avail)"
-	@echo "  cd stress-test && make help           for stress test details"
-	@echo "  cd ext-mod-loader && make help        for loader details"
-
-probe:
-	$(MAKE) -C cache-probe-exploit probe
-
-stress:
-	$(MAKE) -C stress-test stress
-
-modules:
-	$(MAKE) -C ext-mod-loader load
-EVALMK
+# Top-level /eval/Makefile, delegates to subdirectories
+install -D -m 0644 "${EVAL_MK_SRC}" "${ROOTFS_DIR}/eval/Makefile"
 
 echo ">> /eval/Makefile created"
 

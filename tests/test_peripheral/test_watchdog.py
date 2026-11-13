@@ -391,7 +391,9 @@ class TestWatchdogAssembly:
             assert emu.watchdog is not None
             assert emu.bus.is_device_addr(WDOG_BASE)
             emu.bus.write(WDOG_BASE + WDOG_TIMEOUT, struct.pack("<I", 12))
-            assert emu.bus.read(WDOG_BASE + WDOG_TIMEOUT, 4) == struct.pack("<I", 12)
+            assert emu.bus.read(WDOG_BASE + WDOG_TIMEOUT, 4) == struct.pack(
+                "<I", 12
+            )
         finally:
             emu.close()
 
@@ -415,16 +417,22 @@ class TestWatchdogAssembly:
             fdt = libfdt.Fdt(emu.build_default_dtb())
             node = fdt.path_offset(f"/soc/watchdog@{WDOG_BASE:x}")
             assert node >= 0
-            assert bytes(fdt.getprop(node, "compatible")) == b"pyremu,hart-watchdog-1.0\x00"
+            assert bytes(fdt.getprop(node, "compatible")) == (
+                b"pyremu,hart-watchdog-1.0\x00"
+            )
             assert bytes(fdt.getprop(node, "status")) == b"okay\x00"
             base_hi, base_lo, size_hi, size_lo = struct.unpack(
                 ">IIII", bytes(fdt.getprop(node, "reg"))
             )
             assert (base_hi << 32) | base_lo == WDOG_BASE
             assert (size_hi << 32) | size_lo == 2 * WDOG_STRIDE
-            clock = int.from_bytes(bytes(fdt.getprop(node, "clock-frequency")), "big")
+            clock = int.from_bytes(
+                bytes(fdt.getprop(node, "clock-frequency")), "big"
+            )
             assert clock == TIMER_FREQ
-            nums = int.from_bytes(bytes(fdt.getprop(node, "pyremu,num-harts")), "big")
+            nums = int.from_bytes(
+                bytes(fdt.getprop(node, "pyremu,num-harts")), "big"
+            )
             assert nums == 2
         finally:
             emu.close()
@@ -435,7 +443,9 @@ class TestWatchdogAssembly:
         try:
             fdt = libfdt.Fdt(emu.build_default_dtb())
             node = fdt.path_offset(f"/soc/watchdog@{WDOG_BASE:x}")
-            cells = struct.unpack(">II", bytes(fdt.getprop(node, "interrupts-extended")))
+            cells = struct.unpack(
+                ">II", bytes(fdt.getprop(node, "interrupts-extended"))
+            )
             assert cells[1] == WATCHDOG_IRQ
         finally:
             emu.close()
@@ -449,7 +459,9 @@ class TestWatchdogAssembly:
         try:
             fdt = libfdt.Fdt(emu.build_default_dtb())
             node = fdt.path_offset(f"/soc/watchdog@{WDOG_BASE:x}")
-            cells = struct.unpack(">III", bytes(fdt.getprop(node, "interrupts-extended")))
+            cells = struct.unpack(
+                ">III", bytes(fdt.getprop(node, "interrupts-extended"))
+            )
             assert cells[1] == WATCHDOG_IRQ
             assert cells[2] == 0x4
         finally:

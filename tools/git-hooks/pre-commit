@@ -7,13 +7,15 @@
 # 检查覆盖一直在维护的代码, 范围按语言划分:
 #   Python  pyremu/ tests/ tools/        ruff check 与 ruff format
 #   Rust    pyremu/_native/ bsp/sittim/  rustfmt
-#   C{pp}       bsp/sittim/ bsp/kei-boot/ bsp/tee_aux_tools/ tests/ pyremu/
-#               clang-format
-# 检查范围取 git 已跟踪的文件, 因此不进入 bsp/linux、bsp/setup-rootfs 等未跟踪目录.
+#   C{pp}       bsp/sittim/ bsp/kei-boot/ bsp/tee-tools/ bsp/eval-suites/
+#               tests/src-alg/ tests/src-env/ tests/src-rv8/  clang-format
+#
+# 只处理本次已暂存的文件: 取 git diff --cached 给出的路径, 与上表的目录取交集,
+# 再按扩展名分流. 未暂存的文件不被检查、不被改写, 也不加入索引.
+# 全仓库检查另行执行 uv run ruff check . 等对应指令, 不在此处完成.
 #
 # 每个文件先做格式检查; 检查不通过时格式化该文件, 格式化仍失败则以 1 退出.
 # 全部检查通过后, 把本次被格式化的文件加入索引, 提交继续进行.
-# 格式化作用于检查范围内的全部已跟踪文件, 因此未在本次提交中暂存的文件也可能被改写并加入索引.
 #
 # 语言与工具:
 #   .py               uv run ruff format 与 uv run ruff check
@@ -27,7 +29,11 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 PY_CHECK_DIRS="pyremu tests tools"
 RS_CHECK_DIRS="pyremu/_native bsp/sittim"
-C_CHECK_DIRS="bsp/sittim bsp/kei-boot bsp/tee_aux_tools tests pyremu"
+C_CHECK_DIRS="bsp/sittim bsp/kei-boot bsp/tee-tools bsp/eval-suites tests/src-alg tests/src-env tests/src-rv8"
+
+PY_EXT_RE='\.py$'
+RS_EXT_RE='\.rs$'
+C_EXT_RE='\.(c|h|cc|cpp|hpp)$'
 
 TAB=$(printf '\t')
 
@@ -55,60 +61,71 @@ crate_edition() {
 	echo 2021
 }
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+# 从暂存路径中取出落在给定目录下、扩展名匹配且存在于工作区的文件.
+# $1 为以空格分隔的目录列表, $2 为扩展名的正则.
+staged_in() {
+	prefix=$(printf '%s' "$1" | tr ' ' '|')
+	printf '%s\n' "$STAGED" \
+		| grep -E "^($prefix)/" \
+		| grep -E "$2" \
+		| while IFS= read -r f; do
+			if [ -f "$f" ]; then
+				printf '%s\n' "$f"
+			fi
+		done
+}
+
+STAGED=$(git -c core.quotePath=false diff --cached --name-only \
+	--diff-filter=ACM)
 if [ -z "$STAGED" ]; then
 	exit 0
 fi
-
-PY_FILES=$(printf '%s\n' "$STAGED" | grep '\.py$')
-RS_FILES=$(printf '%s\n' "$STAGED" | grep '\.rs$')
-C_FILES=$(printf '%s\n' "$STAGED" | grep -E '\.(c|h|cc|cpp|hpp)$')
 
 WORK=$(mktemp -d) || exit 1
 trap 'rm -rf "$WORK"' EXIT
 FORMATTED="$WORK/formatted"
 : > "$FORMATTED"
 
-if [ -n "$PY_FILES" ]; then
+staged_in "$PY_CHECK_DIRS" "$PY_EXT_RE" > "$WORK/py_files"
+staged_in "$RS_CHECK_DIRS" "$RS_EXT_RE" > "$WORK/rs_files"
+staged_in "$C_CHECK_DIRS" "$C_EXT_RE" > "$WORK/c_files"
+
+if [ -s "$WORK/py_files" ]; then
 	require_tool uv
-	git ls-files $PY_CHECK_DIRS | grep '\.py$' | while IFS= read -r f; do
-		if [ -f "$f" ]; then
-			printf '%s\n' "$f"
-		fi
-	done > "$WORK/py_all"
-	echo "==> ruff check (pyremu/ tests/ tools/) ..."
-	if ! xargs -r uv run ruff check < "$WORK/py_all"; then
+	echo "==> ruff check..."
+	if ! xargs -r -d '\n' uv run ruff check < "$WORK/py_files"; then
 		echo ""
 		echo "ruff check failed. Fix errors above, then:"
 		echo "  uv run ruff check --fix  $PY_CHECK_DIRS"
 		exit 1
 	fi
-	echo "==> ruff format (pyremu/ tests/ tools/) ..."
-	if ! xargs -r uv run ruff format --check < "$WORK/py_all" >/dev/null 2>&1; then
-		git hash-object --stdin-paths < "$WORK/py_all" > "$WORK/py_before" || exit 1
-		if ! xargs -r uv run ruff format < "$WORK/py_all"; then
+	echo "==> ruff format..."
+	if ! xargs -r -d '\n' uv run ruff format --check \
+		< "$WORK/py_files" >/dev/null 2>&1; then
+		git hash-object --stdin-paths < "$WORK/py_files" \
+			> "$WORK/py_before" || exit 1
+		if ! xargs -r -d '\n' uv run ruff format < "$WORK/py_files"; then
 			echo "ruff format failed." >&2
 			exit 1
 		fi
-		git hash-object --stdin-paths < "$WORK/py_all" > "$WORK/py_after" || exit 1
-		paste -d "$TAB" "$WORK/py_all" "$WORK/py_before" "$WORK/py_after" \
+		git hash-object --stdin-paths < "$WORK/py_files" \
+			> "$WORK/py_after" || exit 1
+		paste -d "$TAB" "$WORK/py_files" "$WORK/py_before" "$WORK/py_after" \
 			| awk -F "$TAB" '$2 != $3 { print $1 }' >> "$FORMATTED"
-		if ! xargs -r uv run ruff format --check < "$WORK/py_all" >/dev/null 2>&1; then
+		if ! xargs -r -d '\n' uv run ruff format --check \
+			< "$WORK/py_files" >/dev/null 2>&1; then
 			echo "ruff format left files unformatted:" >&2
-			xargs -r uv run ruff format --check < "$WORK/py_all" >&2
+			xargs -r -d '\n' uv run ruff format --check \
+				< "$WORK/py_files" >&2
 			exit 1
 		fi
 	fi
 fi
 
-if [ -n "$RS_FILES" ]; then
+if [ -s "$WORK/rs_files" ]; then
 	require_tool rustfmt
-	git ls-files $RS_CHECK_DIRS | grep '\.rs$' > "$WORK/rs_all"
-	echo "==> rustfmt (pyremu/_native/ bsp/sittim/) ..."
+	echo "==> rustfmt..."
 	while IFS= read -r f; do
-		if [ ! -f "$f" ]; then
-			continue
-		fi
 		edition=$(crate_edition "$f")
 		if rustfmt --check --config skip_children=true --edition "$edition" "$f" \
 			>/dev/null 2>&1; then
@@ -120,17 +137,13 @@ if [ -n "$RS_FILES" ]; then
 			exit 1
 		fi
 		printf '%s\n' "$f" >> "$FORMATTED"
-	done < "$WORK/rs_all"
+	done < "$WORK/rs_files"
 fi
 
-if [ -n "$C_FILES" ]; then
+if [ -s "$WORK/c_files" ]; then
 	require_tool clang-format
-	git ls-files $C_CHECK_DIRS | grep -E '\.(c|h|cc|cpp|hpp)$' > "$WORK/c_all"
-	echo "==> clang-format (bsp/sittim bsp/kei-boot bsp/tee_aux_tools tests/ pyremu/) ..."
+	echo "==> clang-format..."
 	while IFS= read -r f; do
-		if [ ! -f "$f" ]; then
-			continue
-		fi
 		if clang-format --dry-run --Werror "$f" >/dev/null 2>&1; then
 			continue
 		fi
@@ -140,7 +153,7 @@ if [ -n "$C_FILES" ]; then
 			exit 1
 		fi
 		printf '%s\n' "$f" >> "$FORMATTED"
-	done < "$WORK/c_all"
+	done < "$WORK/c_files"
 fi
 
 if [ -s "$FORMATTED" ]; then

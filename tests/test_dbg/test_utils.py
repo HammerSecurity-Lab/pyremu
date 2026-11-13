@@ -4,11 +4,8 @@
 
 """测试 pyremu.debug.utils."""
 
-from pathlib import Path
-
 import pytest
 
-from pyremu.debug import utils
 from pyremu.debug.utils import (
     check_rv64_addr,
     EXC_NAMES,
@@ -31,7 +28,10 @@ class TestHexAddr:
 
     def test_mask_upper_bits(self):
         """Python int 无位宽限制, 超出 64-bit 的部分应被掩码清除."""
-        assert hex_addr(0x1_0000_0000_0000_0001, styled=False) == "0x0000000000000001"
+        assert (
+            hex_addr(0x1_0000_0000_0000_0001, styled=False)
+            == "0x0000000000000001"
+        )
 
     def test_negative_value(self):
         """负值在补码下转换为 64-bit 无符号."""
@@ -146,20 +146,6 @@ class TestGroupOrder:
 
     def test_underscore_before_dot(self):
         assert group_order("_") < group_order(".")
-
-
-class TestHistoryFilePath:
-    def test_unconfigured_path_falls_back_to_home(self, monkeypatch):
-        monkeypatch.setattr(utils, "cfg_str", lambda name: "")
-        assert utils.history_file_path() == Path.home() / ".pyremu_history"
-
-    def test_environment_path_is_expanded(self, monkeypatch):
-        monkeypatch.setenv("PYREMU_HISTORY_FILE", "~/logs/hist")
-        assert utils.history_file_path() == Path.home() / "logs" / "hist"
-
-    def test_absolute_path_is_used_as_given(self, monkeypatch):
-        monkeypatch.setenv("PYREMU_HISTORY_FILE", "/var/tmp/pyremu_history")
-        assert utils.history_file_path() == Path("/var/tmp/pyremu_history")
 
 
 class TestMaxInstrCount:

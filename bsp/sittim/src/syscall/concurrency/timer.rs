@@ -56,7 +56,7 @@ static mut TIMERS: [Timer; NUM_TIMERS] = [Timer::free(); NUM_TIMERS];
 ///
 /// 换算按 `nsec * TIMER_FREQ / 10^9` 向上取整计算, 乘积取 128 位中间量。
 pub fn nsec_to_ticks(nsec: u64) -> u64 {
-	let ticks = (nsec as u128 * TIMER_FREQ as u128).div_ceil(1_000_000_000);
+	let ticks = ((nsec as u128) * (TIMER_FREQ as u128)).div_ceil(1_000_000_000);
 	ticks.min(u64::MAX as u128) as u64
 }
 
@@ -78,7 +78,7 @@ pub fn reset(thread_id: usize) {
 	}
 }
 
-/// 线程 *thread_id* 是否已登记等待定时器。
+/// 线程thread_id是否已登记等待定时器。
 ///
 /// 发起等待的系统调用据此判定本次进入是否需要按参数登记定时器: 已登记时沿用表中的
 /// 截止时刻, 不重新计一段完整的时长。
@@ -86,7 +86,7 @@ pub fn has_wait_timer(thread_id: usize) -> bool {
 	unsafe { TIMERS[thread_id].state != TimerState::Free }
 }
 
-/// 线程 *thread_id* 的等待是否已到时。
+/// 线程thread_id的等待是否已到时。
 ///
 /// 两种情形都算到时: 定时器中断已把条目改为已到期, 或截止时刻已过而中断尚未送达 ——
 /// 后者在等待时长短于一个计数单位时出现, 如等待时长为 0。
@@ -101,12 +101,10 @@ pub fn is_expired(thread_id: usize) -> bool {
 }
 
 /// 表中最早的尚未到期时刻; 表中无此类定时器时返回 None。
-///
-/// 定时器中断据此设定 stimecmp: 取该时刻与下一个时间片边界中的较早者。
 pub fn next_deadline() -> Option<u64> {
-	unsafe {
-		let mut earliest: Option<u64> = None;
-		for i in 0..NUM_TIMERS {
+	let mut earliest: Option<u64> = None;
+	for i in 0..NUM_TIMERS {
+		unsafe {
 			if TIMERS[i].state != TimerState::Waiting {
 				continue;
 			}
@@ -116,8 +114,8 @@ pub fn next_deadline() -> Option<u64> {
 				_ => Some(deadline),
 			};
 		}
-		earliest
 	}
+	earliest
 }
 
 /// 把一个截止时刻不晚于 *now* 的条目由等待中改为已到期, 返回其所属线程的标识;
@@ -126,23 +124,25 @@ pub fn next_deadline() -> Option<u64> {
 /// 供定时器中断处理函数循环调用: 每取得一个即唤醒其所属线程。条目保留在表内, 由所属
 /// 系统调用取回结果时经 [reset] 复位。
 pub fn elapse_due(now: u64) -> Option<usize> {
-	unsafe {
-		for i in 0..NUM_TIMERS {
+	for i in 0..NUM_TIMERS {
+		unsafe {
 			if TIMERS[i].state == TimerState::Waiting && now >= TIMERS[i].deadline {
 				TIMERS[i].state = TimerState::Elapsed;
 				return Some(i);
 			}
 		}
-		None
 	}
+	None
 }
 
 #[cfg(test)]
 pub mod tests {
 	use super::*;
 
+	/// 一个计数单位的时长, 向下取整到纳秒。
+	const TICK_NS: u64 = 1_000_000_000 / TIMER_FREQ;
+
 	/// 清空定时器表。表与时钟源读数都由用例共用, 故调用方须先取时钟源锁
-	/// (crate::csr::clock_lock)。
 	pub fn reset_table() {
 		unsafe {
 			TIMERS = [Timer::free(); NUM_TIMERS];
@@ -156,9 +156,6 @@ pub mod tests {
 		reset_table();
 		guard
 	}
-
-	/// 一个计数单位的时长, 向下取整到纳秒。
-	const TICK_NS: u64 = 1_000_000_000 / TIMER_FREQ;
 
 	/// 等待时长的换算: 不足一个计数单位的时长按一个计数单位计。
 	#[test]

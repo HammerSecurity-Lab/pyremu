@@ -6,14 +6,20 @@
 """设备树节点的读写 — 在 pyfdt 的节点树上读取与改写属性, 编解码 32 位单元格.
 
 节点与属性的查找按名称进行; 改写属性的过程中节点的位置与其余属性保持不变.
-单元格是设备树中地址与大小的编码单位, 每格 32 位, 高位在前的格子序列表示一个取值.
+单元格是设备树中地址与大小的编码单位, 每格 32 位,
+高位在前的格子序列表示一个取值.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
-from pyfdt.pyfdt import FdtNode, FdtProperty, FdtPropertyStrings, FdtPropertyWords
+from pyfdt.pyfdt import (
+    FdtNode,
+    FdtProperty,
+    FdtPropertyStrings,
+    FdtPropertyWords,
+)
 
 # 规范对未声明 #address-cells 与 #size-cells 的节点的缺省取值.
 DEFAULT_ADDR_CELLS = 2
@@ -156,7 +162,10 @@ def encode_cells(
     """按 cells 个 32 位单元格编码 value, 高位在前."""
     if cells_for(value) > cells:
         raise ValueError(f"取值 0x{value:x} 超出 {cells} 个单元格的可表示范围")
-    return [(value >> (32 * (cells - 1 - index))) & 0xFFFFFFFF for index in range(cells)]
+    return [
+        (value >> (32 * (cells - 1 - index))) & 0xFFFFFFFF
+        for index in range(cells)
+    ]
 
 
 def decode_cells(

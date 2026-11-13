@@ -50,9 +50,8 @@ class Opc(Enum):
     sys = 0b11100_11  # ecall/ebreak/sfence.vma / CSR
 
 
-# ============================================================
 #  Funct3 / Funct7 enumerations
-# ============================================================
+
 
 AluOp = Enum(
     "AluOp",
@@ -173,9 +172,8 @@ AMOW_MAP: dict[int, AmoWidth] = {
     for v in AmoWidth  # type: ignore[var-annotated]
 }
 
-# ============================================================
+
 #  Instruction-field extractors
-# ============================================================
 
 
 def parse_opcode(x: int) -> int:
@@ -266,7 +264,8 @@ def decode_c_sdsp(half: int) -> tuple[int, int] | None:
         bits[12:10] = uimm[5:3]
         bits[9:7]   = uimm[8:6]
         bits[15:13] = 111 (funct3)
-    The uimm is assembled from {bits[9:7], bits[12:10]} << 3, i.e. 8-byte aligned.
+    The uimm is assembled from {bits[9:7], bits[12:10]} << 3,
+    i.e. 8-byte aligned.
     """
     if (half & 0xE003) != 0xE002:  # bits[15:13]=111, bits[1:0]=10
         return None
@@ -313,9 +312,7 @@ def _fmt_addr(val: int) -> str:
     return f"0x{mask64(val):x}"
 
 
-# ============================================================
 #  字段提取辅助
-# ============================================================
 
 
 def _rd(instr: int) -> str:
@@ -330,9 +327,8 @@ def _rs2(instr: int) -> str:
     return gpr_name(parse_rs2(instr))
 
 
-# ============================================================
 #  R-type 编码表 — funct3 -> (func7 -> mnemonic)
-# ============================================================
+
 
 _R_FUNCT3_MAP: dict[int, dict[int, str]] = {
     0b000: {0x00: "add", 0x01: "mul", 0x20: "sub"},
@@ -346,7 +342,13 @@ _R_FUNCT3_MAP: dict[int, dict[int, str]] = {
     },
     0b010: {0x00: "slt", 0x01: "mulhsu", 0x10: "sh1add"},
     0b011: {0x00: "sltu", 0x01: "mulhu"},
-    0b100: {0x00: "xor", 0x01: "div", 0x05: "min", 0x10: "sh2add", 0x20: "xnor"},
+    0b100: {
+        0x00: "xor",
+        0x01: "div",
+        0x05: "min",
+        0x10: "sh2add",
+        0x20: "xnor",
+    },
     0b101: {
         0x00: "srl",
         0x01: "divu",
@@ -370,9 +372,8 @@ def _dis_rtype(instr: int) -> str:
     return f"{mnemonic:<12} {_rd(instr)}, {_rs1(instr)}, {_rs2(instr)}"
 
 
-# ============================================================
 #  I-type ALU (op_imm)
-# ============================================================
+
 
 _IMM_FUNCT3_MAP: dict[int, str] = {
     0b000: "addi",
@@ -455,7 +456,13 @@ def _dis_shift_imm_sll(f6: int, shamt: int, rd: str, rs1: str) -> str:
     return f"{mnemonic:<12} {rd}, {rs1}, {shamt}"
 
 
-def _dis_shift_imm_srl(instr: int, f6: int, shamt: int, rd: str, rs1: str) -> str:
+def _dis_shift_imm_srl(
+    instr: int,
+    f6: int,
+    shamt: int,
+    rd: str,
+    rs1: str,
+) -> str:
     """funct3=101: SRLI、SRAI、RORI、BEXTI、ORC.B 与 REV8."""
     fixed = _SHIFT_IMM_FIXED.get(f6)
     if fixed is not None:
@@ -469,9 +476,8 @@ def _dis_shift_imm_srl(instr: int, f6: int, shamt: int, rd: str, rs1: str) -> st
     return f"{mnemonic:<12} {rd}, {rs1}, {shamt}"
 
 
-# ============================================================
 #  RV64 32-bit ops (op32)
-# ============================================================
+
 
 _OP32_FUNCT3_MAP: dict[int, dict[int, str]] = {
     0b000: {0x00: "addw", 0x01: "mulw", 0x04: "add.uw", 0x20: "subw"},
@@ -504,7 +510,8 @@ _ZBB_UNARY_IMM32: dict[int, str] = {
 
 
 def _dis_op_imm32(instr: int) -> str:
-    """RV64 32-bit I-type: ADDIW / SLLIW / SRLIW / SRAIW 与 Zba、Zbb 的立即数形式."""
+    """RV64 32-bit I-type: ADDIW / SLLIW / SRLIW / SRAIW
+    与 Zba、Zbb 的立即数形式."""
     f3 = parse_func3(instr)
     f7 = parse_func7(instr)
     rd, rs1 = _rd(instr), _rs1(instr)
@@ -538,9 +545,8 @@ def _dis_op_imm32_sll(instr: int, f7: int, rd: str, rs1: str) -> str:
     return _UNKNOWN
 
 
-# ============================================================
 #  Load / Store
-# ============================================================
+
 
 _LD_MNEMONIC: dict[int, str] = {
     0b000: "lb",
@@ -574,9 +580,7 @@ def _dis_store(instr: int) -> str:
     return f"{mnemonic:<12} {_rs2(instr)}, {_fmt_imm(offset)}({_rs1(instr)})"
 
 
-# ============================================================
 #  Branch
-# ============================================================
 
 
 def _dis_branch(instr: int, pc: int) -> str:
@@ -591,9 +595,7 @@ def _dis_branch(instr: int, pc: int) -> str:
     return f"{mnemonic:<12} {_rs1(instr)}, {_rs2(instr)}, {_fmt_addr(target)}"
 
 
-# ============================================================
 #  JAL / JALR
-# ============================================================
 
 
 def _dis_jal(instr: int, pc: int) -> str:
@@ -609,9 +611,7 @@ def _dis_jalr(instr: int) -> str:
     return f"jalr         {_rd(instr)}, {_fmt_imm(offset)}({_rs1(instr)})"
 
 
-# ============================================================
 #  LUI / AUIPC
-# ============================================================
 
 
 def _dis_lui(instr: int) -> str:
@@ -677,9 +677,7 @@ def _dis_priv(instr: int) -> str:
     return mnemonic
 
 
-# ============================================================
 #  FENCE
-# ============================================================
 
 
 def _dis_fence(instr: int) -> str:
@@ -691,9 +689,7 @@ def _dis_fence(instr: int) -> str:
     return _UNKNOWN
 
 
-# ============================================================
 #  AMO
-# ============================================================
 
 
 def _dis_amo(instr: int) -> str:
@@ -715,9 +711,8 @@ def _dis_amo(instr: int) -> str:
     return f"{mnemonic:<12} {_rd(instr)}, {_rs2(instr)}, ({_rs1(instr)})"
 
 
-# ============================================================
 #  压缩指令 (C extension) 反汇编
-# ============================================================
+
 # 寄存器: x8-x15 使用 3-bit 缩写索引 rd′/rs1′/rs2′.
 
 
@@ -773,7 +768,11 @@ def _c0_fld(c16: int) -> str:
 
 
 def _c0_lw(c16: int) -> str:
-    uimm = ((c16 >> 5) & 1) << 6 | ((c16 >> 10) & 0b111) << 3 | ((c16 >> 6) & 1) << 2
+    uimm = (
+        ((c16 >> 5) & 1) << 6
+        | ((c16 >> 10) & 0b111) << 3
+        | ((c16 >> 6) & 1) << 2
+    )
     return f"c.lw         {_c_x8(c16 >> 2)}, {uimm}({_c_x8(c16 >> 7)})"
 
 
@@ -789,7 +788,11 @@ def _c0_fsd(c16: int) -> str:
 
 
 def _c0_sw(c16: int) -> str:
-    uimm = ((c16 >> 5) & 1) << 6 | ((c16 >> 10) & 0b111) << 3 | ((c16 >> 6) & 1) << 2
+    uimm = (
+        ((c16 >> 5) & 1) << 6
+        | ((c16 >> 10) & 0b111) << 3
+        | ((c16 >> 6) & 1) << 2
+    )
     return f"c.sw         {_c_x8(c16 >> 2)}, {uimm}({_c_x8(c16 >> 7)})"
 
 
@@ -947,7 +950,8 @@ _C1_HANDLERS: dict[int, Callable[[int, int], str]] = {
 
 
 def _dis_c1(c16: int, pc: int) -> str:
-    """象限 1: C.NOP / C.ADDI / C.ADDIW / C.LI / C.LUI / C.ADDI16SP / 移位与分支."""
+    """象限 1: C.NOP / C.ADDI / C.ADDIW / C.LI / C.LUI / C.ADDI16SP /
+    移位与分支."""
     handler = _C1_HANDLERS.get((c16 >> 13) & 0b111)
     if handler is None:
         return _c_unknown(c16)
@@ -964,14 +968,22 @@ def _c2_slli(c16: int, pc: int) -> str:
 
 
 def _c2_fldsp(c16: int, pc: int) -> str:
-    uimm = ((c16 >> 2) & 0b111) << 6 | ((c16 >> 12) & 1) << 5 | ((c16 >> 5) & 0b11) << 3
+    uimm = (
+        ((c16 >> 2) & 0b111) << 6
+        | ((c16 >> 12) & 1) << 5
+        | ((c16 >> 5) & 0b11) << 3
+    )
     # rd=0 -> ft0, valid FP destination (unlike GPR loads where x0 is reserved)
     return f"c.fldsp      f{(c16 >> 7) & 0x1F}, {uimm}(sp)"
 
 
 def _c2_lwsp(c16: int, pc: int) -> str:
     # offset = {inst[6:5], inst[12], inst[4:2], 00} (4 字节对齐)
-    uimm = ((c16 >> 5) & 0b11) << 6 | ((c16 >> 12) & 1) << 5 | ((c16 >> 2) & 0b111) << 2
+    uimm = (
+        ((c16 >> 5) & 0b11) << 6
+        | ((c16 >> 12) & 1) << 5
+        | ((c16 >> 2) & 0b111) << 2
+    )
     rd_raw = (c16 >> 7) & 0x1F
     if rd_raw == 0:
         return f"c.?    0x{c16:04x}  # C.LWSP rd=0 (reserved)"
@@ -980,7 +992,11 @@ def _c2_lwsp(c16: int, pc: int) -> str:
 
 def _c2_ldsp(c16: int, pc: int) -> str:
     # offset = {inst[4:2], inst[12], inst[6:5], 000} (8 字节对齐)
-    uimm = ((c16 >> 2) & 0b111) << 6 | ((c16 >> 12) & 1) << 5 | ((c16 >> 5) & 0b11) << 3
+    uimm = (
+        ((c16 >> 2) & 0b111) << 6
+        | ((c16 >> 12) & 1) << 5
+        | ((c16 >> 5) & 0b11) << 3
+    )
     rd_raw = (c16 >> 7) & 0x1F
     if rd_raw == 0:
         return f"c.?    0x{c16:04x}  # C.LDSP rd=0 (reserved)"
@@ -995,7 +1011,11 @@ def _c2_misc(c16: int, pc: int) -> str:
         return "c.ebreak" if rs2_raw == 0 else _c_unknown(c16)
     rd_name = gpr_name(rd_raw)
     if rs2_raw == 0:  # bit12 区分 C.JR 与 C.JALR
-        return f"c.jalr       {rd_name}" if c16 & 0x1000 else f"c.jr         {rd_name}"
+        return (
+            f"c.jalr       {rd_name}"
+            if c16 & 0x1000
+            else f"c.jr         {rd_name}"
+        )
     rs2_name = gpr_name(rs2_raw)
     if c16 & 0x1000:  # bit12 区分 C.MV 与 C.ADD
         return f"c.add        {rd_name}, {rs2_name}"
@@ -1039,9 +1059,8 @@ def _dis_c2(c16: int, pc: int) -> str:
     return handler(c16, pc)
 
 
-# ============================================================
 #  F/D floating-point disassembly
-# ============================================================
+
 
 _FP_LOAD_MNEMONIC = {0b010: "flw", 0b011: "fld"}
 _FP_STORE_MNEMONIC = {0b010: "fsw", 0b011: "fsd"}
@@ -1072,7 +1091,9 @@ def _dis_fp_load(instr: int) -> str:
     if m is None:
         return _UNKNOWN
     off = parse_imm12_se(instr)
-    return f"{m:<12} {_fpr_name(parse_rd(instr))}, {_fmt_imm(off)}({_rs1(instr)})"
+    return (
+        f"{m:<12} {_fpr_name(parse_rd(instr))}, {_fmt_imm(off)}({_rs1(instr)})"
+    )
 
 
 def _dis_fp_store(instr: int) -> str:
@@ -1081,7 +1102,9 @@ def _dis_fp_store(instr: int) -> str:
     if m is None:
         return _UNKNOWN
     off = parse_imm_s(instr)
-    return f"{m:<12} {_fpr_name(parse_rs2(instr))}, {_fmt_imm(off)}({_rs1(instr)})"
+    return (
+        f"{m:<12} {_fpr_name(parse_rs2(instr))}, {_fmt_imm(off)}({_rs1(instr)})"
+    )
 
 
 def _dis_fp_fma(instr: int) -> str:
@@ -1139,7 +1162,9 @@ def _fp_cmp(instr: int) -> str:
     funct7 = parse_func7(instr)
     m = _FP_CMP.get(parse_func3(instr), "fcmp?")
     _, frs1, frs2 = _fp_operands(instr)
-    return f"{m + '.' + _fsuffix(funct7 & 0x3):<12} {_rd(instr)}, {frs1}, {frs2}"
+    return (
+        f"{m + '.' + _fsuffix(funct7 & 0x3):<12} {_rd(instr)}, {frs1}, {frs2}"
+    )
 
 
 def _fp_cvt_f2i(instr: int) -> str:
@@ -1147,7 +1172,9 @@ def _fp_cvt_f2i(instr: int) -> str:
     funct7 = parse_func7(instr)
     w = {0: "w", 1: "wu", 2: "l", 3: "lu"}.get(parse_rs2(instr), "?")
     frs1 = _fpr_name(parse_rs1(instr))
-    return f"{'fcvt.' + w + '.' + _fsuffix(funct7 & 0x3):<12} {_rd(instr)}, {frs1}"
+    return (
+        f"{'fcvt.' + w + '.' + _fsuffix(funct7 & 0x3):<12} {_rd(instr)}, {frs1}"
+    )
 
 
 def _fp_cvt_i2f(instr: int) -> str:
@@ -1155,7 +1182,9 @@ def _fp_cvt_i2f(instr: int) -> str:
     funct7 = parse_func7(instr)
     w = {0: "w", 1: "wu", 2: "l", 3: "lu"}.get(parse_rs2(instr), "?")
     frd = _fpr_name(parse_rd(instr))
-    return f"{'fcvt.' + _fsuffix(funct7 & 0x3) + '.' + w:<12} {frd}, {_rs1(instr)}"
+    return (
+        f"{'fcvt.' + _fsuffix(funct7 & 0x3) + '.' + w:<12} {frd}, {_rs1(instr)}"
+    )
 
 
 def _fp_cvt_sd(instr: int) -> str:
@@ -1208,9 +1237,7 @@ def _dis_fp_op(instr: int) -> str:
     return handler(instr)
 
 
-# ============================================================
 #  主入口
-# ============================================================
 
 
 _DISASM_HANDLERS: dict[Opc, Callable[[int], str]] = {
@@ -1267,10 +1294,16 @@ def disasm(
         opc = Opc(parse_opcode(instr))
     except ValueError:
         # op_imm32 (0b00110_11) 不在 Opc enum 中, 单独处理
-        return _dis_op_imm32(instr) if parse_opcode(instr) == 0b00110_11 else _UNKNOWN
+        return (
+            _dis_op_imm32(instr)
+            if parse_opcode(instr) == 0b00110_11
+            else _UNKNOWN
+        )
 
     if opc == Opc.sys:
-        return _dis_priv(instr) if parse_func3(instr) == 0b000 else _dis_csr(instr)
+        return (
+            _dis_priv(instr) if parse_func3(instr) == 0b000 else _dis_csr(instr)
+        )
     pc_handler = _DISASM_PC_HANDLERS.get(opc)
     if pc_handler is not None:
         return pc_handler(instr, pc)

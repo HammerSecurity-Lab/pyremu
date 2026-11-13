@@ -16,7 +16,12 @@ import struct
 from typing import BinaryIO
 
 from pyremu.disk.base import DiskFormatError, DiskRegion, DiskSummary
-from pyremu.utils.str_aux import bytes_to_utf8, flag_names, join_names, uuid_text
+from pyremu.utils.str_aux import (
+    bytes_to_utf8,
+    flag_names,
+    join_names,
+    uuid_text,
+)
 
 FORMAT_NAME = "ext4"
 
@@ -133,7 +138,10 @@ class Ext4Superblock:
     def group_count(self) -> int:
         """块组数: 首数据块之外的块按每块组的块数向上取整."""
         span = self.blocks_count - self.first_data_block
-        return max(1, (span + self.blocks_per_group - 1) // self.blocks_per_group)
+        return max(
+            1,
+            (span + self.blocks_per_group - 1) // self.blocks_per_group,
+        )
 
     @property
     def descriptor_table_offset(self) -> int:
@@ -181,7 +189,10 @@ class Ext4Superblock:
             ("每块组块数", f"{self.blocks_per_group:,}"),
             ("每块组 inode 数", f"{self.inodes_per_group:,}"),
             ("inode 大小", f"{self.inode_size} B"),
-            ("inode 数", f"{self.inodes_count:,} (空闲 {self.free_inodes_count:,})"),
+            (
+                "inode 数",
+                f"{self.inodes_count:,} (空闲 {self.free_inodes_count:,})",
+            ),
             ("最后挂载点", self.last_mounted or "-"),
             ("compat 特性", join_names(self.compat_names)),
             ("incompat 特性", join_names(self.incompat_names)),
@@ -210,7 +221,8 @@ def probe(path: str | Path) -> Ext4Superblock | None:
     """读取超级块并判定格式; 映像不足一个超级块或魔数不符时返回 None.
 
     Raises:
-        DiskFormatError: 块大小指数超出范围, 几何参数自相矛盾, 或使用 meta_bg 布局.
+        DiskFormatError: 块大小指数超出范围, 几何参数自相矛盾,
+            或使用 meta_bg 布局.
     """
     with Path(path).open("rb") as fp:
         raw = _read_superblock(fp)
@@ -227,7 +239,10 @@ def read_groups(path: str | Path, sb: Ext4Superblock) -> list[Ext4Group]:
     """
     with Path(path).open("rb") as fp:
         raw = _read_superblock(fp)
-        if raw is None or struct.unpack_from("<H", raw, MAGIC_OFFSET)[0] != MAGIC:
+        if (
+            raw is None
+            or struct.unpack_from("<H", raw, MAGIC_OFFSET)[0] != MAGIC
+        ):
             raise DiskFormatError("超级块魔数不符")
         table_offset = sb.descriptor_table_offset
         table_size = sb.desc_size * sb.group_count
@@ -312,7 +327,11 @@ def _parse_superblock(raw: bytes) -> Ext4Superblock:
     )
 
 
-def _parse_group_descriptor(desc: bytes, sb: Ext4Superblock, index: int) -> Ext4Group:
+def _parse_group_descriptor(
+    desc: bytes,
+    sb: Ext4Superblock,
+    index: int,
+) -> Ext4Group:
     """解析第 *index* 个块组描述符."""
     first_block = sb.first_data_block + index * sb.blocks_per_group
     free_blocks = struct.unpack_from("<H", desc, 0x0C)[0]

@@ -24,6 +24,7 @@ from pyremu.memory.mmu import (
     SATP_MODE_SV39,
     sv39_decompose_va,
     sv39_vpn,
+    sv39_walk,
     translate_va,
 )
 from tests.conftest import make_test_ram
@@ -173,7 +174,8 @@ class TestPTELeafDetection:
         assert not pte.is_ptr()
 
     def test_w_only_is_not_leaf(self):
-        """仅 W 置位 (无 R 也无 X): 按规范 W 单独不应是叶 (RISC-V 不允许 write-only)."""
+        """仅 W 置位 (无 R 也无 X): 按规范 W 单独不应是叶
+        (RISC-V 不允许 write-only)."""
         pte = PTE()
         pte.v = True
         pte.w = True
@@ -202,7 +204,9 @@ class TestPTECheckPerm:
         return pte
 
     def test_user_access_allowed(self, user_pte):
-        assert user_pte.check_perm(want_r=True, want_w=False, want_x=False, is_user=True)
+        assert user_pte.check_perm(
+            want_r=True, want_w=False, want_x=False, is_user=True
+        )
 
     def test_user_access_denied_without_u(self, supervisor_pte):
         assert not supervisor_pte.check_perm(
@@ -216,14 +220,20 @@ class TestPTECheckPerm:
 
     def test_write_denied_without_w(self, user_pte):
         user_pte.w = False
-        assert not user_pte.check_perm(want_r=True, want_w=True, want_x=False, is_user=False)
+        assert not user_pte.check_perm(
+            want_r=True, want_w=True, want_x=False, is_user=False
+        )
 
     def test_execute_denied_without_x(self, user_pte):
-        assert not user_pte.check_perm(want_r=False, want_w=False, want_x=True, is_user=False)
+        assert not user_pte.check_perm(
+            want_r=False, want_w=False, want_x=True, is_user=False
+        )
 
     def test_invalid_pte_denies_all(self):
         pte = PTE()  # v=0
-        assert not pte.check_perm(want_r=True, want_w=False, want_x=False, is_user=False)
+        assert not pte.check_perm(
+            want_r=True, want_w=False, want_x=False, is_user=False
+        )
 
 
 # ============================================================
@@ -365,7 +375,8 @@ class TestSv39Walk:
     def test_megapage_ppn_mask_regression(self, ram_ctx):
         """回归: Python ~0x1FF 产生负无穷精度整数, 导致 PPN 掩码异常.
 
-        2026-06-30: ``ppn & ∼0x3FF`` -> ``ppn & 0xFFFF_FFFF_FFFF_FC00`` (显式截断 64-bit).
+        2026-06-30: ``ppn & ∼0x3FF`` ->
+        ``ppn & 0xFFFF_FFFF_FFFF_FC00`` (显式截断 64-bit).
         2026-07-02: 掩码从 10-bit (∼0x3FF) 修正为 9-bit (∼0x1FF):
           2 MiB 大页 offset 为 VA[20:0] (21 bits), vpn[0]=VA[20:12] (9 bits)
           仅替换 PPN[8:0]; PPN[9] 为物理地址有效位, 不应清零.
@@ -429,8 +440,65 @@ class TestSv39Walk:
         assert pa == expected_pa, f"PA=0x{pa:x}, expected=0x{expected_pa:x}"
         old_buggy_pa = ((mega_ppn & 0xFFFFFFFFFFFC00) | 0x1) << 12 | 0x4C
         assert pa != old_buggy_pa, (
-            f"掩码仍然错用 10-bit (~0x3FF)! PA=0x{pa:x} 不应等于旧值 0x{old_buggy_pa:x}"
+            f"掩码仍然错用 10-bit (~0x3FF)! PA=0x{pa:x}"
+            f" 不应等于旧值 0x{old_buggy_pa:x}"
         )
+
+    ROOT_PPN = 1
+    GIGA_LEAF_PPN = 0x80000
+
+    def _write_1gib_root_leaf(self, write_fn, va: int):
+        """在根页表写入覆盖 *va* 的 1 GiB 身份映射叶子项."""
+        root_pte = PTE()
+        root_pte.v = True
+        root_pte.r = True
+        root_pte.w = True
+        root_pte.x = True
+        root_pte.ppn = self.GIGA_LEAF_PPN
+        idx = (va >> 30) & 0x1FF
+        write_fn(
+            (1 << PAGE_SHIFT) + idx * 8,
+            root_pte.to_int().to_bytes(8, "little"),
+        )
+
+    def _assert_1gib_translation(self, read_fn):
+        """校验 1 GiB 页的页号合成与物理地址."""
+        va = 0x8000_1234
+        ok, ppn, perm, page_size = sv39_walk(self.ROOT_PPN, va, read_fn)
+        assert ok, "根页表的叶子项应作为 1 GiB 页翻译"
+        assert page_size == 1024 * 1024 * 1024
+        # PPN[17:0] 取 VA[29:12], 本例为 0x00001
+        assert ppn == 0x80001, f"PPN=0x{ppn:x}, 应为 0x80001"
+        assert perm == PTE_R | PTE_W | PTE_X
+
+        satp = (SATP_MODE_SV39 << 60) | self.ROOT_PPN
+        ok, pa, _ = translate_va(va, satp, read_fn)
+        assert ok, "经 translate_va 的 1 GiB 页翻译应成功"
+        assert pa == 0x8000_1234, f"PA=0x{pa:x}, 应为 0x8000_1234"
+        # 按 4 KiB 页处理时 vpn0 被丢弃, 得到不同的物理地址
+        assert pa != 0x8000_0234, "1 GiB 页的 vpn0 必须参与合成"
+
+        # 同一 1 GiB 页内 vpn1 非零的地址
+        ok, pa_hi, _ = translate_va(0x8020_1234, satp, read_fn)
+        assert ok
+        assert pa_hi == 0x8020_1234, f"PA=0x{pa_hi:x}, 应为 0x8020_1234"
+
+    def test_root_leaf_is_1gib_page(self, ram_ctx):
+        """根页表的叶子项对应 1 GiB 页, 其 PPN[17:0] 取自 VA[29:12].
+
+        修复前根页表项只接受指向下一级的指针, 带 R 或 X 的根页表项被判为无效,
+        受调试程序在 satp 生效后的首次取指投递 InstrPageFault.
+        """
+        _, read_fn, write_fn = ram_ctx
+        self._write_1gib_root_leaf(write_fn, 0x8000_1234)
+        self._assert_1gib_translation(read_fn)
+
+    def test_root_leaf_without_native_lib(self, ram_ctx, monkeypatch):
+        """加速执行库不可用时, 纯 Python 路径同样翻译 1 GiB 页."""
+        monkeypatch.setattr("pyremu.memory.mmu._NATIVE_MMU", False)
+        _, read_fn, write_fn = ram_ctx
+        self._write_1gib_root_leaf(write_fn, 0x8000_1234)
+        self._assert_1gib_translation(read_fn)
 
     def test_bare_mode(self, ram_ctx):
         """Bare 模式: VA 即 PA, 不做翻译."""
@@ -459,6 +527,107 @@ class TestSv39Walk:
         satp = (SATP_MODE_SV39 + 1) << 60  # 无效/未支持的模式
         ok, pa, _perm = translate_va(0x0, satp, read_fn)
         assert not ok
+
+
+# ============================================================
+#  A 位与 D 位置位
+# ============================================================
+
+
+class TestSv39AccessedDirty:
+    """页表遍历按访问类型置位 A 位与 D 位.
+
+    三级页表: 根页表 PPN=1, 二级 PPN=2, 三级 PPN=3, 叶子映射 PPN=0x40.
+    各级页表项初始不带 A 位与 D 位.
+    """
+
+    ROOT_PPN = 1
+    L1_PPN = 2
+    L2_PPN = 3
+    LEAF_PPN = 0x40
+    VA = 0x1000
+
+    # 各级页表项的物理地址
+    ROOT_PTE = 1 << PAGE_SHIFT
+    L1_PTE = 2 << PAGE_SHIFT
+    L2_PTE = (3 << PAGE_SHIFT) + ((VA >> 12) & 0x1FF) * 8
+
+    @pytest.fixture
+    def ram_ctx(self):
+        ram, read_fn, write_fn = make_test_ram()
+        put = lambda pa, raw: write_fn(pa, raw.to_bytes(8, "little"))
+        put(self.ROOT_PTE, (self.L1_PPN << 10) | PTE_V)
+        put(self.L1_PTE, (self.L2_PPN << 10) | PTE_V)
+        leaf = (self.LEAF_PPN << 10) | PTE_V | PTE_R | PTE_W
+        put(self.L2_PTE, leaf)
+        satp = (SATP_MODE_SV39 << 60) | self.ROOT_PPN
+        return satp, read_fn, write_fn
+
+    def _raw(self, read_fn, pa: int) -> int:
+        return int.from_bytes(read_fn(pa, 8), "little")
+
+    def test_read_sets_accessed_on_every_level(self, ram_ctx):
+        """读取访问在指针级与叶子级都置位 A 位, 不置位 D 位."""
+        satp, read_fn, write_fn = ram_ctx
+        ok, _pa, _perm = translate_va(self.VA, satp, read_fn, write_fn)
+        assert ok
+        for pa in (self.ROOT_PTE, self.L1_PTE, self.L2_PTE):
+            raw = self._raw(read_fn, pa)
+            assert raw & PTE_A, f"{pa:#x} 的页表项应置位 A 位"
+            assert not raw & PTE_D, f"读取访问不应置位 {pa:#x} 的 D 位"
+
+    def test_write_sets_dirty_on_leaf_only(self, ram_ctx):
+        """写访问在叶子级置位 A 位与 D 位, 指针级只置位 A 位."""
+        satp, read_fn, write_fn = ram_ctx
+        ok, _pa, _perm = translate_va(
+            self.VA, satp, read_fn, write_fn, is_write=True
+        )
+        assert ok
+        for pa in (self.ROOT_PTE, self.L1_PTE):
+            raw = self._raw(read_fn, pa)
+            assert raw & PTE_A
+            assert not raw & PTE_D, "指针级页表项不应置位 D 位"
+        leaf = self._raw(read_fn, self.L2_PTE)
+        assert leaf & PTE_A and leaf & PTE_D, "叶子页表项应同时置位 A 位与 D 位"
+
+    def test_without_writer_leaves_ad_clear(self, ram_ctx):
+        """不提供写回调时不置位 A 位与 D 位 (调试器的只读查询路径)."""
+        satp, read_fn, _write_fn = ram_ctx
+        ok, _pa, _perm = translate_va(self.VA, satp, read_fn, is_write=True)
+        assert ok
+        for pa in (self.ROOT_PTE, self.L1_PTE, self.L2_PTE):
+            raw = self._raw(read_fn, pa)
+            assert not raw & (PTE_A | PTE_D)
+
+    def test_existing_a_bit_not_rewritten(self, ram_ctx):
+        """A 位已置位的页表项不产生写入."""
+        satp, read_fn, write_fn = ram_ctx
+        for pa in (self.ROOT_PTE, self.L1_PTE, self.L2_PTE):
+            raw = self._raw(read_fn, pa) | PTE_A
+            write_fn(pa, raw.to_bytes(8, "little"))
+
+        written: list[tuple[int, bytes]] = []
+        ok, _pa, _perm = translate_va(
+            self.VA, satp, read_fn, lambda pa, data: written.append((pa, data))
+        )
+        assert ok
+        assert written == [], "A 位已置位时不应写入页表"
+
+    def test_megapage_leaf_gets_dirty_on_write(self, ram_ctx):
+        """2 MiB 叶子页在写访问时置位 A 位与 D 位."""
+        _ram, read_fn, write_fn = make_test_ram()
+        put = lambda pa, raw: write_fn(pa, raw.to_bytes(8, "little"))
+        put(self.ROOT_PTE, (self.L1_PPN << 10) | PTE_V)
+        megapage = (0x4000 << 10) | PTE_V | PTE_R | PTE_W
+        put(self.L1_PTE, megapage)
+        satp = (SATP_MODE_SV39 << 60) | self.ROOT_PPN
+
+        ok, _pa, _perm = translate_va(
+            self.VA, satp, read_fn, write_fn, is_write=True
+        )
+        assert ok
+        raw = self._raw(read_fn, self.L1_PTE)
+        assert raw & PTE_A and raw & PTE_D
 
 
 # ============================================================
@@ -518,7 +687,13 @@ class TestHartMMUIntegration:
     @staticmethod
     def _make_4kib_pte(flags: int, ppn: int) -> int:
         """构造 4 KiB 叶 PTE 值."""
-        return flags | PTE_V | PTE_A | PTE_D | TestHartMMUIntegration._encode_ppn(ppn)
+        return (
+            flags
+            | PTE_V
+            | PTE_A
+            | PTE_D
+            | TestHartMMUIntegration._encode_ppn(ppn)
+        )
 
     @staticmethod
     def _make_pointer_pte(next_ppn: int) -> int:
@@ -528,7 +703,13 @@ class TestHartMMUIntegration:
     @staticmethod
     def _make_2mib_megapage_pte(flags: int, ppn: int) -> int:
         """构造 2 MiB 大页 PTE, 其中 R 或 X 置位则为叶节点."""
-        return flags | PTE_V | PTE_A | PTE_D | TestHartMMUIntegration._encode_ppn(ppn)
+        return (
+            flags
+            | PTE_V
+            | PTE_A
+            | PTE_D
+            | TestHartMMUIntegration._encode_ppn(ppn)
+        )
 
     def _write_pte(self, hart: HartWithRegs, pa: int, value: int) -> None:
         """向物理地址写入一个 PTE (8 字节 LE)."""
@@ -550,7 +731,8 @@ class TestHartMMUIntegration:
         self._write_pte(hart, root_pa + 2 * 8, self._make_pointer_pte(l2_ppn))
         # VPN[1]=0 时二级页表[0] 指向三级页表
         self._write_pte(hart, l2_pa + 0 * 8, self._make_pointer_pte(l3_ppn))
-        # VPN[0]=0 时三级页表[0] 为叶, identity: VA=0x80000000 映射到 PA=0x80000000
+        # VPN[0]=0 时三级页表[0] 为叶, identity:
+        # VA=0x80000000 映射到 PA=0x80000000
         ram_ppn = self.RAM_BASE >> 12
         self._write_pte(
             hart,
@@ -724,7 +906,9 @@ class TestHartMMUIntegration:
         root_ppn = root_pa >> 12
 
         # 建一个页表但 M 模式不应走它
-        self._write_pte(hart, root_pa + 0 * 8, self._make_pointer_pte(0))  # 无效
+        self._write_pte(
+            hart, root_pa + 0 * 8, self._make_pointer_pte(0)
+        )  # 无效
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
         hart.mode = RiscvMode.M  # 切换到 M 模式

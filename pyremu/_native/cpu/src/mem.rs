@@ -4,15 +4,10 @@
 //! 后直接访问. 地址属于主存范围或 PIE 链接地址区间时完成拷贝并返回 1, 否则返回 0,
 //! 由调用方转回 Python 处理. 跨链接库调用之间不保留状态也不分配内存.
 
-// ============================================================
 //  辅助函数
-// ============================================================
 
-/// 按主存范围与 PIE 链接地址区间计算物理地址在 bytearray 内的偏移.
-/// 地址不属于任何一段范围时返回 `None`.
-/// 该入口对外公开, 供加速执行引擎的内联访存辅助函数调用.
 #[inline(always)]
-pub fn ram_offset_inline(
+pub fn ram_offset(
 	pa: u64,
 	size: u32,
 	ram_base: u64,
@@ -20,24 +15,14 @@ pub fn ram_offset_inline(
 	shadow_base: u64,
 	shadow_size: u64,
 ) -> Option<u64> {
-	ram_offset(pa, size, ram_base, ram_size, shadow_base, shadow_size)
-}
-
-#[inline(always)]
-fn ram_offset(
-	pa: u64,
-	size: u32,
-	ram_base: u64,
-	ram_size: u64,
-	shadow_base: u64,
-	shadow_size: u64,
-) -> Option<u64> {
-	// 调用方传入的 pa 可为任意 64 位值, 其中包含 Python 侧负数地址经 ctypes
-	// 转换得到的 2^64-1 一类取值. 若加法按模 2^64 计算, 范围判定会误判为
-	// 命中, 随后的拷贝越过 bytearray 造成越界访问.
+	/*
+		调用方传入的 pa 可为任意 64 位值, 其中包含 Python 侧负数地址经 ctypes
+		转换得到的 2^64-1 一类取值. 若加法按模 2^64 计算, 范围判定会误判为
+		命中, 随后的拷贝越过 bytearray 造成越界访问.
+	*/
 	let end = pa.checked_add(size as u64)?;
-	// 主存范围
 	if pa >= ram_base && end <= ram_base + ram_size {
+		// 主存范围
 		return Some(pa - ram_base);
 	}
 	// PIE 链接地址区间: 固件按低地址链接并加载到高地址, 该区间内的地址换算到主存内的偏移.
@@ -50,9 +35,7 @@ fn ram_offset(
 	None
 }
 
-// ============================================================
 //  公开接口
-// ============================================================
 
 /// 从物理地址 `pa` 读取 `size` 个字节到 `out_buf`.
 ///
@@ -112,9 +95,7 @@ pub extern "C" fn bus_write_ram(
 	1
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {

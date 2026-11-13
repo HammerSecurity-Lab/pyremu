@@ -1,6 +1,6 @@
-# ============================================================
+
 #  pyremu/makefile — 从 mk/ 下的配置分片生成 pyremu/configs_gen.py
-# ============================================================
+
 CONFIG_GEN = configs_gen.py
 
 $(CONFIG_GEN): $(wildcard ../mk/*.mk) FORCE
@@ -34,6 +34,7 @@ $(CONFIG_GEN): $(wildcard ../mk/*.mk) FORCE
 	@echo 'PLIC_BASE = $(PLIC_BASE)' >> $@.tmp
 	@echo 'WATCHDOG_BASE = $(WATCHDOG_BASE)' >> $@.tmp
 	@echo 'CRNG_BASE = $(CRNG_BASE)' >> $@.tmp
+	@echo 'POWER_BASE = $(POWER_BASE)' >> $@.tmp
 	@echo 'VIRTIO_BLK_BASE = $(VIRTIO_BLK_BASE)' >> $@.tmp
 	@echo 'VIRTIO_NET_S_BASE = $(VIRTIO_NET_S_BASE)' >> $@.tmp
 	@echo 'VIRTIO_NET_M_BASE = $(VIRTIO_NET_M_BASE)' >> $@.tmp

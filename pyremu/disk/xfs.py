@@ -16,7 +16,12 @@ import struct
 
 from pyremu.disk.base import DiskFormatError, DiskRegion, DiskSummary
 from pyremu.utils.mask import is_power_of_two_in
-from pyremu.utils.str_aux import bytes_to_utf8, flag_names, join_names, uuid_text
+from pyremu.utils.str_aux import (
+    bytes_to_utf8,
+    flag_names,
+    join_names,
+    uuid_text,
+)
 
 FORMAT_NAME = "xfs"
 
@@ -96,10 +101,15 @@ class XfsSuperblock:
             ("日志起始块", f"{self.log_start_block:,}"),
             ("日志块数", f"{self.log_block_count:,}"),
             ("实时块数", f"{self.realtime_blocks:,}"),
-            ("inode 数", f"{self.inode_count:,} (空闲 {self.free_inode_count:,})"),
+            (
+                "inode 数",
+                f"{self.inode_count:,} (空闲 {self.free_inode_count:,})",
+            ),
             (
                 "ro_compat 特性",
-                join_names(flag_names(self.ro_compat_flags, RO_COMPAT_FEATURES)),
+                join_names(
+                    flag_names(self.ro_compat_flags, RO_COMPAT_FEATURES)
+                ),
             ),
             (
                 "incompat 特性",
@@ -175,7 +185,8 @@ def _parse_superblock(raw: bytes) -> XfsSuperblock:
     if free_inode_count > inode_count:
         raise DiskFormatError("空闲 inode 数大于 inode 数")
     if log_start_block > 0 and (
-        log_start_block >= block_count or log_start_block + log_block_count > block_count
+        log_start_block >= block_count
+        or log_start_block + log_block_count > block_count
     ):
         raise DiskFormatError("日志区超出块总数")
 

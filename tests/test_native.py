@@ -6,10 +6,10 @@
 
 两部分:
 
-- 指令执行经 ``native_available()`` 门控退回纯 Python 实现时的行为;
-- ``pyremu._native`` 各回退分支 (以模块级 ``_lib`` 为门控) 的取值符合 RISC-V 语义.
-  这些用例的期望值取自 RISC-V 规范与原生实现, 不取自回退自身的当前输出, 使每个用例
-  在缺少动态库时同样能判定回退是否正确.
+- 指令执行依据 ``native_available()`` 的返回值退回纯 Python 实现时的行为;
+- ``pyremu._native`` 各回退分支以模块级 ``_lib`` 为执行条件, 其取值符合
+  RISC-V 语义. 这些用例的期望值取自 RISC-V 规范与原生实现, 不取自回退自身的
+  当前输出, 使每个用例在缺少动态库时同样能判定回退是否正确.
 """
 
 from __future__ import annotations
@@ -57,10 +57,12 @@ def no_native():
     """关闭加速执行, 使指令执行走纯 Python 路径.
 
     ``handle_alu`` / ``handle_op_imm`` / ``handle_op32`` / ``handle_op_imm32``
-    以公开门控 ``native_available()`` 判断是否调用加速执行库, 故替换该函数返回
+    以 ``native_available()`` 的返回值判断是否调用加速执行库, 故替换该函数返回
     False 即退回纯 Python 实现, 无须触及动态库的装载状态。
     """
-    with mock.patch("pyremu.core.decoder.alu.native_available", return_value=False) as gate:
+    with mock.patch(
+        "pyremu.core.decoder.alu.native_available", return_value=False
+    ) as gate:
         yield gate
 
 
@@ -123,8 +125,8 @@ def test_fallback_correctness(no_native, hart):
     h.exec_instr(0x717D)  # C.ADDI16SP -16
     assert h.gprs[2] == 0x7FFF0
 
-    # ADDI 与 LUI 经纯 Python 算术路径, 门控必须确实被查询过
-    assert no_native.called, "纯 Python 路径未被走到: native_available 门控未被查询"
+    # ADDI 与 LUI 经纯 Python 算术路径, native_available 必须确实被查询过
+    assert no_native.called, "纯 Python 路径未被走到: native_available 未被查询"
 
 
 def test_native_available_true():
@@ -219,7 +221,9 @@ class TestPurePythonAlu:
         v1, v2, funct3, funct7, expect = case
         hart.gprs[1] = v1
         hart.gprs[2] = v2
-        hart.exec_instr(r_type(OP_ALU, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2)))
+        hart.exec_instr(
+            r_type(OP_ALU, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2))
+        )
         assert hart.gprs[3] == expect
         assert no_native.called
 
@@ -236,19 +240,23 @@ class TestPurePythonAlu:
         v1, funct3, funct7, expect = case
         hart.gprs[1] = v1
         hart.gprs[2] = 0
-        hart.exec_instr(r_type(OP_ALU, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2)))
+        hart.exec_instr(
+            r_type(OP_ALU, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2))
+        )
         assert hart.gprs[3] == expect
 
     @pytest.mark.parametrize("funct3", [0b000, 0b001, 0b011, 0b101])
     def test_alu_invalid_funct7_traps(self, no_native, hart, funct3):
         _assert_ill_instr(
-            hart, r_type(OP_ALU, 3, pack_funct(0x10, funct3), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_ALU, 3, pack_funct(0x10, funct3), pack_src_regs(1, 2)),
         )
 
     def test_alu_invalid_zbb_traps(self, no_native, hart):
         """funct7 属于 Zbb 但 funct3 不对应任何子指令."""
         _assert_ill_instr(
-            hart, r_type(OP_ALU, 3, pack_funct(0x05, 0b010), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_ALU, 3, pack_funct(0x05, 0b010), pack_src_regs(1, 2)),
         )
 
 
@@ -285,7 +293,8 @@ class TestPurePyOpImm:
             (0x8000, 0b001, 0x605, MASK64 - 0x7FFF),  # sext.h
             (1, 0b101, 0x601, 1 << 63),  # rori
             (0x0100, 0b101, 0x287, 0xFF00),  # orc.b
-            (0x0123_4567_89AB_CDEF, 0b101, 0x6B8, 0xEFCD_AB89_6745_2301),  # rev8
+            # rev8
+            (0x0123_4567_89AB_CDEF, 0b101, 0x6B8, 0xEFCD_AB89_6745_2301),
             # Zbs 立即数形式: 第 40 位
             (0, 0b001, 0x2A8, 1 << 40),  # bseti
             (MASK64, 0b001, 0x4A8, MASK64 ^ (1 << 40)),  # bclri
@@ -349,13 +358,17 @@ class TestPurePythonOp32:
         v1, v2, funct3, funct7, expect = case
         hart.gprs[1] = v1
         hart.gprs[2] = v2
-        hart.exec_instr(r_type(OP32, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2)))
+        hart.exec_instr(
+            r_type(OP32, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2))
+        )
         assert hart.gprs[3] == expect
 
     # funct7=0x10 只适用于 funct3 为 010 / 100 / 110 的 shXadd.uw
     @pytest.mark.parametrize("funct3", [0b000, 0b001, 0b011, 0b101, 0b111])
     def test_op32_invalid_funct7_traps(self, no_native, hart, funct3):
-        _assert_ill_instr(hart, r_type(OP32, 3, pack_funct(0x10, funct3), pack_src_regs(1, 2)))
+        _assert_ill_instr(
+            hart, r_type(OP32, 3, pack_funct(0x10, funct3), pack_src_regs(1, 2))
+        )
 
 
 class TestPurePyOpImm32:
@@ -374,7 +387,8 @@ class TestPurePyOpImm32:
             (0x1234_5678, 0b101, 0x604, 0xFFFF_FFFF_8123_4567),  # roriw
             # slli.uw 的移位量为 6 位, 不小于 32 时 funct7 变为 0x05
             (MASK64, 0b001, 0x081, 0x1_FFFF_FFFE),  # slli.uw shamt=1
-            (0xFFFF_FFFF, 0b001, 0x0A1, 0xFFFF_FFFE_0000_0000),  # slli.uw shamt=33
+            # slli.uw shamt=33
+            (0xFFFF_FFFF, 0b001, 0x0A1, 0xFFFF_FFFE_0000_0000),
         ],
     )
     def test_op_imm32_branch(self, no_native, hart, case):
@@ -400,13 +414,15 @@ class TestNativePathEncodingTraps:
     def test_alu_invalid_funct7_traps(self, hart):
         """funct7=0x10 且 funct3=000 不对应任何指令, 抛出 ValueError."""
         _assert_ill_instr(
-            hart, r_type(OP_ALU, 3, pack_funct(0x10, 0b000), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_ALU, 3, pack_funct(0x10, 0b000), pack_src_regs(1, 2)),
         )
 
     def test_alu_invalid_zbb_funct3_traps(self, hart):
         """funct7 属于 Zbb 但 funct3 不对应任何子指令."""
         _assert_ill_instr(
-            hart, r_type(OP_ALU, 3, pack_funct(0x05, 0b010), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_ALU, 3, pack_funct(0x05, 0b010), pack_src_regs(1, 2)),
         )
 
     @pytest.mark.parametrize(
@@ -418,7 +434,8 @@ class TestNativePathEncodingTraps:
     )
     def test_op32_invalid_encoding_traps(self, hart, funct3, funct7):
         _assert_ill_instr(
-            hart, r_type(OP32, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2))
+            hart,
+            r_type(OP32, 3, pack_funct(funct7, funct3), pack_src_regs(1, 2)),
         )
 
     def test_op_imm32_invalid_funct7_traps(self, hart):
@@ -458,7 +475,8 @@ class TestBranchAndMemoryEncodings:
         [
             (0b000, bytes([0x80, 0, 0, 0, 0, 0, 0, 0]), MASK64 - 0x7F),  # LB
             (0b100, bytes([0x80, 0, 0, 0, 0, 0, 0, 0]), 0x80),  # LBU
-            (0b001, bytes([0x00, 0x80, 0, 0, 0, 0, 0, 0]), MASK64 - 0x7FFF),  # LH
+            # LH
+            (0b001, bytes([0x00, 0x80, 0, 0, 0, 0, 0, 0]), MASK64 - 0x7FFF),
             (0b101, bytes([0x00, 0x80, 0, 0, 0, 0, 0, 0]), 0x8000),  # LHU
         ],
     )
@@ -501,10 +519,14 @@ class TestBranchAndMemoryEncodings:
         _assert_ill_instr(hart, 0b0001111 | (0b010 << 12))
 
     def test_amo_invalid_encoding_traps(self, hart):
-        _assert_ill_instr(hart, r_type(OP_AMO, 3, pack_funct(0, 0b100), pack_src_regs(1, 2)))
+        _assert_ill_instr(
+            hart, r_type(OP_AMO, 3, pack_funct(0, 0b100), pack_src_regs(1, 2))
+        )
 
     def test_sys_invalid_funct3_traps(self, hart):
-        _assert_ill_instr(hart, r_type(OP_SYS, 3, pack_funct(0, 0b100), pack_src_regs(1, 2)))
+        _assert_ill_instr(
+            hart, r_type(OP_SYS, 3, pack_funct(0, 0b100), pack_src_regs(1, 2))
+        )
 
 
 class TestCsrImmediateForms:
@@ -513,9 +535,9 @@ class TestCsrImmediateForms:
     MSCRATCH = 0x340
 
     def _csr_instr(self, funct3: int, rd: int, csr: int, uimm: int) -> int:
-        return r_type(OP_SYS, rd, pack_funct(csr >> 5, funct3), pack_src_regs(uimm, 0)) | (
-            (csr & 0x1F) << 20
-        )
+        return r_type(
+            OP_SYS, rd, pack_funct(csr >> 5, funct3), pack_src_regs(uimm, 0)
+        ) | ((csr & 0x1F) << 20)
 
     def test_csrrwi(self, hart):
         hart.csrs["mscratch"].val = 7
@@ -558,21 +580,27 @@ class TestFpDisabled:
         _assert_ill_instr(hart, s_type(OP_FP_STORE, 0b100, 1, 2, 0))
 
     def test_fp_op_disabled(self, hart):
-        _assert_ill_instr(hart, r_type(OP_FP_OP, 3, pack_funct(0, 0b000), pack_src_regs(1, 2)))
+        _assert_ill_instr(
+            hart, r_type(OP_FP_OP, 3, pack_funct(0, 0b000), pack_src_regs(1, 2))
+        )
 
     def test_fp_op_invalid_encoding(self, hart):
         hart.mstatus_val |= FS_ON
         _assert_ill_instr(
-            hart, r_type(OP_FP_OP, 3, pack_funct(0x7C, 0b000), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_FP_OP, 3, pack_funct(0x7C, 0b000), pack_src_regs(1, 2)),
         )
 
     def test_fp_fma_disabled(self, hart):
-        _assert_ill_instr(hart, r_type(OP_FMADD, 3, pack_funct(0, 0b000), pack_src_regs(1, 2)))
+        _assert_ill_instr(
+            hart, r_type(OP_FMADD, 3, pack_funct(0, 0b000), pack_src_regs(1, 2))
+        )
 
     def test_fp_fma_invalid_fmt(self, hart):
         hart.mstatus_val |= FS_ON
         _assert_ill_instr(
-            hart, r_type(OP_FMSUB, 3, pack_funct(0b10, 0b000), pack_src_regs(1, 2))
+            hart,
+            r_type(OP_FMSUB, 3, pack_funct(0b10, 0b000), pack_src_regs(1, 2)),
         )
 
 
@@ -625,8 +653,11 @@ class TestWordResultSignExtension:
     """32 位运算的结果按第 31 位符号扩展到 64 位。"""
 
     def test_addw_sign_extends(self, pure_python):
-        """ADDW(0x7FFF_FFFF, 1) 为 0xFFFF_FFFF_8000_0000 (改前为 0x8000_0000)。"""
-        assert _native.exec_op32(0b000, 0, 0x7FFF_FFFF, 1).value == 0xFFFF_FFFF_8000_0000
+        """ADDW(0x7FFF_FFFF, 1) 为 0xFFFF_FFFF_8000_0000."""
+        assert (
+            _native.exec_op32(0b000, 0, 0x7FFF_FFFF, 1).value
+            == 0xFFFF_FFFF_8000_0000
+        )
 
     def test_addw_positive_result_unchanged(self, pure_python):
         """结果为非负时不扩展出高位: ADDW(1, 1) 为 2。"""
@@ -637,7 +668,8 @@ class TestWordResultSignExtension:
         assert _native.exec_op32(0b000, 0x20, 0, 1).value == MASK64
 
     def test_sllw_sign_extends(self, pure_python):
-        """SLLW(1, 31) 的 32 位结果为 0x8000_0000, 扩展后为 0xFFFF_FFFF_8000_0000。"""
+        """SLLW(1, 31) 的 32 位结果为 0x8000_0000,
+        扩展后为 0xFFFF_FFFF_8000_0000."""
         assert _native.exec_op32(0b001, 0, 1, 31).value == 0xFFFF_FFFF_8000_0000
 
     def test_srlw_does_not_introduce_high_bits(self, pure_python):
@@ -645,15 +677,19 @@ class TestWordResultSignExtension:
         assert _native.exec_op32(0b101, 0, 0x8000_0000, 4).value == 0x0800_0000
 
     def test_sraw_shifts_negative_value(self, pure_python):
-        """SRAW(0x8000_0000, 4) 为 0xFFFF_FFFF_F800_0000 (改前按无符号移位得 0x0800_0000)。"""
-        assert _native.exec_op32(0b101, 0x20, 0x8000_0000, 4).value == 0xFFFF_FFFF_F800_0000
+        """SRAW(0x8000_0000, 4) 为 0xFFFF_FFFF_F800_0000。"""
+        assert (
+            _native.exec_op32(0b101, 0x20, 0x8000_0000, 4).value
+            == 0xFFFF_FFFF_F800_0000
+        )
 
     def test_divw_negative_dividend(self, pure_python):
-        """DIVW(0xFFFF_FFFE, 2) 为 -1 (改前把被除数当无符号数, 得 0x7FFF_FFFF)。"""
+        """DIVW(0xFFFF_FFFE, 2) 为 -1。"""
         assert _native.exec_op32(0b100, 1, 0xFFFF_FFFE, 2).value == MASK64
 
     def test_divw_overflow_wraps(self, pure_python):
-        """i32 最小值除以 -1: 商为 i32 最小值, 扩展后为 0xFFFF_FFFF_8000_0000。"""
+        """i32 最小值除以 -1: 商为 i32 最小值,
+        扩展后为 0xFFFF_FFFF_8000_0000。"""
         got = _native.exec_op32(0b100, 1, 0x8000_0000, MASK64).value
         assert got == 0xFFFF_FFFF_8000_0000
 
@@ -673,7 +709,10 @@ class TestWordResultSignExtension:
 
     def test_addiw_sign_extends(self, pure_python):
         """ADDIW(0x7FFF_FFFF, 1) 为 0xFFFF_FFFF_8000_0000。"""
-        assert _native.exec_op_imm32(0b000, 0, 0x7FFF_FFFF, 1).value == 0xFFFF_FFFF_8000_0000
+        assert (
+            _native.exec_op_imm32(0b000, 0, 0x7FFF_FFFF, 1).value
+            == 0xFFFF_FFFF_8000_0000
+        )
 
     def test_sraiw_shifts_negative_value(self, pure_python):
         """SRAIW(0x8000_0000, 4) 为 0xFFFF_FFFF_F800_0000。"""
@@ -682,7 +721,9 @@ class TestWordResultSignExtension:
 
     def test_srliw_does_not_introduce_high_bits(self, pure_python):
         """SRLIW(0x8000_0000, 4) 为 0x0800_0000。"""
-        assert _native.exec_op_imm32(0b101, 0, 0x8000_0000, 4).value == 0x0800_0000
+        assert (
+            _native.exec_op_imm32(0b101, 0, 0x8000_0000, 4).value == 0x0800_0000
+        )
 
 
 class TestSltiImmediate:
@@ -775,19 +816,40 @@ class TestFallbackMatchesNative:
 
     def test_word_alu_over_edge_operands(self):
         """32 位与 32 位立即数两个入口在边界操作数上逐一比对。"""
-        values = (0, 1, 2, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF, 1 << 53, MASK64 - 1, MASK64)
+        values = (
+            0,
+            1,
+            2,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0xFFFF_FFFF,
+            1 << 53,
+            MASK64 - 1,
+            MASK64,
+        )
         for funct3 in range(8):
             for funct7 in (0, 1, 0x20):
                 for v1 in values:
                     for v2 in values:
                         native = _native.exec_op32(funct3, funct7, v1, v2).value
                         with mock.patch("pyremu._native._lib", None):
-                            fallback = _native.exec_op32(funct3, funct7, v1, v2).value
+                            fallback = _native.exec_op32(
+                                funct3, funct7, v1, v2
+                            ).value
                         assert native == fallback, (funct3, funct7, v1, v2)
 
     def test_div_rem_over_edge_operands(self):
         """除法与取余在边界操作数上逐一比对。"""
-        dividends = (0, 1, 7, 1 << 53, (1 << 53) + 1, (1 << 63), MASK64 - 1, MASK64)
+        dividends = (
+            0,
+            1,
+            7,
+            1 << 53,
+            (1 << 53) + 1,
+            (1 << 63),
+            MASK64 - 1,
+            MASK64,
+        )
         divisors = (0, 1, 2, 3, 7, 0x8000_0000, MASK64 - 1, MASK64)
         for funct3 in (0b100, 0b101, 0b110, 0b111):
             for funct7 in (1, 0x20):
@@ -795,7 +857,9 @@ class TestFallbackMatchesNative:
                     for b in divisors:
                         native = _native.exec_alu_op(funct3, funct7, a, b).value
                         with mock.patch("pyremu._native._lib", None):
-                            fallback = _native.exec_alu_op(funct3, funct7, a, b).value
+                            fallback = _native.exec_alu_op(
+                                funct3, funct7, a, b
+                            ).value
                         assert native == fallback, (funct3, funct7, a, b)
 
     def test_bitmanip_alu_matches_fallback(self):
@@ -807,7 +871,9 @@ class TestFallbackMatchesNative:
                     for v2 in values:
                         native = _native.exec_alu_op(funct3, funct7, v1, v2)
                         with mock.patch("pyremu._native._lib", None):
-                            fallback = _native.exec_alu_op(funct3, funct7, v1, v2)
+                            fallback = _native.exec_alu_op(
+                                funct3, funct7, v1, v2
+                            )
                         assert (native.value, native.trap) == (
                             fallback.value,
                             fallback.trap,
@@ -815,7 +881,20 @@ class TestFallbackMatchesNative:
 
     def test_bitmanip_imm_matches_fallback(self):
         """Zba / Zbb / Zbs 的立即数编码在两个实现上逐位一致."""
-        imms = (0, 1, 0x1F, 0x20, 0x081, 0x0A1, 0x287, 0x2A8, 0x4A8, 0x6A8, 0x6B8, 0x6B9)
+        imms = (
+            0,
+            1,
+            0x1F,
+            0x20,
+            0x081,
+            0x0A1,
+            0x287,
+            0x2A8,
+            0x4A8,
+            0x6A8,
+            0x6B8,
+            0x6B9,
+        )
         for entry, funct3_set in (
             (_native.exec_op_imm, (0b001, 0b101)),
             (_native.exec_op_imm32, (0b001, 0b101)),
@@ -877,7 +956,8 @@ class TestNativeBatchLayout:
         """TlbEntry 必须恰好 40 字节.
 
         mdid 从 u8 加宽为 u64 后 TlbEntry 由 32B 涨到 40B (mdid 对齐到偏移 24).
-        与 Rust ``state::TlbEntry`` 逐字节一致, 否则 Rust 在错误偏移读字段 -> SIGBUS.
+        与 Rust ``state::TlbEntry`` 逐字节一致, 否则 Rust 在错误偏移读字段,
+        引发 SIGBUS.
         """
         assert ctypes.sizeof(TlbEntry) == 40, (
             f"TlbEntry 应为 40 字节, 实际 {ctypes.sizeof(TlbEntry)}B"
@@ -888,7 +968,8 @@ class TestNativeBatchLayout:
         assert ctypes.sizeof(HartState) % 8 == 0
 
     def test_hart_state_reasonable_size(self) -> None:
-        """HartState 不应异常膨胀 (与 Rust 侧 ``hart_state_size_reasonable`` 对齐).
+        """HartState 不应异常膨胀,
+        与 Rust 侧 ``hart_state_size_reasonable`` 对齐.
 
         256 TLB 条目 × 40B × 2 (itlb+dtlb) ≈ 20 KB, 实际 ~22 KB < 64 KB.
         若某次 FFI 改动让布局爆炸 (如把整块 RAM 塞进 HartState), 此测试会拦住.
@@ -902,7 +983,8 @@ class TestNativeBatchLayout:
     def test_itlb_is_array_of_structs(self) -> None:
         """itlb 确保 array-of-structs 而非 struct-of-arrays.
 
-        struct-of-arrays 会导致 Rust 在 offsetof(itlb[i].ppn) 读到垃圾 -> SIGBUS.
+        struct-of-arrays 会导致 Rust 在 offsetof(itlb[i].ppn) 读到错误数据,
+        引发 SIGBUS.
         """
         hs = HartState()
         assert len(hs.itlb) % 32 == 0
@@ -939,11 +1021,15 @@ class TestNativeBatchLayout:
         """平台声明决定各开关, 未声明的扩展保持关闭."""
         h = Hart(
             id=0,
-            ratified_hart_attrs=RatifiedHartAttrs.from_platform(16, "rv64imac_zicsr_zifencei"),
+            ratified_hart_attrs=RatifiedHartAttrs.from_platform(
+                16, "rv64imac_zicsr_zifencei"
+            ),
         )
         state = HartState()
         h.marshal_isa_exts(state)
-        assert state.isa_exts.is_i and state.isa_exts.is_m and state.isa_exts.is_c
+        assert (
+            state.isa_exts.is_i and state.isa_exts.is_m and state.isa_exts.is_c
+        )
         assert state.isa_exts.is_zicsr and state.isa_exts.is_zifencei
         assert not state.isa_exts.is_sstc
         assert not state.isa_exts.is_f and not state.isa_exts.is_d
@@ -955,7 +1041,10 @@ class TestNativeBatchLayout:
         扩展开关是平台的静态属性, 只在状态数组分配时写入一次. 若 marshal_to
         恢复为逐轮写入, 该用例中预先置位的开关会被平台的取值覆盖.
         """
-        h = Hart(id=0, ratified_hart_attrs=RatifiedHartAttrs.from_platform(16, "rv64i"))
+        h = Hart(
+            id=0,
+            ratified_hart_attrs=RatifiedHartAttrs.from_platform(16, "rv64i"),
+        )
         state = HartState()
         state.isa_exts.is_sstc = True
         h.marshal_to(state)
@@ -980,7 +1069,9 @@ class TestSstcSwitch:
     def test_python_path_rejects_stimecmp(self, hart) -> None:
         """Python 路径: 未声明 sstc 时读取该 CSR 产生 IllInstr."""
         h = hart
-        h.ratified_hart_attrs = RatifiedHartAttrs.from_platform(16, self.ISA_WITHOUT_SSTC)
+        h.ratified_hart_attrs = RatifiedHartAttrs.from_platform(
+            16, self.ISA_WITHOUT_SSTC
+        )
         h.pc = 0x8000_0000
         h.exec_instr(self.CSRR)
         assert h.csrs["mcause"].val == 2, "应为 IllInstr"
@@ -1009,7 +1100,9 @@ class TestSstcSwitch:
         h.csrs["stimecmp"].val = stimecmp
         emu.add_breakpoint(self.PC + 4)
         emu.add_breakpoint(self.MTVEC)
-        with mock.patch("pyremu.emu.native.run_parallel", wraps=run_parallel) as engine:
+        with mock.patch(
+            "pyremu.emu.native.run_parallel", wraps=run_parallel
+        ) as engine:
             emu.run(timeout=10)
         return engine, emu, h
 
@@ -1019,11 +1112,15 @@ class TestSstcSwitch:
         engine, _emu, h = self._run_engine(self.ISA_WITHOUT_SSTC, instr)
         assert engine.called, "本用例应经加速执行引擎运行"
         assert h.pc == self.MTVEC, f"应陷入 mtvec, 实际 pc=0x{h.pc:x}"
-        assert h.csrs["mcause"].val == 2, f"应为 IllInstr, 实际 {h.csrs['mcause'].val:#x}"
+        assert h.csrs["mcause"].val == 2, (
+            f"应为 IllInstr, 实际 {h.csrs['mcause'].val:#x}"
+        )
 
     def test_engine_accepts_stimecmp_when_declared(self) -> None:
         """声明 sstc 时引擎读取该 CSR 不投递任何异常."""
-        engine, _emu, h = self._run_engine(self.ISA_WITH_SSTC, self.CSRR, stimecmp=0x1234)
+        engine, _emu, h = self._run_engine(
+            self.ISA_WITH_SSTC, self.CSRR, stimecmp=0x1234
+        )
         assert engine.called, "本用例应经加速执行引擎运行"
         assert h.pc == self.PC + 4, f"不应陷入, 实际 pc=0x{h.pc:x}"
         assert h.csrs["mcause"].val == 0
@@ -1045,8 +1142,12 @@ _EXT_INSTR_CASES = [
         4,
         id="a-amoadd",
     ),
-    pytest.param("rv64if", i_type(Opc.ld_fp.value, 1, 0b010, 2, 0), 4, id="f-flw"),
-    pytest.param("rv64id", i_type(Opc.ld_fp.value, 1, 0b011, 2, 0), 4, id="d-fld"),
+    pytest.param(
+        "rv64if", i_type(Opc.ld_fp.value, 1, 0b010, 2, 0), 4, id="f-flw"
+    ),
+    pytest.param(
+        "rv64id", i_type(Opc.ld_fp.value, 1, 0b011, 2, 0), 4, id="d-fld"
+    ),
     pytest.param(
         "rv64i_zba",
         r_type(Opc.op.value, 5, pack_funct(0x10, 0b010), pack_src_regs(6, 7)),
@@ -1066,7 +1167,10 @@ _EXT_INSTR_CASES = [
         id="zbs-bset",
     ),
     pytest.param(
-        "rv64i_zicsr", i_type(Opc.sys.value, 5, 2, 0, 0x301), 4, id="zicsr-csrr-misa"
+        "rv64i_zicsr",
+        i_type(Opc.sys.value, 5, 2, 0, 0x301),
+        4,
+        id="zicsr-csrr-misa",
     ),
     pytest.param("rv64i_zifencei", 0x0000_100F, 4, id="zifencei-fence-i"),
     pytest.param("rv64ic", 0x0085, 2, id="c-c-addi"),
@@ -1076,9 +1180,9 @@ _EXT_INSTR_CASES = [
 class TestExtSwitch:
     """平台未声明的扩展所对应的指令不存在, 两条执行路径均投递 IllInstr.
 
-    回归: 解码原先不看平台声明的扩展集合, 关闭 M/A/F/D/C/Zba/Zbb/Zbs/Zicsr/Zifencei
-    之后这些指令仍被接受并执行, 使固件以 ``csr_read_allowed`` 与试探性执行探测扩展
-    支持时得到与平台声明不符的结果.
+    解码按平台声明的扩展集合判定: 关闭 M/A/F/D/C/Zba/Zbb/Zbs/Zicsr/Zifencei
+    之后这些指令均被拒绝, 使固件经 ``csr_read_allowed`` 与试探性执行探测
+    扩展支持时得到与平台声明一致的结果.
     """
 
     PC, MTVEC = 0x8000_0000, 0x8000_1000
@@ -1097,7 +1201,13 @@ class TestExtSwitch:
         h.gprs[7] = mem_base
 
     @pytest.mark.parametrize(("isa_with", "instr", "length"), _EXT_INSTR_CASES)
-    def test_python_path_rejects_undeclared_ext(self, hart, isa_with, instr, length) -> None:
+    def test_python_path_rejects_undeclared_ext(
+        self,
+        hart,
+        isa_with,
+        instr,
+        length,
+    ) -> None:
         """Python 路径: 所属扩展未声明时投递 IllInstr, 不执行该指令."""
         h = hart
         self._prepare(h, "rv64i", 0x1000)
@@ -1107,7 +1217,13 @@ class TestExtSwitch:
         assert h.pc == self.MTVEC
 
     @pytest.mark.parametrize(("isa_with", "instr", "length"), _EXT_INSTR_CASES)
-    def test_python_path_accepts_declared_ext(self, hart, isa_with, instr, length) -> None:
+    def test_python_path_accepts_declared_ext(
+        self,
+        hart,
+        isa_with,
+        instr,
+        length,
+    ) -> None:
         """Python 路径: 声明所属扩展时不产生异常, 按指令长度推进 pc."""
         h = hart
         self._prepare(h, isa_with, 0x1000)
@@ -1122,8 +1238,8 @@ class TestExtSwitch:
     ) -> tuple[mock.Mock, Emulator, Hart]:
         """以给定 ISA 字符串装配模拟器, 经加速执行引擎执行一条指令.
 
-        指令正常完成时停在 pc 加指令长度处, 投递陷态时停在 mtvec. 引擎调用被记录,
-        用于确认本用例确实经过 Rust 侧.
+        指令正常完成时停在 pc 加指令长度处, 投递陷态时停在 mtvec.
+        引擎调用被记录, 用于确认本用例确实经过 Rust 侧.
         """
         cfg = make_test_config()
         cfg.isa = isa
@@ -1134,17 +1250,26 @@ class TestExtSwitch:
         self._prepare(h, isa, 0x8000_2000)
         emu.add_breakpoint(self.PC + length)
         emu.add_breakpoint(self.MTVEC)
-        with mock.patch("pyremu.emu.native.run_parallel", wraps=run_parallel) as engine:
+        with mock.patch(
+            "pyremu.emu.native.run_parallel", wraps=run_parallel
+        ) as engine:
             emu.run(timeout=10)
         return engine, emu, h
 
     @pytest.mark.parametrize(("isa_with", "instr", "length"), _EXT_INSTR_CASES)
-    def test_engine_rejects_undeclared_ext(self, isa_with, instr, length) -> None:
+    def test_engine_rejects_undeclared_ext(
+        self,
+        isa_with,
+        instr,
+        length,
+    ) -> None:
         """加速执行引擎: 所属扩展未声明时同样投递 IllInstr."""
         engine, _emu, h = self._run_engine("rv64i", instr, length)
         assert engine.called, "本用例应经加速执行引擎运行"
         assert h.pc == self.MTVEC, f"应陷入 mtvec, 实际 pc=0x{h.pc:x}"
-        assert h.csrs["mcause"].val == 2, f"应为 IllInstr, 实际 {h.csrs['mcause'].val:#x}"
+        assert h.csrs["mcause"].val == 2, (
+            f"应为 IllInstr, 实际 {h.csrs['mcause'].val:#x}"
+        )
 
     @pytest.mark.parametrize(("isa_with", "instr", "length"), _EXT_INSTR_CASES)
     def test_engine_accepts_declared_ext(self, isa_with, instr, length) -> None:
@@ -1202,14 +1327,13 @@ class TestNativePmpSlice:
 
 @pytest.mark.usefixtures("legacy_plic")
 class TestPlicNativeInline:
-    """PLIC 内联 (Rust batch) 的数组共享契约.
+    """Rust 内联处理 PLIC MMIO 时的数组共享约定.
 
-    回归: kernel 直映射包含 PLIC MMIO (enable 写约 767/s), 旧实现每次访问都
-    退出 Rust batch 回落到 Python MMIO, 使 EXT4 recovery 阶段吞吐跌至 ~0.6M/s.
-    修复为 Rust 内联处理 PLIC MMIO (claim/complete/enable/threshold/priority).
-    PLIC 对象持有全部 ctypes 数组, 引擎与 Python 侧读写同一份存储, marshal 只
-    传递地址; 设备线程经 ``irq_sink`` 写穿 pending/level, 保证 batch 内新设备
-    中断对 Rust 内联仲裁可见.
+    claim、complete、enable、threshold 与 priority 的访问由 Rust 在加速
+    执行期间内联处理, 不退回 Python 的 MMIO 路径. PLIC 对象持有全部 ctypes
+    数组, 引擎与 Python 侧读写同一份存储, marshal 只传递地址; 设备线程经
+    ``irq_sink`` 写入 pending 与 level, 保证加速执行期间新设备中断对 Rust
+    内联仲裁可见.
     """
 
     def test_marshal_plic_shares_plic_arrays(self):
@@ -1234,8 +1358,12 @@ class TestPlicNativeInline:
         assert info.claimed is plic.claimed
         assert info.priority[10] == 5
         nw = plic.num_enable_words
-        assert info.enable[0 * nw + 0] & (1 << 10) != 0, "source 10 应落 word 0 bit 10"
-        assert info.enable[0 * nw + 1] & (1 << 1) != 0, "source 33 应落 word 1 bit 1"
+        assert info.enable[0 * nw + 0] & (1 << 10) != 0, (
+            "source 10 应落 word 0 bit 10"
+        )
+        assert info.enable[0 * nw + 1] & (1 << 1) != 0, (
+            "source 33 应落 word 1 bit 1"
+        )
         assert info.enable[1 * nw + 0] & (1 << 7) != 0, "context 1 source 7"
 
     def test_claim_and_complete_use_shared_arrays(self):
@@ -1262,7 +1390,8 @@ class TestPlicNativeInline:
         assert plic.get_pending_mip(0) & (1 << 11) != 0
 
     def test_irq_sink_write_through(self):
-        """设备线程经 irq_sink 写穿到 PLIC 持有的数组, 使 batch 内对 Rust 可见."""
+        """设备线程经 irq_sink 写入 PLIC 持有的数组,
+        使加速执行期间对 Rust 可见."""
         emu = Emulator(num_harts=2)
         emu.irq_sink(25, True)
         assert emu.plic.pending[25] == 1
@@ -1298,7 +1427,8 @@ class TestClockDecoupling:
         return emu
 
     def test_mtime_advances_per_100_instructions(self, nop_emu):
-        """mtime 按指令计数推进: 100 条指令 = 20 tick (10 MHz × NS_PER_INSTR=20ns)."""
+        """mtime 按指令计数推进: 100 条指令 = 20 tick
+        (10 MHz × NS_PER_INSTR=20ns)."""
         emu = nop_emu
         mtime_before = emu.clint.get_mtime()
         for _ in range(100):
@@ -1308,7 +1438,8 @@ class TestClockDecoupling:
         )
 
     def test_advance_mtime_instr_conversion(self, nop_emu):
-        """_advance_mtime_instr 按 timebase_freq*NS_PER_INSTR 换算, 余数跨调用累积."""
+        """_advance_mtime_instr 按 timebase_freq*NS_PER_INSTR 换算,
+        余数跨调用累积."""
         emu = nop_emu
         mtime_before = emu.clint.get_mtime()
 
@@ -1346,11 +1477,13 @@ class TestClockDecoupling:
 
         now_holder["t"] = 300.5
         info = emu._native_marshal_clint()
-        assert emu.clint.get_mtime() == mtime_before, "marshal_clint 不得再按时钟源推进 mtime"
+        assert emu.clint.get_mtime() == mtime_before, (
+            "marshal_clint 不得再按时钟源推进 mtime"
+        )
         assert info.mtime == mtime_before
 
     def test_native_batch_mtime_pure_instruction_count(self, nop_emu):
-        """native batch (run_parallel) 下 mtime 纯按指令计数推进, 与流逝时间解耦.
+        """加速执行引擎下 mtime 纯按指令计数推进, 与流逝时间解耦.
 
         回归: 工作树曾把 Rust ``advance_clock_source`` 改为实时/混合模型,
         legacy 模式 PLIC 相位后 HZ=250 的 4ms tick 指令预算不足 (~8-12K 条),
@@ -1360,14 +1493,18 @@ class TestClockDecoupling:
         5 条指令 = 1 tick, 流逝时间完全不参与.
         """
         emu = nop_emu
-        assert emu._speedup_hart_states is not None, "回归测试必须走 native batch"
+        assert emu._speedup_hart_states is not None, (
+            "回归测试必须走 native batch"
+        )
         # 断点设在第 2000 条 NOP 之后, run() 经 native batch 返回
         emu._bp_addrs = [0x8000_0000 + 2000 * 4]
         emu.run(timeout=15)
         assert emu._run_stop_reason == RunStopReason.BREAKPOINT, (
             f"应命中断点, 实际 reason={emu._run_stop_reason}"
         )
-        assert emu._total_instrs == 2000, f"应恰好执行 2000 条 NOP, 实际 {emu._total_instrs}"
+        assert emu._total_instrs == 2000, (
+            f"应恰好执行 2000 条 NOP, 实际 {emu._total_instrs}"
+        )
         mtime = emu.clint.get_mtime()
         # 5 条指令 = 1 tick (10 MHz × 20ns/instr / 1e9). 边界滞后 <=1 条
         # (advance_clock_source 在每条指令执行前的循环顶推进), 故期望落在
@@ -1375,7 +1512,8 @@ class TestClockDecoupling:
         lo = emu._total_instrs // 5 - 1
         hi = emu._total_instrs // 5
         assert lo <= mtime <= hi, (
-            f"native batch 2000 条指令 mtime 应为 [{lo}, {hi}] tick (纯指令源), 实际 {mtime}"
+            f"native batch 2000 条指令 mtime 应为 [{lo}, {hi}] tick, "
+            f"实际 {mtime}"
         )
         emu.close()
 
@@ -1436,7 +1574,9 @@ class TestMarshalUnmarshalRoundtrip:
         """每寄存器写入唯一值后往返不变."""
         hart = self._fresh_hart()
         for i in range(32):
-            hart.gprs[i] = mask64(i * 0x1111_1111_1111_1111 + 0xDEAD_BEEF_CAFE_BABE)
+            hart.gprs[i] = mask64(
+                i * 0x1111_1111_1111_1111 + 0xDEAD_BEEF_CAFE_BABE
+            )
         # x0 写保护 — GprFile 应忽略写入
         hart.gprs[0] = 0  # explicitly ensure
         out = self._roundtrip(hart)
@@ -1456,7 +1596,9 @@ class TestMarshalUnmarshalRoundtrip:
         hart = self._fresh_hart()
         hart.gprs[20] = 0xFFFF_FFFF_FFFF_FFFF  # s4 = -1
         out = self._roundtrip(hart)
-        assert out.gprs[20] == 0xFFFF_FFFF_FFFF_FFFF, f"s4 = {out.gprs[20]:#018x}, expected -1"
+        assert out.gprs[20] == 0xFFFF_FFFF_FFFF_FFFF, (
+            f"s4 = {out.gprs[20]:#018x}, expected -1"
+        )
 
     def test_gpr_edge_values_roundtrip(self) -> None:
         """GPR 极端值 (0, -1, MAX, 符号位, 交替 bits) 往返不变."""
@@ -1505,7 +1647,9 @@ class TestMarshalUnmarshalRoundtrip:
         hart.csrs[csr_name].val = val
         out = self._roundtrip(hart)
         actual = out.csrs[csr_name].val
-        assert actual == val, f"{csr_name}: {actual:#018x} ≠ expected {val:#018x}"
+        assert actual == val, (
+            f"{csr_name}: {actual:#018x} ≠ expected {val:#018x}"
+        )
 
     # ---------- TLB 刷新 ----------
     def test_unmarshal_keeps_tlb_when_satp_unchanged(self) -> None:
@@ -1637,11 +1781,13 @@ class TestMarshalUnmarshalRoundtrip:
     def test_fpr_roundtrip(self) -> None:
         hart = self._fresh_hart()
         for i in range(32):
-            hart._fpr_bits[i] = mask64(0x3FF0_0000_0000_0000 + i * 0x1000_0000_0000)
+            hart.fpr_bits[i] = mask64(
+                0x3FF0_0000_0000_0000 + i * 0x1000_0000_0000
+            )
         out = self._roundtrip(hart)
         for i in range(32):
             expected = mask64(0x3FF0_0000_0000_0000 + i * 0x1000_0000_0000)
-            assert out._fpr_bits[i] == expected, f"fpr[{i}] mismatch"
+            assert out.fpr_bits[i] == expected, f"fpr[{i}] mismatch"
 
     def test_fcsr_roundtrip(self) -> None:
         hart = self._fresh_hart()
@@ -1662,7 +1808,12 @@ class TestNativeBatchBitmanip:
     PROG = bytes.fromhex("1353732893d3836bb3249420")
 
     def test_bitmanip_executes_in_batch(self):
-        emu = Emulator(num_harts=1, prog_cnt=0x1000, ram_base=0, ram_size=64 * 1024)
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=64 * 1024,
+        )
         h = emu.harts[0]
         h.gprs[6] = 0x0100
         h.gprs[7] = 0x0123_4567_89AB_CDEF
@@ -1680,8 +1831,142 @@ class TestNativeBatchBitmanip:
         )
         assert h.csrs["mcause"].val == 0, "不应投递任何异常"
         assert h.gprs[6] == 0xFF00, f"orc.b 结果错误: {h.gprs[6]:#x}"
-        assert h.gprs[7] == 0xEFCD_AB89_6745_2301, f"rev8 结果错误: {h.gprs[7]:#x}"
+        assert h.gprs[7] == 0xEFCD_AB89_6745_2301, (
+            f"rev8 结果错误: {h.gprs[7]:#x}"
+        )
         assert h.gprs[9] == 2, f"sh1add 结果错误: {h.gprs[9]:#x}"
+
+
+class TestNativeBatchAmoWSignExtension:
+    """加速执行引擎执行 AMO.W 时把写入前读出的 32 位值符号扩展到 64 位.
+
+    引擎的原子读改写路径把该值按无符号 32 位零扩展写回 rd, 使 rd 得到
+    0x0000_0000_8000_0000 而非 0xFFFF_FFFF_8000_0000. 取 bit31 为 1 的取值,
+    使零扩展与符号扩展的结果不同.
+    """
+
+    TEXT_PA = 0x1000
+    DATA_PA = 0x4000
+    # amoadd.w x14, x7, (x6) / addi x0, x0, 0
+    PROG = bytes.fromhex("2f277300" + "13000000")
+
+    def test_amoadd_w_sign_extends_old_value(self):
+        emu = Emulator(
+            num_harts=1, prog_cnt=self.TEXT_PA, ram_base=0, ram_size=64 * 1024
+        )
+        assert emu._speedup_hart_states is not None, (
+            "回归测试必须走加速执行引擎"
+        )
+        h = emu.harts[0]
+        h.gprs[6] = self.DATA_PA
+        h.gprs[7] = 0x8000_0000
+        h.gprs[14] = 0x1111
+        emu.load_code(self.TEXT_PA, self.PROG)
+        emu.load_code(self.DATA_PA, (0x8000_0000).to_bytes(4, "little"))
+        h.pc = self.TEXT_PA
+        emu._bp_addrs = [self.TEXT_PA + len(self.PROG)]
+
+        emu.run(timeout=15)
+        emu.close()
+
+        assert emu._run_stop_reason == RunStopReason.BREAKPOINT, (
+            f"应在程序末尾命中断点, 实际 reason={emu._run_stop_reason} "
+            f"pc=0x{h.pc:x} mcause=0x{h.csrs['mcause'].val:x}"
+        )
+        assert h.gprs[14] == 0xFFFF_FFFF_8000_0000, (
+            f"AMO.W 写回 rd 的值应为符号扩展结果, 实际 {h.gprs[14]:#x}"
+        )
+        assert emu.bus.read(self.DATA_PA, 4) == bytes(4), "内存应写入 32 位和 0"
+
+
+class TestNativeScReservation:
+    """加速执行引擎的 SC 仅按地址判定预留是否有效.
+
+    引擎的并发原子路径曾以 LR 读出的值作 compare_exchange 的比较基准. LR.W 与
+    SC.D 成对出现时两者的宽度不同, 该比较必然失败: SC 写回 1 且不写内存, 与
+    解释器写回 0 并写内存的结果相反. 初值取 bit31 置位的值, 使符号扩展后的
+    32 位读出值与 64 位内存内容不同.
+    """
+
+    TEXT_PA = 0x1000
+    DATA_PA = 0x4000
+    DATA_INIT = 0x8000_0000
+    STORE_VAL = 0xDEAD_BEEF_0000_0001
+    LR_W_LR_READ_EXT = 0xFFFF_FFFF_8000_0000
+
+    def _prepare(self):
+        # lr.w x24, (x5) / sc.d x3, x7, (x5) / addi x0, x0, 0
+        lr_w = (0x02 << 27) | (5 << 15) | (2 << 12) | (24 << 7) | 0x2F
+        sc_d = (
+            (0x03 << 27) | (7 << 20) | (5 << 15) | (3 << 12) | (3 << 7) | 0x2F
+        )
+        prog = b"".join(w.to_bytes(4, "little") for w in (lr_w, sc_d, 0x13))
+        emu = Emulator(
+            num_harts=1,
+            prog_cnt=self.TEXT_PA,
+            ram_base=0,
+            ram_size=64 * 1024,
+        )
+        h = emu.harts[0]
+        h.gprs[3] = 0x1111
+        h.gprs[5] = self.DATA_PA
+        h.gprs[7] = self.STORE_VAL
+        h.gprs[24] = 0
+        emu.load_code(self.TEXT_PA, prog)
+        emu.load_code(self.DATA_PA, self.DATA_INIT.to_bytes(4, "little"))
+        h.pc = self.TEXT_PA
+        return emu, h, prog
+
+    def _readbacks(self, emu, h):
+        return (
+            h.gprs[3],
+            h.gprs[24],
+            int.from_bytes(emu.bus.read(self.DATA_PA, 8), "little"),
+            h.reservation_valid,
+        )
+
+    def _run_engine(self):
+        emu, h, prog = self._prepare()
+        assert emu._speedup_hart_states is not None, (
+            "回归测试必须走加速执行引擎"
+        )
+        emu._bp_addrs = [self.TEXT_PA + len(prog)]
+        emu.run(timeout=15)
+        out = self._readbacks(emu, h)
+        reason = emu._run_stop_reason
+        emu.close()
+        assert reason == RunStopReason.BREAKPOINT, (
+            f"应在程序末尾命中断点, 实际 reason={reason} "
+            f"pc=0x{h.pc:x} mcause=0x{h.csrs['mcause'].val:x}"
+        )
+        return out
+
+    def _run_interp(self):
+        emu, h, prog = self._prepare()
+        end_pc = self.TEXT_PA + len(prog)
+        steps = 0
+        while h.pc != end_pc and steps < 16:
+            emu.step()
+            steps += 1
+        out = self._readbacks(emu, h)
+        emu.close()
+        return out
+
+    def test_mixed_width_sc_succeeds(self):
+        eng = self._run_engine()
+        py = self._run_interp()
+        assert eng == py, f"引擎 {eng} 与解释器 {py} 的结果不一致"
+        rd_sc, rd_lr, mem, is_reserved = eng
+        assert rd_sc == 0, (
+            f"LR.W 之后对同一地址的 SC.D 应成功, rd 实际 {rd_sc:#x}"
+        )
+        assert rd_lr == self.LR_W_LR_READ_EXT, (
+            f"LR.W 写回 rd 的值应为符号扩展结果, 实际 {rd_lr:#x}"
+        )
+        assert mem == self.STORE_VAL, (
+            f"SC.D 应写入 {self.STORE_VAL:#x}, 实际内存 {mem:#x}"
+        )
+        assert is_reserved is False, "SC 之后预留应无效"
 
 
 class TestNativeXonlyFetch:
@@ -1716,7 +2001,8 @@ class TestNativeXonlyFetch:
         self,
         emu: Emulator,
     ) -> None:
-        """写入 Sv39 页表: 低 VA identity 超页 + 高 VA X-only trap_vector 映射."""
+        """写入 Sv39 页表:
+        低 VA identity 超页 + 高 VA X-only trap_vector 映射."""
         ram = emu.bus
 
         def wr64(pa: int, val: int) -> None:
@@ -1736,14 +2022,17 @@ class TestNativeXonlyFetch:
     def _make_enclave_emu(
         self,
     ) -> tuple[Emulator, object]:
-        """构建单 hart 模拟器: 页表 + 代码 + S 模式飞地入口态 (STIP 立即 pending)."""
+        """构建单 hart 模拟器:
+        页表 + 代码 + S 模式飞地入口态 (STIP 立即 pending)."""
         # MAN_PA=0x8ae00000 偏移 0xae00000 (182 MiB) > 默认 128 MiB RAM —
         # 必须扩 RAM 才能覆盖 enclave 池与页表 (对齐 make stress 场景).
         emu = make_test_emu(ram_size=0x1000_0000)
         h = emu.harts[0]
         self._build_page_tables(emu)
         # trap_vector: lui x1, 0x5AA (5AA005B7) 然后 NOP 填充
-        trap_code = (0x5AA0_05B7).to_bytes(4, "little") + b"\x13\x00\x00\x00" * 255
+        trap_code = (0x5AA0_05B7).to_bytes(4, "little") + (
+            b"\x13\x00\x00\x00" * 255
+        )
         emu.load_code(self.TEXT_PA, trap_code)
         # 低 VA 预中断点 NOP 填充
         emu.load_code(self.MAN_PA, b"\x13\x00\x00\x00" * 64)
@@ -1762,7 +2051,8 @@ class TestNativeXonlyFetch:
         # stimecmp/mtime 重新评估 STIP, 手工 mip 位会被 sync 覆盖)
         h.csrs["stimecmp"].val = 1
         emu.clint._mtime = 1
-        # M-mode trap handler 指向低 VA (identity 映射), 便于失败时观察 trap loop
+        # M-mode trap handler 指向低 VA (identity 映射),
+        # 便于失败时观察 trap loop
         h.csrs["mtvec"].val = self.MAN_PA
         h.pc = self.MAN_PA
         return emu, h
@@ -1787,7 +2077,9 @@ class TestNativeXonlyFetch:
         assert h.pc == self.TRAP_VEC_VA + 4, (
             "trap_vector 首条指令应被取指+执行 (X-only 页取指成功)"
         )
-        assert h.mode == RiscvMode.S, f"不应陷入 M 模式 trap loop, 实际 mode={h.mode}"
+        assert h.mode == RiscvMode.S, (
+            f"不应陷入 M 模式 trap loop, 实际 mode={h.mode}"
+        )
         assert h.csrs["mcause"].val == 0, (
             f"不应投递任何异常, 实际 mcause=0x{h.csrs['mcause'].val:x}"
         )
@@ -1817,7 +2109,8 @@ class TestNativeXonlyFetch:
 
         # S 模式同步异常投递到 stvec, cause 存于 scause (非 mcause)
         assert h.csrs["scause"].val == 13, (  # LoadPageFault
-            f"X-only 页数据读应触发 LoadPageFault, 实际 scause=0x{h.csrs['scause'].val:x}"
+            f"X-only 页数据读应触发 LoadPageFault, "
+            f"实际 scause=0x{h.csrs['scause'].val:x}"
         )
         assert h.csrs["stval"].val == self.TRAP_VEC_VA
 

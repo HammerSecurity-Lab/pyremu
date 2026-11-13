@@ -45,10 +45,13 @@ vendor/*
 
 bsp/*
 !bsp/sittim/
-!bsp/tee_aux_tools/
+!bsp/tee-tools/
 !bsp/kei-boot/
-!bsp/setup-rootfs/debootstrap/local-build.sh
-!bsp/setup-rootfs/debootstrap/regress.sh
+!bsp/eval-suites/
+!bsp/setup-rootfs/
+bsp/setup-rootfs/debootstrap/*
+!bsp/setup-rootfs/debootstrap/*.sh
+!bsp/setup-rootfs/debootstrap/eval.mk
 !bsp/readme
 !bsp/.linux-config
 !bsp/build-*.sh

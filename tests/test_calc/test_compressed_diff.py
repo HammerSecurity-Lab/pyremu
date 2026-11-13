@@ -6,7 +6,8 @@
 """压缩指令差分测试 — 每条 C 指令与其等效的非压缩指令在行为上必须一致.
 
 对每条 RV64C 指令, 按 RISC-V 规范构造正确的 16-bit 压缩编码,
-与等价的 32-bit 非压缩编码从相同初始状态执行, 比对全部 GPR (x0–x31) 和内存副作用.
+与等价的 32-bit 非压缩编码从相同初始状态执行, 比对全部 GPR (x0–x31)
+和内存副作用.
 """
 
 import pytest
@@ -105,13 +106,18 @@ def _snapshot_gprs(h: Hart) -> dict[int, int]:
     return {i: h.gprs[i] for i in range(32)}
 
 
-def _assert_gprs_equal(a: dict[int, int], b: dict[int, int], x0_may_differ: bool = True):
+def _assert_gprs_equal(
+    a: dict[int, int],
+    b: dict[int, int],
+    x0_may_differ: bool = True,
+):
     """断言两组 GPR 值一致. x0 永远为 0 (硬件), 允许跳过."""
     for i in range(32):
         if x0_may_differ and i == 0:
             continue
         assert a[i] == b[i], (
-            f"GPR x{i} differs: compressed={a[i]:#018x}, uncompressed={b[i]:#018x}"
+            f"GPR x{i} differs: compressed={a[i]:#018x}, "
+            f"uncompressed={b[i]:#018x}"
         )
 
 
@@ -418,7 +424,9 @@ class TestCompressedDifferential:
             | ((shamt >> 5) << 12)  # bit12 = shamt[5]
             | ((shamt & 0x1F) << 2),  # bits[6:2] = shamt[4:0]
         )
-        nc_instr = i_type(Opc.op_imm.value, rd, 0b101, rd, 0x400 | (shamt & 0x3F))
+        nc_instr = i_type(
+            Opc.op_imm.value, rd, 0b101, rd, 0x400 | (shamt & 0x3F)
+        )
 
         hc = Hart(id=0)
         hc.mem_read_phy = rf
@@ -507,7 +515,10 @@ class TestCompressedDifferential:
         funct3_map = {0b00: 0b000, 0b01: 0b100, 0b10: 0b110, 0b11: 0b111}
         funct7 = 0b0100000 if op_bits == 0b00 else 0b0000000
         nc_instr = r_type(
-            Opc.op.value, rd, pack_funct(funct7, funct3_map[op_bits]), pack_src_regs(rd, rs2)
+            Opc.op.value,
+            rd,
+            pack_funct(funct7, funct3_map[op_bits]),
+            pack_src_regs(rd, rs2),
         )
 
         hc = Hart(id=0)
@@ -534,7 +545,8 @@ class TestCompressedDifferential:
         "rd_creg,rs2_creg,v1,v2,op_bit5",
         [
             (3, 5, 100, 30, 0),  # SUBW
-            (1, 7, 0xFFFF_FFFF_8000_0000, 1, 1),  # ADDW: overflow wraps in 32-bit
+            # ADDW: overflow wraps in 32-bit
+            (1, 7, 0xFFFF_FFFF_8000_0000, 1, 1),
             (0, 2, 5, 10, 0),  # SUBW: negative result (sign-extended)
             (4, 6, 10, 10, 0),  # SUBW: 0 result
             (3, 5, 0x1_0000_0001, 1, 1),  # ADDW: 32-bit wrap to 2 -> sext32
@@ -558,12 +570,18 @@ class TestCompressedDifferential:
         if op_bit5 == 0:
             # SUBW: funct3=000, funct7=0b0100000
             nc_instr = r_type(
-                Opc.op32.value, rd, pack_funct(0b0100000, 0b000), pack_src_regs(rd, rs2)
+                Opc.op32.value,
+                rd,
+                pack_funct(0b0100000, 0b000),
+                pack_src_regs(rd, rs2),
             )
         else:
             # ADDW: funct3=000, funct7=0b0000000
             nc_instr = r_type(
-                Opc.op32.value, rd, pack_funct(0b0000000, 0b000), pack_src_regs(rd, rs2)
+                Opc.op32.value,
+                rd,
+                pack_funct(0b0000000, 0b000),
+                pack_src_regs(rd, rs2),
             )
 
         hc = Hart(id=0)
@@ -592,7 +610,8 @@ class TestCompressedDifferential:
             (3, 5, 0x1000, 0, 0xDEAD_BEEF),
             (0, 7, 0x1000, 4, 0x0102_0304),
             (7, 1, 0x0FFC, 0, 0xFFFF_FFFF),  # sign-extend boundary
-            (3, 2, 0x2000, 0x7C, 0xCAFE_BABE),  # max offset: uimm[6]=1, uimm[5:3]=7, uimm[2]=0
+            # max offset: uimm[6]=1, uimm[5:3]=7, uimm[2]=0
+            (3, 2, 0x2000, 0x7C, 0xCAFE_BABE),
         ],
     )
     def test_c_lw_vs_lw(self, rd_creg, rs1_creg, init_rs1, uimm, mem_val):
@@ -678,7 +697,8 @@ class TestCompressedDifferential:
         addr = init_rs1 + uimm
         assert ram_c[addr : addr + 4] == ram_n[addr : addr + 4], (
             f"Memory differs at {addr:#x}: "
-            f"C={ram_c[addr : addr + 4].hex()}, NC={ram_n[addr : addr + 4].hex()}"
+            f"C={ram_c[addr : addr + 4].hex()}, "
+            f"NC={ram_n[addr : addr + 4].hex()}"
         )
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 
@@ -748,7 +768,11 @@ class TestCompressedDifferential:
         c_instr = _c0(
             0b111,
             rs2_creg,
-            ((rs1_creg << 7) | ((uimm >> 6) & 0x3) << 5 | ((uimm >> 3) & 0x7) << 10),
+            (
+                (rs1_creg << 7)
+                | ((uimm >> 6) & 0x3) << 5
+                | ((uimm >> 3) & 0x7) << 10
+            ),
         )
         nc_instr = s_type(Opc.st.value, 0b011, rs1, rs2, uimm & 0xFFF)
 
@@ -771,7 +795,8 @@ class TestCompressedDifferential:
         addr = init_rs1 + uimm
         assert ram_c[addr : addr + 8] == ram_n[addr : addr + 8], (
             f"Memory differs at {addr:#x}: "
-            f"C={ram_c[addr : addr + 8].hex()}, NC={ram_n[addr : addr + 8].hex()}"
+            f"C={ram_c[addr : addr + 8].hex()}, "
+            f"NC={ram_n[addr : addr + 8].hex()}"
         )
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 
@@ -834,7 +859,10 @@ class TestCompressedDifferential:
             | (rs2 << 2),  # rs2 -> bits[6:2]
         )
         nc_instr = r_type(
-            Opc.op.value, rd, pack_funct(0b0000000, 0b000), pack_src_regs(0, rs2)
+            Opc.op.value,
+            rd,
+            pack_funct(0b0000000, 0b000),
+            pack_src_regs(0, rs2),
         )
 
         hc = Hart(id=0)
@@ -954,7 +982,8 @@ class TestCompressedDifferential:
         addr = init_sp + uimm
         ram[addr : addr + 4] = mem_val.to_bytes(4, "little")
 
-        # C.LWSP (FIXED): uimm[7:6]=bits[3:2], uimm[5]=bit12, uimm[4:2]=bits[6:4]
+        # C.LWSP (FIXED): uimm[7:6]=bits[3:2], uimm[5]=bit12,
+        # uimm[4:2]=bits[6:4].
         c_instr = _c2(
             0b010,
             rd,
@@ -1067,7 +1096,8 @@ class TestCompressedDifferential:
         addr = init_sp + uimm
         assert ram_c[addr : addr + 4] == ram_n[addr : addr + 4], (
             f"Memory differs at {addr:#x}: "
-            f"C={ram_c[addr : addr + 4].hex()}, NC={ram_n[addr : addr + 4].hex()}"
+            f"C={ram_c[addr : addr + 4].hex()}, "
+            f"NC={ram_n[addr : addr + 4].hex()}"
         )
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 
@@ -1115,7 +1145,8 @@ class TestCompressedDifferential:
         addr = init_sp + uimm
         assert ram_c[addr : addr + 8] == ram_n[addr : addr + 8], (
             f"Memory differs at {addr:#x}: "
-            f"C={ram_c[addr : addr + 8].hex()}, NC={ram_n[addr : addr + 8].hex()}"
+            f"C={ram_c[addr : addr + 8].hex()}, "
+            f"NC={ram_n[addr : addr + 8].hex()}"
         )
         _assert_gprs_equal(_snapshot_gprs(hc), _snapshot_gprs(hn))
 

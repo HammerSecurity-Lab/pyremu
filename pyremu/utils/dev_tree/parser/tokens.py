@@ -141,7 +141,10 @@ def init_tokens():
     token_spec = {
         TokenId.INCLUDE: r'(/include/\s*"(?:[^\\"]|\\.)*")',
         # #line directive or GCC linemarker
-        TokenId.LINE: r'^#(?:line)?[ \t]+([0-9]+[ \t]+"(?:[^\\"]|\\.)*")(?:[ \t]+[0-9]+){0,4}',
+        TokenId.LINE: (
+            r'^#(?:line)?[ \t]+([0-9]+[ \t]+"(?:[^\\"]|\\.)*")'
+            r"(?:[ \t]+[0-9]+){0,4}"
+        ),
         TokenId.STRING: r'"((?:[^\\"]|\\.)*)"',
         TokenId.DTS_V1: r"(/dts-v1/)",
         TokenId.PLUGIN: r"(/plugin/)",

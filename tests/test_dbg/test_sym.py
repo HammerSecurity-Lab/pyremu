@@ -136,7 +136,9 @@ class TestResolveSymbol:
         assert sym.SymLookupOps._resolve_symbol({}, 0x1100, ranges) is None
 
     def test_exact_match_is_used_without_ranges(self):
-        assert sym.SymLookupOps._resolve_symbol({"main": 0x8000}, 0x8000) == "main"
+        assert (
+            sym.SymLookupOps._resolve_symbol({"main": 0x8000}, 0x8000) == "main"
+        )
 
     def test_exact_match_runs_before_predecessor_fallback(self):
         """无区间信息时精确匹配优先于最近前驱."""
@@ -146,15 +148,24 @@ class TestResolveSymbol:
     def test_gap_inside_range_span_yields_none(self):
         """地址落在区间跨度之内但不在任何区间内时放弃匹配."""
         ranges = [(0x1000, 0x1100, "probe"), (0x2000, 0x2100, "echo")]
-        assert sym.SymLookupOps._resolve_symbol({"mid": 0x1500}, 0x1800, ranges) is None
+        assert (
+            sym.SymLookupOps._resolve_symbol({"mid": 0x1500}, 0x1800, ranges)
+            is None
+        )
 
     def test_address_before_range_span_falls_back_to_predecessor(self):
         ranges = [(0x1000, 0x1100, "probe")]
-        assert sym.SymLookupOps._resolve_symbol({"head": 0x0F00}, 0x0F00, ranges) == "head"
+        assert (
+            sym.SymLookupOps._resolve_symbol({"head": 0x0F00}, 0x0F00, ranges)
+            == "head"
+        )
 
     def test_address_after_range_span_falls_back_to_predecessor(self):
         ranges = [(0x1000, 0x1100, "probe")]
-        assert sym.SymLookupOps._resolve_symbol({"tail": 0x3000}, 0x3000, ranges) == "tail"
+        assert (
+            sym.SymLookupOps._resolve_symbol({"tail": 0x3000}, 0x3000, ranges)
+            == "tail"
+        )
 
     @pytest.mark.parametrize("name", ["$x", ".L0"])
     def test_assembler_local_names_are_skipped(self, name):
@@ -167,16 +178,24 @@ class TestResolveSymbol:
 
     def test_predecessor_beyond_limit_yields_none(self):
         """最近前驱相距超过 64 KiB 时不视为匹配."""
-        assert sym.SymLookupOps._resolve_symbol({"far": 0x1000}, 0x1000 + 0x10001) is None
+        assert (
+            sym.SymLookupOps._resolve_symbol({"far": 0x1000}, 0x1000 + 0x10001)
+            is None
+        )
 
     def test_predecessor_at_limit_is_accepted(self):
-        assert sym.SymLookupOps._resolve_symbol({"far": 0x1000}, 0x1000 + 0x10000) == "far"
+        assert (
+            sym.SymLookupOps._resolve_symbol({"far": 0x1000}, 0x1000 + 0x10000)
+            == "far"
+        )
 
     def test_empty_symbols_yield_none(self):
         assert sym.SymLookupOps._resolve_symbol({}, 0x1000) is None
 
     def test_successor_only_yields_none(self):
-        assert sym.SymLookupOps._resolve_symbol({"later": 0x2000}, 0x1000) is None
+        assert (
+            sym.SymLookupOps._resolve_symbol({"later": 0x2000}, 0x1000) is None
+        )
 
 
 # ============================================================
@@ -202,7 +221,11 @@ class TestLoadKernelSymbols:
     def test_non_elf_file_reports_error(self, tmp_path, monkeypatch):
         src = tmp_path / "kernel.bin"
         src.write_bytes(b"\x00")
-        monkeypatch.setattr(sym.lookup, "parse_firmware", lambda *a, **k: _fw_image(fmt="raw"))
+        monkeypatch.setattr(
+            sym.lookup,
+            "parse_firmware",
+            lambda *a, **k: _fw_image(fmt="raw"),
+        )
         dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE)
         assert dbg.load_kernel_symbols(str(src)) is False
         assert "需为 ELF" in buf.getvalue()
@@ -210,7 +233,9 @@ class TestLoadKernelSymbols:
     def test_missing_symbol_table_reports_warning(self, tmp_path, monkeypatch):
         src = tmp_path / "vmlinux"
         src.write_bytes(b"\x00")
-        monkeypatch.setattr(sym.lookup, "parse_firmware", lambda *a, **k: _fw_image())
+        monkeypatch.setattr(
+            sym.lookup, "parse_firmware", lambda *a, **k: _fw_image()
+        )
         dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE)
         assert dbg.load_kernel_symbols(str(src)) is False
         assert "未找到符号表" in buf.getvalue()
@@ -225,8 +250,12 @@ class TestLoadKernelSymbols:
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE)
         assert dbg.load_kernel_symbols(EXISTING_PATH) is True
         expected_base = RAM_BASE + configs_gen.FW_RESERVED_MEM_SIZE
-        assert dbg._sym_load_offset == (expected_base - 0x1000) & ((1 << 64) - 1)
-        assert dbg._sym_symbols_pa["main"] == (0x1000 + dbg._sym_load_offset) & ((1 << 64) - 1)
+        assert dbg._sym_load_offset == (
+            (expected_base - 0x1000) & ((1 << 64) - 1)
+        )
+        assert dbg._sym_symbols_pa["main"] == (
+            (0x1000 + dbg._sym_load_offset) & ((1 << 64) - 1)
+        )
 
     def test_explicit_base_address_is_used(self, monkeypatch):
         image = _fw_image(entry_point=0x2000, symbols={"main": 0x2000})
@@ -276,7 +305,9 @@ class TestLoadKernelSymbols:
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE)
         monkeypatch.setattr(sym.lookup, "parse_firmware", lambda *a, **k: first)
         dbg.load_kernel_symbols(EXISTING_PATH)
-        monkeypatch.setattr(sym.lookup, "parse_firmware", lambda *a, **k: second)
+        monkeypatch.setattr(
+            sym.lookup, "parse_firmware", lambda *a, **k: second
+        )
         assert dbg.load_kernel_symbols(EXISTING_PATH) is True
         assert dbg._sym_symbols == {"new": 0x1000}
         assert "old" not in dbg._sym_symbols_pa
@@ -309,7 +340,11 @@ class TestResolveSymAddr:
         dbg._sym_symbols = {"main": 0x1000}
         dbg._sym_load_offset = 0x2000
         emu.harts[0].satp_val = SATP_SV39
-        monkeypatch.setattr(MemoryAccessOps, "translate_addr", lambda *a, **k: (True, 0x4000))
+        monkeypatch.setattr(
+            MemoryAccessOps,
+            "translate_addr",
+            lambda *a, **k: (True, 0x4000),
+        )
         assert dbg._resolve_sym_addr(KERNEL_VA) == 0x4000
 
     def test_original_address_is_kept_when_translation_fails(self, monkeypatch):
@@ -317,7 +352,11 @@ class TestResolveSymAddr:
         dbg._sym_symbols = {"main": 0x1000}
         dbg._sym_load_offset = 0x2000
         emu.harts[0].satp_val = SATP_SV39
-        monkeypatch.setattr(MemoryAccessOps, "translate_addr", lambda *a, **k: (False, 0))
+        monkeypatch.setattr(
+            MemoryAccessOps,
+            "translate_addr",
+            lambda *a, **k: (False, 0),
+        )
         assert dbg._resolve_sym_addr(KERNEL_VA) == KERNEL_VA
 
 
@@ -365,7 +404,8 @@ class TestResolveAnySymbolName:
 
     def test_firmware_symbol_wins(self):
         image = _fw_image(
-            symbols={"fw_main": 0x1000}, symbol_ranges=[(0x1000, 0x1100, "fw_main")]
+            symbols={"fw_main": 0x1000},
+            symbol_ranges=[(0x1000, 0x1100, "fw_main")],
         )
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=image)
         dbg._sym_symbols = {"kern": 0x1000}
@@ -373,7 +413,8 @@ class TestResolveAnySymbolName:
 
     def test_kernel_symbols_are_consulted_after_firmware_miss(self):
         image = _fw_image(
-            symbols={"fw_main": 0x1000}, symbol_ranges=[(0x1000, 0x1100, "fw_main")]
+            symbols={"fw_main": 0x1000},
+            symbol_ranges=[(0x1000, 0x1100, "fw_main")],
         )
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=image)
         dbg._sym_symbols = {"kern": 0x50000}
@@ -382,7 +423,8 @@ class TestResolveAnySymbolName:
 
     def test_firmware_load_offset_is_subtracted(self):
         image = _fw_image(
-            symbols={"fw_main": 0x1000}, symbol_ranges=[(0x1000, 0x1100, "fw_main")]
+            symbols={"fw_main": 0x1000},
+            symbol_ranges=[(0x1000, 0x1100, "fw_main")],
         )
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=image)
         dbg._load_offset = 0x8000_0000
@@ -431,7 +473,11 @@ class TestModuleNameAt:
 
     def test_untranslatable_address_returns_none(self, monkeypatch):
         dbg, _ = self._make_dbg()
-        monkeypatch.setattr(MemoryAccessOps, "translate_addr", lambda *a, **k: (False, 0))
+        monkeypatch.setattr(
+            MemoryAccessOps,
+            "translate_addr",
+            lambda *a, **k: (False, 0),
+        )
         assert dbg._module_name_at(MODULE_VA) is None
 
 
@@ -447,26 +493,50 @@ class TestFindSegment:
 
     def test_containing_segment_is_returned(self):
         segs = [
-            FirmwareSegment(vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text"),
-            FirmwareSegment(vaddr=0x2000, data=b"\x00", memsz=0x100, name=".data"),
+            FirmwareSegment(
+                vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text"
+            ),
+            FirmwareSegment(
+                vaddr=0x2000, data=b"\x00", memsz=0x100, name=".data"
+            ),
         ]
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=_fw_image(segments=segs))
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, image=_fw_image(segments=segs)
+        )
         assert dbg._find_segment(0x2050).name == ".data"
 
     def test_bss_tail_is_inside_segment(self):
         """memsz 大于文件内容时, 零填充部分仍属该段."""
-        segs = [FirmwareSegment(vaddr=0x1000, data=b"\x00", memsz=0x1000, name=".bss")]
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=_fw_image(segments=segs))
+        segs = [
+            FirmwareSegment(
+                vaddr=0x1000, data=b"\x00", memsz=0x1000, name=".bss"
+            )
+        ]
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, image=_fw_image(segments=segs)
+        )
         assert dbg._find_segment(0x1F00).name == ".bss"
 
     def test_address_at_segment_end_is_outside(self):
-        segs = [FirmwareSegment(vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text")]
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=_fw_image(segments=segs))
+        segs = [
+            FirmwareSegment(
+                vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text"
+            )
+        ]
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, image=_fw_image(segments=segs)
+        )
         assert dbg._find_segment(0x1100) is None
 
     def test_address_in_no_segment_returns_none(self):
-        segs = [FirmwareSegment(vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text")]
-        dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE, image=_fw_image(segments=segs))
+        segs = [
+            FirmwareSegment(
+                vaddr=0x1000, data=b"\x00", memsz=0x100, name=".text"
+            )
+        ]
+        dbg, _, _ = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, image=_fw_image(segments=segs)
+        )
         assert dbg._find_segment(0x9000) is None
 
 
@@ -543,13 +613,16 @@ class TestCmdSymbols:
         assert "无可用的符号表" in buf.getvalue()
 
     def test_empty_symbol_table_is_reported(self):
-        dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, image=_fw_image())
+        dbg, _, buf = make_test_dbg_buffered(
+            ram_size=RAM_SIZE, image=_fw_image()
+        )
         dbg.cmd_symbols()
         assert "符号表为空" in buf.getvalue()
 
     def test_grouping_counts_symbols_by_first_character(self):
         dbg, _, buf = make_test_dbg_buffered(
-            ram_size=RAM_SIZE, image=_fw_image(symbols={"alpha": 1, "beta": 2, "ax": 3})
+            ram_size=RAM_SIZE,
+            image=_fw_image(symbols={"alpha": 1, "beta": 2, "ax": 3}),
         )
         dbg.cmd_symbols()
         text = buf.getvalue()
@@ -559,7 +632,9 @@ class TestCmdSymbols:
         assert "sym <prefix>" in text
 
     def test_prefix_filter_lists_matching_addresses(self):
-        image = _fw_image(symbols={"alpha": 0x1000, "ax": 0x1004, "beta": 0x2000})
+        image = _fw_image(
+            symbols={"alpha": 0x1000, "ax": 0x1004, "beta": 0x2000}
+        )
         dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE, image=image)
         dbg.cmd_symbols("a")
         text = buf.getvalue()
@@ -630,7 +705,9 @@ class TestCmdSym:
     def test_load_without_path_reports_usage(self):
         dbg, _, buf = make_test_dbg_buffered(ram_size=RAM_SIZE)
         dbg.cmd_sym("load")
-        assert "用法: sym load <#n|文件名> [pa:<addr>|va:<addr>]" in buf.getvalue()
+        assert (
+            "用法: sym load <#n|文件名> [pa:<addr>|va:<addr>]" in buf.getvalue()
+        )
 
     @pytest.mark.parametrize(
         ("spec", "space", "base"),
@@ -652,7 +729,9 @@ class TestCmdSym:
 
         dbg, _, _ = make_test_dbg_buffered(ram_size=RAM_SIZE)
         target = self._with_candidate(dbg, tmp_path)
-        monkeypatch.setattr(sym.cmd_files.loader, "load_symbol_module", fake_load)
+        monkeypatch.setattr(
+            sym.cmd_files.loader, "load_symbol_module", fake_load
+        )
         dbg.cmd_sym(f"load #1 {spec}")
         assert recorded == {"path": str(target), "space": space, "base": base}
 

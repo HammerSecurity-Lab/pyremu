@@ -13,8 +13,8 @@
 - 根节点声明的单元格数不足以描述上述区间时改为 2 与 2, 直接子节点的 reg 与
   ranges 同步改写, 使各属性的含义不变.
 - fdt_node 的节点读写与单元格编解码按名称与高位在前的顺序进行.
-- 芯片 DTS 的读取入口接受 dtc 拒绝的两种写法: 缺少 /dts-v1/; 的源文本与不带名称的
-  根节点. 由 DTB 导出的文本两者都是, 读取入口在解析前补齐.
+- 芯片 DTS 的读取入口接受 dtc 拒绝的两种写法: 缺少 /dts-v1/; 的源文本与不带
+  名称的根节点. 由 DTB 导出的文本两者都是, 读取入口在解析前补齐.
 """
 
 import libfdt
@@ -123,7 +123,8 @@ TREE_IRQS = """
 RAM_BASE = 0x8000_0000
 RAM_6GIB = 6 * 1024 * 1024 * 1024
 
-# 三个处理器节点, 中断控制器 phandle 依次为 1、2、3; CLINT 与 PLIC 只列出第一个 hart.
+# 三个处理器节点, 中断控制器 phandle 依次为 1、2、3;
+# CLINT 与 PLIC 只列出第一个 hart.
 # 设备节点的 interrupts-extended 指向 PLIC, 不在补全范围.
 TREE_SMP = """
 {
@@ -196,10 +197,15 @@ TREE_SMP = """
 def _blob(text: str = TREE_1_1, **kwargs) -> bytes:
     """按关键字给出的内容回写; 没有给出内容时原样回写."""
     delivered = dev_tree.DeliveredTree(**kwargs) if kwargs else None
-    return dev_tree.chip_dt_to_dtb(dev_tree.parse_chip_dts_text(text), delivered)
+    return dev_tree.chip_dt_to_dtb(
+        dev_tree.parse_chip_dts_text(text), delivered
+    )
 
 
-def _blob_with_report(text: str = TREE_1_1, **kwargs) -> tuple[bytes, list[str]]:
+def _blob_with_report(
+    text: str = TREE_1_1,
+    **kwargs,
+) -> tuple[bytes, list[str]]:
     """按关键字给出的内容回写, 并收集修正项的报告文本."""
     messages: list[str] = []
     delivered = dev_tree.DeliveredTree(**kwargs) if kwargs else None
@@ -236,10 +242,18 @@ def _children(blob: bytes, path: str) -> list[str]:
     return names
 
 
-def _reg_of(blob: bytes, path: str, addr_cells: int, size_cells: int) -> tuple[int, int]:
+def _reg_of(
+    blob: bytes,
+    path: str,
+    addr_cells: int,
+    size_cells: int,
+) -> tuple[int, int]:
     words = _cells(blob, path, "reg")
     assert len(words) == addr_cells + size_cells
-    return fdt_node.decode_cells(words[:addr_cells]), fdt_node.decode_cells(words[addr_cells:])
+    return (
+        fdt_node.decode_cells(words[:addr_cells]),
+        fdt_node.decode_cells(words[addr_cells:]),
+    )
 
 
 def _has_node(blob: bytes, path: str) -> bool:
@@ -303,7 +317,9 @@ class TestFdtNode:
         assert fdt_node.is_enabled_node(root)
         root.append(fdt_node.FdtPropertyStrings("status", ["disabled"]))
         assert not fdt_node.is_enabled_node(root)
-        fdt_node.set_property(root, fdt_node.FdtPropertyStrings("status", ["okay"]))
+        fdt_node.set_property(
+            root, fdt_node.FdtPropertyStrings("status", ["okay"])
+        )
         assert fdt_node.is_enabled_node(root)
 
 
@@ -401,8 +417,8 @@ class TestPerHartAttrs:
 class TestCpus:
     """delivered.num_harts 给出的处理器编号与中断控制器的 hart 列表.
 
-    OpenSBI 依 interrupts-extended 为各 hart 配置 MSIP、定时器与 PLIC 上下文. 只列出
-    部分 hart 时, 其余 hart 收不到 IPI, 多 hart 启动停在等待 ALIVE 状态.
+    OpenSBI 依 interrupts-extended 为各 hart 配置 MSIP、定时器与 PLIC 上下文.
+    只列出部分 hart 时, 其余 hart 收不到 IPI, 多 hart 启动停在等待 ALIVE 状态.
     """
 
     def test_matching_hart_ids_are_not_reported(self):
@@ -447,7 +463,9 @@ class TestCpus:
     def test_plic_lists_every_assembled_hart(self):
         blob, messages = _blob_with_report(TREE_SMP, num_harts=3)
 
-        assert _cells(blob, "/soc/interrupt-controller@c000000", "interrupts-extended") == [
+        assert _cells(
+            blob, "/soc/interrupt-controller@c000000", "interrupts-extended"
+        ) == [
             1,
             11,
             1,
@@ -461,7 +479,9 @@ class TestCpus:
             3,
             9,
         ]
-        assert [item for item in messages if "interrupt-controller@c000000" in item]
+        assert [
+            item for item in messages if "interrupt-controller@c000000" in item
+        ]
 
     def test_hart_list_follows_assembled_count(self):
         blob, _ = _blob_with_report(TREE_SMP, num_harts=2)
@@ -526,7 +546,8 @@ class TestCpus:
     def test_disabled_cpu_node_raises(self):
         text = TREE_SMP.replace(
             'device_type = "cpu";\n\t\t\treg = <1>;',
-            'device_type = "cpu";\n\t\t\treg = <1>;\n\t\t\tstatus = "disabled";',
+            'device_type = "cpu";\n\t\t\treg = <1>;\n'
+            '\t\t\tstatus = "disabled";',
         )
 
         try:
@@ -630,7 +651,10 @@ class TestMemory:
 class TestReservedAndChosen:
     def test_reserved_ranges_become_no_map_children(self):
         ranges = [(0x8000_0000, 0x0400_0000), (0x8300_0000, 0x9000_0000)]
-        blob = _blob(ram=dev_tree.DtRegion(RAM_BASE, RAM_6GIB), reserved_ranges=ranges)
+        blob = _blob(
+            ram=dev_tree.DtRegion(RAM_BASE, RAM_6GIB),
+            reserved_ranges=ranges,
+        )
 
         children = _children(blob, "/reserved-memory")
         assert children == ["reserved-0@80000000", "reserved-1@83000000"]
@@ -658,7 +682,10 @@ class TestReservedAndChosen:
 
         children = _children(blob, "/reserved-memory")
         assert children == ["region@90000000", "reserved-1@83000000"]
-        assert bytes(_prop(blob, "/reserved-memory/reserved-1@83000000", "no-map")) == b""
+        assert (
+            bytes(_prop(blob, "/reserved-memory/reserved-1@83000000", "no-map"))
+            == b""
+        )
 
     def test_reserved_memory_cells_mismatch_raises(self):
         text = """
@@ -676,7 +703,9 @@ class TestReservedAndChosen:
             _blob(text, reserved_ranges=[(0x8300_0000, 0x1000)])
         except ValueError:
             return
-        raise AssertionError("/reserved-memory 的单元格数与根节点不一致时必须报告原因")
+        raise AssertionError(
+            "/reserved-memory 的单元格数与根节点不一致时必须报告原因"
+        )
 
     def test_chosen_carries_bootargs_seed_and_initrd(self):
         blob = _blob(
@@ -684,10 +713,19 @@ class TestReservedAndChosen:
             initrd=(0x1_0000_0000, 0x1_0100_0000),
         )
 
-        assert _prop(blob, "/chosen", "bootargs").as_str() == "console=ttySIF0 root=/dev/vda"
+        assert (
+            _prop(blob, "/chosen", "bootargs").as_str()
+            == "console=ttySIF0 root=/dev/vda"
+        )
         assert len(bytes(_prop(blob, "/chosen", "rng-seed"))) == 64
-        assert _prop(blob, "/chosen", "linux,initrd-start").as_uint64() == 0x1_0000_0000
-        assert _prop(blob, "/chosen", "linux,initrd-end").as_uint64() == 0x1_0100_0000
+        assert (
+            _prop(blob, "/chosen", "linux,initrd-start").as_uint64()
+            == 0x1_0000_0000
+        )
+        assert (
+            _prop(blob, "/chosen", "linux,initrd-end").as_uint64()
+            == 0x1_0100_0000
+        )
 
 
 # ============================================================
@@ -727,7 +765,9 @@ class TestPlaceDevice:
     def test_mmio_region_skips_reserved_ranges(self):
         chip = dev_tree.parse_chip_dts_text(TREE_PLIC)
 
-        region = chip.first_avail_mmio_region(0x200, reserved=[(0x1000, 0x3000)])
+        region = chip.first_avail_mmio_region(
+            0x200, reserved=[(0x1000, 0x3000)]
+        )
 
         assert region == dev_tree.DtRegion(0x3000, 0x200)
 
@@ -789,7 +829,9 @@ class TestSupplementDeviceNode:
 
         blob = _blob(TREE_PLIC, devices=(device,))
 
-        assert _cells(blob, "/soc/interrupt-controller@c000000", "riscv,ndev") == [2]
+        assert _cells(
+            blob, "/soc/interrupt-controller@c000000", "riscv,ndev"
+        ) == [2]
 
     def test_ndev_is_kept_when_it_already_covers_the_irq(self):
         text = TREE_PLIC.replace("riscv,ndev = <1>;", "riscv,ndev = <8>;")
@@ -798,7 +840,9 @@ class TestSupplementDeviceNode:
 
         blob = _blob(text, devices=(device,))
 
-        assert _cells(blob, "/soc/interrupt-controller@c000000", "riscv,ndev") == [8]
+        assert _cells(
+            blob, "/soc/interrupt-controller@c000000", "riscv,ndev"
+        ) == [8]
 
     def test_absent_devices_leave_the_tree_unchanged(self):
         blob = _blob(TREE_PLIC)

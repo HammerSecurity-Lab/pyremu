@@ -170,7 +170,8 @@ class DT(LexerOps):
         alias, _, rest = path.partition("/")
         if alias not in self.alias2node:
             err(
-                f"no alias '{alias}' found -- did you forget the leading '/' in the node path?"
+                f"no alias '{alias}' found -- did you forget the leading '/'"
+                " in the node path?"
             )
 
         return _root_and_path_to_node(self.alias2node[alias], rest, path)
@@ -201,7 +202,10 @@ class DT(LexerOps):
             err("the root node can't be moved")
 
         if self.has_node(new_path):
-            err(f"can't move '{node.path}' to '{new_path}': destination node exists")
+            err(
+                f"can't move '{node.path}' to '{new_path}':"
+                " destination node exists"
+            )
 
         if not new_path.startswith("/"):
             err(f"path '{new_path}' doesn't start with '/'")
@@ -269,7 +273,10 @@ class DT(LexerOps):
         the DT instance is evaluated.
         """
         if self.filename:
-            return f"DT(filename='{self.filename}', include_path={self._include_path})"
+            return (
+                f"DT(filename='{self.filename}',"
+                f" include_path={self._include_path})"
+            )
         return super().__repr__()
 
     def __deepcopy__(self, memo):
@@ -305,7 +312,8 @@ class DT(LexerOps):
                 node_copy.parent = path2node_copy[parent.path]
 
             prop_name2prop_copy = {
-                prop.name: Property(node_copy, prop.name) for prop in node.props.values()
+                prop.name: Property(node_copy, prop.name)
+                for prop in node.props.values()
             }
             for prop_name, prop_copy in prop_name2prop_copy.items():
                 prop = node.props[prop_name]
@@ -314,7 +322,9 @@ class DT(LexerOps):
                 prop_copy.offset_labels = prop.offset_labels.copy()
                 prop_copy._label_offset_lst = prop._label_offset_lst[:]
                 prop_copy._markers = [marker[:] for marker in prop._markers]
-                prop_copy._signed_cell_offsets = prop._signed_cell_offsets.copy()
+                prop_copy._signed_cell_offsets = (
+                    prop._signed_cell_offsets.copy()
+                )
                 prop_copy.filename = prop.filename
                 prop_copy.lineno = prop.lineno
             node_copy.props = prop_name2prop_copy
@@ -432,10 +442,14 @@ class DT(LexerOps):
 
             if self._peek_token().id == TokenId.MEMRESERVE:
                 self._next_token()
-                self.memreserves.append((labels, self._eval_prim(), self._eval_prim()))
+                self.memreserves.append(
+                    (labels, self._eval_prim(), self._eval_prim())
+                )
                 self._expect_token(";")
             elif labels:
-                self._parse_error("expected /memreserve/ after labels at beginning of file")
+                self._parse_error(
+                    "expected /memreserve/ after labels at beginning of file"
+                )
             else:
                 return
 
@@ -515,7 +529,9 @@ class DT(LexerOps):
                     child = node.nodes.get(tok.val)
                     if child:
                         if child.name in current_child_names:
-                            self._parse_error(f"{child.path}: duplicate node name")
+                            self._parse_error(
+                                f"{child.path}: duplicate node name"
+                            )
                     else:
                         child = Node(
                             name=tok.val,
@@ -539,7 +555,9 @@ class DT(LexerOps):
                     # Not '<tok> { ...', expect property assignment
 
                     if omit_if_no_ref:
-                        self._parse_error("/omit-if-no-ref/ can only be used on nodes")
+                        self._parse_error(
+                            "/omit-if-no-ref/ can only be used on nodes"
+                        )
 
                     prop = node._get_prop(tok.val)
                     prop.filename = self.filename
@@ -662,7 +680,8 @@ class DT(LexerOps):
                 self._next_token()
                 if n_bytes != 4:
                     self._parse_error(
-                        "phandle references are only allowed in arrays with 32-bit elements"
+                        "phandle references are only allowed in arrays"
+                        " with 32-bit elements"
                     )
                 prop._add_marker(MarkerType.PHANDLE, tok.val)
 
@@ -686,13 +705,17 @@ class DT(LexerOps):
                     try:
                         prop.value += num.to_bytes(n_bytes, "big", signed=True)
                     except OverflowError:
-                        self._parse_error(f"{num} does not fit in {8 * n_bytes} bits")
+                        self._parse_error(
+                            f"{num} does not fit in {8 * n_bytes} bits"
+                        )
                     prop._signed_cell_offsets.add(offset)
                 else:
                     try:
                         prop.value += num.to_bytes(n_bytes, "big")
                     except OverflowError:
-                        self._parse_error(f"{num} does not fit in {8 * n_bytes} bits")
+                        self._parse_error(
+                            f"{num} does not fit in {8 * n_bytes} bits"
+                        )
 
     def _parse_bytes(self, prop):
         # Parses '[ ... ]'
@@ -921,7 +944,9 @@ class DT(LexerOps):
 
         label = self._next_token()
         if label.id != TokenId.REF:
-            self._parse_error("expected label (&foo) or path (&{/foo/bar}) reference")
+            self._parse_error(
+                "expected label (&foo) or path (&{/foo/bar}) reference"
+            )
         try:
             return self._ref2node(label.val)
         except DTError as e:
@@ -980,7 +1005,10 @@ class DT(LexerOps):
                             is_self_referential = True
                             break
 
-                        err(f"{node.path}: {phandle.name} refers to another node")
+                        err(
+                            f"{node.path}: {phandle.name}"
+                            " refers to another node"
+                        )
 
                 # Could put on else on the 'for' above too, but keep it
                 # somewhat readable
@@ -988,7 +1016,10 @@ class DT(LexerOps):
                     phandle_val = int.from_bytes(phandle.value, "big")
 
                     if phandle_val in {0, 0xFFFFFFFF}:
-                        err(f"{node.path}: bad value {phandle_val:#010x} for {phandle.name}")
+                        err(
+                            f"{node.path}: bad value {phandle_val:#010x}"
+                            f" for {phandle.name}"
+                        )
 
                     if phandle_val in self.phandle2node:
                         err(
@@ -1029,9 +1060,9 @@ class DT(LexerOps):
 
                     if marker_type is MarkerType.LABEL:
                         # This is a temporary format so that we can catch
-                        # duplicate references. prop._label_offset_lst is changed
-                        # to a dictionary that maps labels to offsets in
-                        # _register_labels().
+                        # duplicate references.
+                        # prop._label_offset_lst is changed to a dictionary
+                        # that maps labels to offsets in _register_labels().
                         _append_no_dup(prop._label_offset_lst, (ref, len(res)))
                     elif marker_type in (MarkerType.PATH, MarkerType.PHANDLE):
                         # Path or phandle reference
@@ -1128,7 +1159,10 @@ class DT(LexerOps):
                     if isinstance(thing, Node):
                         strings.append(f"on {thing.path}")
                     elif isinstance(thing, Property):
-                        strings.append(f"on property '{thing.name}' of node {thing.node.path}")
+                        strings.append(
+                            f"on property '{thing.name}'"
+                            f" of node {thing.node.path}"
+                        )
                     else:
                         # Label within property value
                         strings.append(
@@ -1171,7 +1205,10 @@ def _root_and_path_to_node(cur, path, fullpath):
             if len(names) == 1:
                 cur = cur.nodes[names[0]]
             else:
-                err(f"component '{component}' in path '{fullpath}' does not exist")
+                err(
+                    f"component '{component}' in path '{fullpath}'"
+                    " does not exist"
+                )
         else:
             cur = cur.nodes[lookup]
 

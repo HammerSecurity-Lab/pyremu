@@ -19,7 +19,8 @@ from pyremu.platform import InterruptMode, PeripheralConfig, PlatformConfig
 def _disable_aia_compile_override(monkeypatch):
     """Disable PYREMU_AIA compile-time override.
 
-    Tests use explicit configs: basic_machine() for legacy, basic_aia_machine() for AIA.
+    Tests use explicit configs: basic_machine() for legacy,
+    basic_aia_machine() for AIA.
     """
     monkeypatch.setattr(configs_gen, "PYREMU_AIA", False)
 
@@ -65,7 +66,9 @@ class TestConfigSerialization:
 
     def test_json_roundtrip_legacy(self):
         cfg = PlatformConfig.basic_machine()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
             json.dump(
                 {
                     "num_harts": cfg.num_harts,
@@ -90,7 +93,9 @@ class TestConfigSerialization:
 
     def test_json_roundtrip_aia(self):
         cfg = PlatformConfig.basic_aia_machine()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
             json.dump(
                 {
                     "num_harts": cfg.num_harts,
@@ -116,13 +121,15 @@ class TestPeripheralConfigDefault:
     """PeripheralConfig 默认值向后兼容."""
 
     def test_default_imsic_base_follows_build_config(self):
-        """默认 IMSIC 与 APLIC 基址取自根据项目编译选项自动生成的AIA中断控制器基地址常量."""
+        """默认 IMSIC 与 APLIC 基址取自根据项目编译选项自动生成的AIA
+        中断控制器基地址常量."""
         p = PeripheralConfig()
         assert p.imsic_m_base == configs_gen.IMSIC_M_BASE
         assert p.aplic_s_base == configs_gen.APLIC_S_BASE
 
     def test_minimal_preset_rejected_by_window_overlap(self):
-        """minimal 预设的 RAM 窗口覆盖 CLINT, 装配模拟器时被地址窗口重叠断言拒绝."""
+        """minimal 预设的 RAM 窗口覆盖 CLINT,
+        装配模拟器时被地址窗口重叠断言拒绝."""
         cfg = PlatformConfig.minimal()
         with pytest.raises(AssertionError, match="与 RAM"):
             Emulator(cfg)

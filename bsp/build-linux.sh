@@ -11,12 +11,32 @@
 #   clang        标准 clang + lld (LLVM=1), 内核无厂商私有指令, 无需 custom-llvm
 #   custom-llvm  厂商定制 clang 22 + lld (LLVM=1 + LLVM_PREFIX), 见 .linux-config 头注释
 #
-# 用法:
-#   ./build-linux.sh                      # gcc 构建 (默认)
-#   TOOLCHAIN=clang ./build-linux.sh      # 标准 clang 构建
-#   TOOLCHAIN=custom-llvm ./build-linux.sh
-#   ./build-linux.sh Image                # 只构建 Image
 set -euo pipefail
+
+usage() {
+    cat <<EOF
+用法: $0 [make 目标 ...]
+
+    $0                      按内核默认目标构建 (gcc)
+    TOOLCHAIN=clang $0      标准 clang 构建
+    TOOLCHAIN=custom-llvm $0
+    $0 Image                只构建 Image
+
+无参数时按内核的默认目标构建; 参数原样传给 make.
+环境变量:
+    TOOLCHAIN   工具链, 取 gcc、clang 或 custom-llvm, 默认 gcc
+    JOBS        并行数, 默认 8
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -h | --help)
+            usage
+            exit 0
+            ;;
+    esac
+done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LINUX="$ROOT/bsp/linux"

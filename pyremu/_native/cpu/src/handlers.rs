@@ -9,6 +9,12 @@ use std::sync::Mutex;
 use crate::csr;
 use crate::decode::{decode_compressed, CompressedFields, DecodedFields};
 use crate::ffi::InstrToBeExec;
+pub use crate::interrupt::clint::ClintCtx;
+pub(crate) use crate::interrupt::clint::{clint_write_msip, try_handle_clint};
+use crate::mem;
+use crate::peripheral::plic::try_handle_plic_concurrent;
+pub use crate::peripheral::{is_device_addr, virtio::try_handle_virtio, DevCtx};
+pub use crate::pmp::{pmp_ok, PmpCtx};
 use crate::state::{exit_reason, riscv_mode, HartState, CFG_HAS_SEMIHOSTING};
 pub(crate) use crate::translate::{
 	lr_check, lr_clear_all, lr_set, ram_read, ram_write, rwx_read, rwx_write, translate_va,
@@ -16,16 +22,7 @@ pub(crate) use crate::translate::{
 };
 use crate::trap::{deliver_illegal_instruction, deliver_trap, exc_code, mcause_val};
 
-pub use crate::interrupt::clint::ClintCtx;
-pub(crate) use crate::interrupt::clint::{clint_write_msip, try_handle_clint};
-use crate::peripheral::plic::try_handle_plic_concurrent;
-pub use crate::peripheral::{is_device_addr, virtio::try_handle_virtio, DevCtx};
-pub use crate::pmp::{pmp_ok, PmpCtx};
-
 pub use crate::csr::EXIT_SENTINEL;
-// ============================================================
-//  SBI 扩展号与功能号, 依据 RISC-V SBI 规范 2.0
-// ============================================================
 
 #[allow(dead_code)]
 mod sbi_eid {
@@ -43,9 +40,7 @@ mod sbi_fid_ipi {
 	pub const SEND_IPI: u64 = 0;
 }
 
-// ============================================================
 //  通用寄存器的读取与写入辅助函数
-// ============================================================
 
 #[inline]
 fn read_gpr(state: &HartState, rs: u8) -> u64 {
@@ -122,9 +117,7 @@ fn exec_c1_alu(state: &HartState, cf: &CompressedFields) -> Option<u64> {
 	}
 }
 
-// ============================================================
 //  CLINT 的 MMIO 访问处理
-// ============================================================
 
 /// 可能由 CLINT 直接处理的一次访存描述。
 ///
@@ -213,9 +206,7 @@ fn try_handle_imsic_serial(pa: u64, val: u64, clint: &ClintCtx) -> bool {
 	}
 }
 
-// ============================================================
 //  加载处理
-// ============================================================
 pub fn handle_load(
 	state: &mut HartState,
 	f: &DecodedFields,
@@ -348,9 +339,7 @@ pub fn handle_load(
 	4
 }
 
-// ============================================================
 //  存储处理
-// ============================================================
 
 pub fn handle_store(
 	state: &mut HartState,
@@ -435,9 +424,7 @@ pub fn handle_store(
 	4
 }
 
-// ============================================================
 //  F/D 浮点加载与存储
-// ============================================================
 
 /// mstatus.FS 在 [14:13] 的掩码。
 const MSTATUS_FS_LS: u64 = 0b11 << 13;
@@ -585,9 +572,7 @@ pub fn handle_fp_store(
 	4
 }
 
-// ============================================================
 //  系统指令处理
-// ============================================================
 
 #[inline]
 fn try_sbi_time_set_timer(state: &mut HartState, clint: &ClintCtx) -> Option<u64> {
@@ -713,13 +698,19 @@ fn dispatch_privileged(
 			} // MIE 取 MPIE 的值
 			state.mstatus |= 1 << 7; // MPIE 置 1
 			state.mstatus &= !(0b11 << 11); // MPP 置 0, 表示 U 模式
+								   // 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 3.3.2 节)
+			if state.mode != riscv_mode::M {
+				state.mstatus &= !(1 << 17);
+			}
 			state.pc = state.mepc;
 			state.waiting = 0;
 			0
 		}
 		0x102 => {
-			// SRET: 检查特权级
-			if state.mode < riscv_mode::S {
+			// SRET: 检查特权级; mstatus.TSR=1 时 S 模式执行触发 IllInstr
+			if state.mode < riscv_mode::S
+				|| (state.mode == riscv_mode::S && ((state.mstatus >> 22) & 1) != 0)
+			{
 				deliver_illegal_instruction(state, instr as u64);
 				return 0;
 			}
@@ -737,6 +728,8 @@ fn dispatch_privileged(
 			} // SIE 取 SPIE 的值
 			state.mstatus |= 1 << 5; // SPIE 置 1
 			state.mstatus &= !(1 << 8); // SPP 置 0, 表示 U 模式
+							   // 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 3.3.2 节)
+			state.mstatus &= !(1 << 17);
 			state.pc = state.sepc;
 			state.waiting = 0;
 			0
@@ -756,7 +749,7 @@ fn dispatch_privileged(
 				state.wfi_woken = 0;
 				return 4; // 按 NOP 处理, PC 推进至下一条指令
 			}
-			let pending = state.mip.load(Ordering::Acquire) & state.mie;
+			let pending = state.mip_value() & state.mie;
 			if pending != 0 {
 				return 4;
 			} // 已有待处理中断, 按 NOP 处理
@@ -769,7 +762,12 @@ fn dispatch_privileged(
 		// 故匹配 0x120..0x13F 的全部取值, 使按 ASID 刷新的 sfence.vma x0, rs2
 		// 也在此处理, 不产生 IllInstr 陷态。
 		f if (f >> 5) == 0x09 => {
-			// SFENCE.VMA: 刷新全部 TLB 条目, 即 itlb 与 dtlb。
+			// SFENCE.VMA: S 模式在 mstatus.TVM=1 时触发 IllInstr
+			if state.mode == riscv_mode::S && ((state.mstatus >> 20) & 1) != 0 {
+				deliver_illegal_instruction(state, instr as u64);
+				return 0;
+			}
+			// 刷新全部 TLB 条目, 即 itlb 与 dtlb。
 			// 按 ASID 与 VA 过滤尚未实现, 当前执行全量刷新。
 			for e in state.itlb.iter_mut() {
 				e.valid = 0;
@@ -868,9 +866,7 @@ pub fn handle_system(
 	}
 }
 
-// ============================================================
 //  AMO 取值操作辅助函数: 按宽度分派 AtomicU32 与 AtomicU64
-// ============================================================
 
 /// 对一个 32 位值执行一次 AMO 取值操作。``funct5`` 与 ``rs2_val`` 来自
 /// 译码结果; 带符号的最小值与最大值操作把操作数按 ``i32`` 解释。
@@ -941,7 +937,7 @@ fn handle_amo_arithmetic(
 	tr: &TranslateResult,
 	ctx: &WalkCtx,
 ) -> u64 {
-	let off = super::mem::ram_offset_inline(
+	let off = mem::ram_offset(
 		tr.pa,
 		width as u32,
 		ctx.ram_base,
@@ -970,9 +966,7 @@ fn handle_amo_arithmetic(
 	4
 }
 
-// ============================================================
 //  AMO 处理
-// ============================================================
 
 pub fn handle_amo(
 	state: &mut HartState,
@@ -1045,6 +1039,7 @@ pub fn handle_amo(
 			lr_set(ctx, state.mhartid as u8, tr.pa);
 			state.reservation_valid = 1;
 			state.reservation_addr = tr.pa;
+			state.reservation_value = loaded;
 			write_gpr(state, rd, if width == 4 { sext32(loaded) } else { loaded });
 			4
 		}
@@ -1056,9 +1051,10 @@ pub fn handle_amo(
 				write_gpr(state, rd, 1);
 			} else {
 				ram_write(ctx, tr.pa, rs2_val, width);
-				state.reservation_valid = 0;
 				write_gpr(state, rd, 0);
 			}
+			// 成功与失败都清除预留, 与解释器一致.
+			state.reservation_valid = 0;
 			4
 		}
 		0b00001 | 0b00000 | 0b00100 | 0b01100 | 0b01000 | 0b10000 | 0b10100 | 0b11000 | 0b11100 => {
@@ -1071,9 +1067,7 @@ pub fn handle_amo(
 	}
 }
 
-// ============================================================
 //  压缩指令的处理函数
-// ============================================================
 
 pub fn handle_compressed(
 	state: &mut HartState,
@@ -1572,9 +1566,7 @@ fn handle_c2(
 	}
 }
 
-// ============================================================
 //  压缩指令的访存辅助函数
-// ============================================================
 
 /// 压缩指令的访存读取。
 ///
@@ -1698,8 +1690,6 @@ fn store_mem_compressed(
 	0 // 调用方返回 2
 }
 
-// ============================================================
-// ============================================================
 //
 // 半主机(semihosting)是固件与宿主调试器或模拟器以特定陷态序列通信的调试机制,
 // RISC-V 的半主机调用序列为:
@@ -2035,9 +2025,7 @@ mod tests {
 		);
 	}
 
-	// ============================================================
 	//  半主机测试
-	// ============================================================
 
 	/// 在 RAM 的 ``offset`` 处构造半主机陷态序列。
 	/// 返回 ebreak 指令的地址, 即 ram_base 加 offset。

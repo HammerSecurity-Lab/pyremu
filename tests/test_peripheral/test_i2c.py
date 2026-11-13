@@ -5,7 +5,8 @@
 
 """I2C 主模式控制器测试.
 
-覆盖: 寄存器读写 / STATUS 的位语义 / START 与 STOP 的边沿 / 读方向位对 DATA 的影响 /
+覆盖: 寄存器读写 / STATUS 的位语义 / START 与 STOP 的边沿 /
+读方向位对 DATA 的影响 /
 从设备应答判定 / Bus 集成 / 平台配置与 DTB 节点生成.
 """
 
@@ -195,13 +196,17 @@ class TestI2CConfig:
 
     def test_emulator_registers_device(self):
         """基址非零时 Emulator 创建 I2C 并挂到 Bus 上."""
-        emu = Emulator(make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0"
+        )
         assert emu.i2c is not None
         assert emu.bus.is_device_addr(I2C_BASE)
 
     def test_dtb_contains_i2c_node(self):
         """DTB 含 /soc/i2c@... 节点, compatible 与 reg 正确."""
-        emu = Emulator(make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0")
+        emu = Emulator(
+            make_test_config(i2c_base=I2C_BASE), bootargs="console=ttySIF0"
+        )
         fdt = libfdt.Fdt(emu.build_default_dtb())
         node = fdt.path_offset(f"/soc/i2c@{I2C_BASE:x}")
         assert node >= 0

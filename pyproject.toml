@@ -1,6 +1,6 @@
 [project]
 name = "pyremu"
-version = "0.5.1"
+version = "0.6.0"
 description = "a riscv emulator"
 readme = "docs/README.md"
 requires-python = ">=3.14.15"
@@ -136,13 +136,12 @@ norecursedirs = [
 
 [tool.ruff]
 indent-width = 4
-line-length = 95
+line-length = 80
 extend-exclude = [
     "vendor",
     "bsp",
 	"build",
 	"docs",
-    "fn_apps",
 ]
 
 [tool.ruff.lint]
@@ -191,7 +190,6 @@ exclude = [
 	"docs",
 	"examples",
 	"output",
-	"fn_apps",
 	"vendor",
 	"to-read",
     "migrations",

@@ -26,9 +26,11 @@ from pyremu.core.priv_defs import (
     MSTATUS_MIE,
     MSTATUS_MPIE,
     MSTATUS_MPP,
+    MSTATUS_MPRV,
     MSTATUS_SIE,
     MSTATUS_SPIE,
     MSTATUS_SPP,
+    MSTATUS_TSR,
     MSTATUS_TW,
     RiscvMode,
 )
@@ -66,7 +68,11 @@ class TrapOps:
         mip.MSIP 仍残留导致 MmodeSoftInterrupt 风暴).
         """
         current = self._csr_read_raw("mip")
-        self._csr_write_raw("mip", (current & ~HW_MIP_MASK) | hw_mip_bits)
+        merged = (current & ~HW_MIP_MASK) | hw_mip_bits
+        # 硬件位未变化时省去一次 CSR 写入
+        # 否则每条指令边界都会调用本函数.
+        if merged != current:
+            self._csr_write_raw("mip", merged)
 
     def _resolve_stip(
         self,
@@ -76,41 +82,22 @@ class TrapOps:
         """按 sstc 定时器的状态合并 mip.STIP, 返回 (mip 位, 是否挂起).
 
         平台未声明 sstc 或 stimecmp 为 0 时, STIP 取软件写入的 mip.STIP, 定时器
-        状态不得清除该位; 固件在这种情形下以 mtimecmp 承担 S 模式定时器. 否则 STIP
-        由定时器决定: mtime 到达比较值即挂起, 未到达即不挂起.
+        状态不得清除该位; 固件在这种情形下以 mtimecmp 承担 S 模式定时器. 否则
+        STIP 由定时器决定: mtime 到达比较值即挂起, 未到达即不挂起.
         """
         sti_mask = INT_SOURCE_MIP_MASK[IntSource.STI]
         has_sstc = self.ratified_hart_attrs.has_ext("sstc")
         stimecmp_val = self._csr_read_raw("stimecmp") if has_sstc else 0
         if stimecmp_val == 0:
             is_pending = bool(self._csr_read_raw("mip") & sti_mask)
-            return ((mip_bits | sti_mask) if is_pending else mip_bits), is_pending
+            return (
+                (mip_bits | sti_mask) if is_pending else mip_bits
+            ), is_pending
         if ctrl.get_mtime() >= stimecmp_val:
             return mip_bits | sti_mask, True
         return mip_bits, False
 
-    # ============================================================
-    #  IMSIC eip trap-entry cleanup (legacy mode)
-    # ============================================================
-
-    def _imsic_clear_ipi_on_trap(self, exc_code: int) -> None:
-        """Clear mip + IMSIC eip for software interrupt trap entry.
-
-        ``mip`` bit = ``1 << exc_code`` (MSIP=3->mip[3], SSIP=1->mip[1]).
-        IMSIC: MSIP->M-file IID=3, SSIP->S-file IID=1.
-        In AIA mode (eidelivery==1) eip is claimed via MTOPEI/STOPEI, not here.
-        """
-        self.mip_val &= ~(1 << exc_code)
-        imsic = self._imsic
-        if imsic is None:
-            return
-        # 经 IMSIC 并发安全清除 eip, 与 RX daemon 的 set_ip_number RMW
-        # 互斥, 避免 eip[word] 的丢失更新.
-        imsic.clear_ipi_on_trap(self.id, exc_code)
-
-    # ============================================================
     #  Trap 处理
-    # ============================================================
 
     def deliver_trap(
         self,
@@ -154,7 +141,11 @@ class TrapOps:
         # M 模式下永不委派; S/U 模式下根据 medeleg/mideleg 判断
         delegate = False
         if self.mode != RiscvMode.M:
-            choice = self.csrs["mideleg"].val if is_interrupt else self.csrs["medeleg"].val
+            choice = (
+                self.csrs["mideleg"].val
+                if is_interrupt
+                else self.csrs["medeleg"].val
+            )
             delegate = bool(choice & (1 << exc_code))
 
         fn = self._trap_deliver_smode if delegate else self._trap_deliver_mmode
@@ -208,19 +199,6 @@ class TrapOps:
         else:
             # vectored: 所有异常跳转 BASE, 中断跳转 BASE + 4 * exc_code
             self.pc = tvec_base + 4 * exc_code
-
-        # MSIP/SSIP 中断投递到 S 模式: 同步清零 CLINT MSIP + IMSIC eip.
-        # 在 AIA 模式下 IPI 通过 MEIP/SEIP (cause 11/9) 投递，eip 由 MTOPEI/
-        # STOPEI claim 清除，trap entry 不清理。
-        if not is_interrupt:
-            return
-        if exc_code == 3:  # MSIP (delegated to S)
-            ctrl = self._interrupt_ctrl
-            if ctrl:
-                ctrl.clear_ipi(self.id)
-            self._imsic_clear_ipi_on_trap(exc_code)
-        elif exc_code == 1:  # SSIP
-            self._imsic_clear_ipi_on_trap(exc_code)
 
     # ---- M 模式 trap 投递 ----
 
@@ -276,16 +254,7 @@ class TrapOps:
         else:
             self.pc = tvec_base + 4 * exc_code
 
-        # MSIP 中断: 同步清零 CLINT MSIP + IMSIC eip (legacy mode).
-        if is_interrupt and exc_code == 3:  # MSIP (mcause code 3)
-            ctrl = self._interrupt_ctrl
-            if ctrl:
-                ctrl.clear_ipi(self.id)
-            self._imsic_clear_ipi_on_trap(exc_code)
-
-    # ============================================================
     #  ECALL / EBREAK / MRET / SRET
-    # ============================================================
 
     def trap_ecall(
         self,
@@ -306,7 +275,8 @@ class TrapOps:
         pa: int,
         size: int,
     ) -> bytes:
-        """读物理 RAM *size* 字节; 越界返回全零, 与加速执行引擎的 read_ram_u64/u8 一致.
+        """读物理 RAM *size* 字节; 越界返回全零, 与加速执行引擎的
+        read_ram_u64/u8 一致.
 
         加速执行引擎仅在 ``[ram_base, ram_base + ram_size)`` 内读, 越界视为 0;
         设备 MMIO 地址不在此范围内, 一并视为越界.
@@ -343,9 +313,9 @@ class TrapOps:
     ) -> None:
         """服务带 marker 的 ebreak, 与加速执行引擎的 try_semihosting 语义一致.
 
-        按 a0 操作码分发, 结果写回 a0, 并将 pc 前进 8 越过 ebreak 与退出 marker, 使序列
-        余下的 ``sext.w/bltz`` 等指令自然处理返回值. SYS_EXIT 除外: 置停机标记供 run()
-        返回, 与纯 Python 引擎原有的处理相同, 不投递断点 trap.
+        按 a0 操作码分发, 结果写回 a0, 并将 pc 前进 8 越过 ebreak 与退出 marker,
+        使序列余下的 ``sext.w/bltz`` 等指令自然处理返回值. SYS_EXIT 除外: 置停机
+        标记供 run() 返回, 与纯 Python 引擎原有的处理相同, 不投递断点 trap.
         """
         op = self.gprs[10]
         param = self.gprs[11]
@@ -390,10 +360,10 @@ class TrapOps:
         self,
     ) -> None:
         """EBREAK: 断点异常."""
-        # semihosting marker 序列不投递断点 trap, 由 _semihosting_service 内联服务,
-        # SYS_EXIT 置停机标记供 run() 返回. 加速执行引擎的处理与此一致, 详见上方注释.
-        # PYREMU_HAS_SEMIHOSTING=0 时该序列按普通 ebreak 投递断点 trap, 固件的探测因此
-        # 判定宿主不支持, 控制台回落到 UART.
+        # semihosting marker 序列不投递断点 trap, 由 _semihosting_service
+        # 内联服务, SYS_EXIT 置停机标记供 run() 返回. 加速执行引擎的处理与此
+        # 一致, 详见上方注释. PYREMU_HAS_SEMIHOSTING=0 时该序列按普通 ebreak
+        # 投递断点 trap, 固件的探测因此判定宿主不支持, 控制台回落到 UART.
         if PYREMU_HAS_SEMIHOSTING and self._semihosting_markers_match():
             self._semihosting_service()
             return
@@ -408,7 +378,9 @@ class TrapOps:
         仅在 M 模式下合法; 否则触发 IllInstr.
         """
         if self.mode != RiscvMode.M:
-            self.deliver_trap(TrapType.IllInstr, tval=0x30200073, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.IllInstr, tval=0x30200073, is_interrupt=False
+            )
             return
         mstatus = self.mstatus_val
 
@@ -416,6 +388,10 @@ class TrapOps:
         mpp = (mstatus & MSTATUS_MPP) >> 11
         _mpp_to_mode = {0: RiscvMode.U, 1: RiscvMode.S, 3: RiscvMode.M}
         self.mode = _mpp_to_mode.get(mpp, RiscvMode.U)
+
+        # 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 §3.3.2)
+        if self.mode != RiscvMode.M:
+            mstatus &= ~MSTATUS_MPRV
 
         # 恢复中断使能: MIE <- MPIE, 然后 MPIE <- 1
         if mstatus & MSTATUS_MPIE:
@@ -443,15 +419,26 @@ class TrapOps:
 
         恢复进入 S 模式 trap 前保存的特权级和中断使能状态.
         在 S/M 模式下合法; U 模式下触发 IllInstr.
+        mstatus.TSR=1 时 S 模式执行触发 IllInstr, M 模式不受该位约束.
         """
         if self.mode == RiscvMode.U:
-            self.deliver_trap(TrapType.IllInstr, tval=0x10200073, is_interrupt=False)
+            self.deliver_trap(
+                TrapType.IllInstr, tval=0x10200073, is_interrupt=False
+            )
+            return
+        if self.mode == RiscvMode.S and self.mstatus_val & MSTATUS_TSR:
+            self.deliver_trap(
+                TrapType.IllInstr, tval=0x10200073, is_interrupt=False
+            )
             return
         mstatus = self.mstatus_val
 
         # 恢复特权级
         spp = (mstatus & MSTATUS_SPP) >> 8
         self.mode = RiscvMode.U if spp == 0 else RiscvMode.S
+
+        # 返回特权级低于 M 时清除 MPRV (RISC-V 特权规范 §3.3.2)
+        mstatus &= ~MSTATUS_MPRV
 
         # 恢复中断使能: SIE <- SPIE, 然后 SPIE <- 1
         if mstatus & MSTATUS_SPIE:
@@ -469,9 +456,7 @@ class TrapOps:
 
         # 不在此处清除 _wfi_woken (同 trap_mret 的注释说明).
 
-    # ============================================================
     #  WFI (Wait For Interrupt) — 低功耗等待
-    # ============================================================
 
     def handle_wfi(
         self,
@@ -510,39 +495,13 @@ class TrapOps:
         self._waiting = True
         self._wfi_woken = False
 
-    def _compute_next_timer(
-        self,
-        ctrl,  # InterruptController
-    ) -> int:
-        """计算最早定时器唤醒时间 (mtime 值); 0 = 无定时器使能.
-
-        供中断缓存快速路径: 若 mtime < wakeup, 可跳过全量中断检查.
-        """
-        mie = self._csr_read_raw("mie")
-        wakeup = 0
-        # MTIE (bit 7): CLINT mtimecmp
-        if mie & (1 << 7):
-            clint_wake = ctrl.get_next_timer_wakeup(self.id)
-            if clint_wake:
-                wakeup = clint_wake
-        # STIE (bit 5): Sstc stimecmp
-        if mie & (1 << 5):
-            s_cmp = self._csr_read_raw("stimecmp")
-            if s_cmp and (wakeup == 0 or s_cmp < wakeup):
-                wakeup = s_cmp
-        return wakeup
-
     def sync_pending_interrupts(self) -> None:
         """把全部硬件中断源的挂起状态写入 mip CSR.
 
-        中断源包括 CLINT 的 MSIP/MTIP、STIP, 以及 IMSIC 或 PLIC 给出的 MEIP/SEIP.
-        STIP 取 sstc 的 stimecmp 比较结果; 未使用 sstc 时取软件写入的 mip.STIP.
-        mip 中由硬件驱动的位被当前状态替换, 已撤除的中断源不会残留.
-
-        MSIP 由 CLINT 断言为独立的物理中断线: MSIP 有效而 mie.MSIE 为 0 时置位
-        MSIE, 使随后 check_pending_interrupts 能把该中断投递给 M 模式陷态处理
-        程序. 多核 TLB shootdown 场景中固件可能把 mie.MSIE 清零, 缺少这一步会使
-        发送核在 tlb_sync 中一直自旋.
+        中断源包括 CLINT 的 MSIP/MTIP、STIP, 以及 IMSIC 或 PLIC 给出的
+        MEIP/SEIP. STIP 取 sstc 的 stimecmp 比较结果; 未使用 sstc 时取软件
+        写入的 mip.STIP. mip 中由硬件驱动的位被当前状态替换, 已撤除的中断源
+        不会残留. mie 的使能位由受调试程序自行设置, 同步时不改变.
         """
         ctrl = self._interrupt_ctrl
         if ctrl is None:
@@ -566,19 +525,14 @@ class TrapOps:
 
         self.update_hw_mip(mip_bits)
 
-        if (mip_bits & (1 << 3)) != 0 and (self.csrs["mie"].val & (1 << 3)) == 0:
-            self.csrs["mie"].val |= 1 << 3
-
     def wake_hart_from_wfi(self) -> bool:
         """判定 hart 是否应退出 WFI 等待, 命中时清除等待状态.
 
         调用前须先经 sync_pending_interrupts 把硬件中断源写入 mip.
 
         WFI 的 NOP 条件 (RISC-V spec §3.6.1) 只要求任一中断挂起且该中断源在 mie
-        CSR 中使能, 不要求全局中断使能 mstatus.MIE.
-
-        MSIP 例外: CLINT 把 MSIP 断言为独立的物理中断线, 即使 mie.MSIE 为 0 也
-        唤醒 hart.
+        CSR 中使能, 不要求全局中断使能 mstatus.MIE. 没有任何中断源挂起, 或挂起
+        的中断源均未使能时, hart 继续等待.
 
         唤醒时置位 _wfi_woken, 供紧随其后执行的第一条 WFI 按 NOP 处理, 使
         while (cond) wfi(); 形式的循环得以重新检查条件.
@@ -587,12 +541,11 @@ class TrapOps:
             return False
 
         hw_mip_bits = self.mip_val & HW_MIP_MASK
-        is_msip_pending = (hw_mip_bits & (1 << 3)) != 0
         # 没有任何硬件中断源挂起时不唤醒
         if hw_mip_bits == 0:
             return False
-        # 唤醒条件取 mip & mie; MSIP 作为独立中断线不经过 mie
-        if (self.mip_val & self.mie_val) == 0 and not is_msip_pending:
+        # 唤醒条件取 mip & mie
+        if (self.mip_val & self.mie_val) == 0:
             return False
 
         self._waiting = False
@@ -612,23 +565,12 @@ class TrapOps:
         - M 模式 + MIE=0: 全局关中断, 不响应任何中断
         - S 模式 + SIE=0: 仅非委派 (M 级) 中断可抢占; 已委派中断被阻塞
         - U 模式: 全部中断全局使能
-
-        中断状态缓存: int_state_version 跟踪所有中断相关状态变化.
-        若版本号未变且 mtime 未到下一唤醒点, 直接返回 False (~50ns),
-        避免每条指令遍历 CLINT+CSR+PLIC (~1272ns).
         """
         if self._interrupt_ctrl is None:
             return False
 
         ctrl = self._interrupt_ctrl
 
-        # ---- 快速路径: 缓存命中 ----
-        if self.int_cache_version == self.int_state_version.value:
-            next_timer = self.int_cache_next_timer
-            if next_timer == 0 or ctrl.get_mtime() < next_timer:
-                return False
-
-        # ---- 全量中断检查 ----
         # 1. CLINT: 定时器 + 软件中断
         has_pending, mip_bits, _ = ctrl.check_interrupt(self.id)
 
@@ -656,9 +598,6 @@ class TrapOps:
         self.update_hw_mip(mip_bits)
 
         if not has_pending and ext_mip == 0:
-            # 无中断挂起则更新缓存供后续快速路径使用
-            self.int_cache_version = self.int_state_version.value
-            self.int_cache_next_timer = self._compute_next_timer(ctrl)
             return False
 
         # M 模式且 MIE=0 则关闭全局中断
@@ -674,7 +613,9 @@ class TrapOps:
         # 用预计算 mode int 替代 .value property 访问.
         mode_int = self.mode.value
         mideleg = self.csrs["mideleg"].val
-        s_mode_global = mode_int < MODE_S_VALUE or (self.mode == RiscvMode.S and self.sie)
+        s_mode_global = mode_int < MODE_S_VALUE or (
+            self.mode == RiscvMode.S and self.sie
+        )
 
         ret = False
         # 按优先级找最高优先级的使能中断.
@@ -690,9 +631,7 @@ class TrapOps:
             break
         return ret
 
-    # ============================================================
     #  Nested-interrupt-enabled 变体
-    # ============================================================
 
     def deliver_trap_nested_enabled(
         self,
@@ -702,7 +641,8 @@ class TrapOps:
     ) -> None:
         """deliver_trap 的嵌套中断变体.
 
-        与 deliver_trap 相同, 但用于嵌套中断投递场景 (中断 handler 内再次触发中断).
+        与 deliver_trap 相同, 但用于嵌套中断投递场景 (中断 handler 内再次触发
+        中断).
         """
         self.clear_reservation()
         was_wfi = self._waiting
@@ -715,7 +655,11 @@ class TrapOps:
 
         delegate = False
         if self.mode != RiscvMode.M:
-            choice = self.csrs["mideleg"].val if is_interrupt else self.csrs["medeleg"].val
+            choice = (
+                self.csrs["mideleg"].val
+                if is_interrupt
+                else self.csrs["medeleg"].val
+            )
             delegate = bool(choice & (1 << exc_code))
 
         fn = self._trap_deliver_smode if delegate else self._trap_deliver_mmode
@@ -736,13 +680,6 @@ class TrapOps:
 
         ctrl = self._interrupt_ctrl
 
-        # ---- 快速路径: 缓存命中 ----
-        if self.int_cache_version == self.int_state_version.value:
-            next_timer = self.int_cache_next_timer
-            if next_timer == 0 or ctrl.get_mtime() < next_timer:
-                return False
-
-        # ---- 全量中断检查 ----
         # 1. CLINT: 定时器 + 软件中断
         has_pending, mip_bits, _ = ctrl.check_interrupt(self.id)
 
@@ -767,9 +704,6 @@ class TrapOps:
         self.update_hw_mip(mip_bits)
 
         if not has_pending and ext_mip == 0:
-            # 无中断挂起则更新缓存
-            self.int_cache_version = self.int_state_version.value
-            self.int_cache_next_timer = self._compute_next_timer(ctrl)
             return False
 
         if self.mode == RiscvMode.M and not self.mie:

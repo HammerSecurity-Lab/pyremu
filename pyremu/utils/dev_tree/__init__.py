@@ -41,7 +41,15 @@ from pyremu.utils.dev_tree.fdt_node import (
     reg_words,
     set_property,
 )
-from pyremu.utils.dev_tree.parser import DT, DTError, Node, Property, to_num, to_nums, Type
+from pyremu.utils.dev_tree.parser import (
+    DT,
+    DTError,
+    Node,
+    Property,
+    to_num,
+    to_nums,
+    Type,
+)
 from pyremu.utils.dev_tree.rewrite import chip_dt_to_dtb, DeliveredTree
 
 __all__ = [

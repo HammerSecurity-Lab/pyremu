@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING
 import libfdt
 
 from pyremu.configs_gen import PYREMU_AIA, TIMER_FREQ
+from pyremu.peripheral.power_ctrl import PowerCtrl, PowerRequest, REG_CTRL
 from pyremu.platform import InterruptMode, PlatformConfig
+from pyremu.utils.counter import Counter
 from pyremu.utils.isa import isa_ext_list
 from pyremu.utils.mask import mask32
 
@@ -28,7 +30,15 @@ if TYPE_CHECKING:
     from pyremu.interrupt.aplic import APLIC
     from pyremu.interrupt.imsic import IMSIC
     from pyremu.interrupt.plic import PLIC
-    from pyremu.peripheral import CRNG, GPIO, I2C, SPI, UART, VirtIOBlock, VirtIONet
+    from pyremu.peripheral import (
+        CRNG,
+        GPIO,
+        I2C,
+        SPI,
+        UART,
+        VirtIOBlock,
+        VirtIONet,
+    )
     from pyremu.peripheral.watchdog import HartWatchdog
 
 # APLIC 有线中断触发类型:
@@ -49,16 +59,15 @@ class Initrd:
     end: int
 
 
-# ============================================================
 #  内存区域编码辅助
-# ============================================================
 
 
 def _encode_reg_4mib(
     addr: int,
     size: int,
 ) -> bytes:
-    """将 64-bit 地址/大小编码为 4 个大端 u32 (addr_hi, addr_lo, size_hi, size_lo)."""
+    """将 64-bit 地址/大小编码为 4 个大端 u32 (addr_hi, addr_lo,
+    size_hi, size_lo)."""
     return struct.pack(
         ">IIII",
         addr >> 32,
@@ -68,9 +77,7 @@ def _encode_reg_4mib(
     )
 
 
-# ============================================================
 #  各节点构建 (build_default_dtb 的分解: 每个函数写入一个/一组节点)
-# ============================================================
 
 
 def _dtb_chosen(
@@ -90,17 +97,18 @@ def _dtb_chosen(
     if bootargs:
         sw.property_string("bootargs", bootargs)
 
-    # 引导期熵种子 —— 使内核在启动即完成 CRNG 初始化, 避免用户态早期阻塞在
-    # getrandom()/wait_for_random_bytes() (详见文件顶部注释)。
-    # /chosen/rng-seed — 引导期熵种子 (供内核初始化 CRNG).
+    # 引导期熵种子: 使内核在启动即完成 CRNG 初始化,
+    # 避免用户态早期阻塞在 getrandom()/wait_for_random_bytes().
     #
-    # 为什么需要: 无此属性时, 内核启动到用户态早期会阻塞在 wait_for_random_bytes()
-    # 直到 CRNG 完成初始化。真实硬件靠中断/设备抖动积累熵，但目前没有实现这一随机数生成器设备
+    # 缺少 /chosen/rng-seed 时, 内核进入用户态早期会阻塞在
+    # wait_for_random_bytes(), 直到 CRNG 完成初始化;
+    # 本平台未实现以设备中断积累熵的随机数生成器.
     #
-    # 修复原理: drivers/of/fdt.c 的 early_init_dt_scan_chosen 读取 /chosen/rng-seed,
-    # 调用 add_bootloader_randomness(); 配合 random.trust_bootloader=on 内核参数,
-    # credit_init_bits(len*8) 直接完成 CRNG 初始化。
-    # 种子 >= 32 字节 (256 bit) 即可;
+    # drivers/of/fdt.c 的 early_init_dt_scan_chosen 读取该属性,
+    # 调用 add_bootloader_randomness();
+    # 配合 random.trust_bootloader=on 内核参数,
+    # credit_init_bits(len*8) 完成 CRNG 初始化.
+    # 种子不少于 32 字节 (256 bit);
     # 使用宿主 os.urandom(64) 提供 512 bit 真随机熵
     sw.property("rng-seed", os.urandom(64))
     if initrd is not None:
@@ -141,7 +149,9 @@ def _dtb_cpus(
     if is_aia and "_smaia" not in isa_str:
         isa_str = f"{isa_str}_smaia_ssaia"
     isa_extensions = isa_ext_list(isa_str)
-    isa_ext_bytes = b"".join(e.encode("ascii") + b"\x00" for e in isa_extensions)
+    isa_ext_bytes = b"".join(
+        e.encode("ascii") + b"\x00" for e in isa_extensions
+    )
 
     cpu_phandles: list[int] = []
     for i in range(cfg.num_harts):
@@ -257,13 +267,12 @@ def _dtb_plic(
     sw.end_node()  # plic
 
 
-# ============================================================
 #  IMSIC 节点 — 拆分为 M/S 两个独立节点
 #
 #  针对每个特权级各创建一个 IMSIC 节点, 且
 #  interrupts-extended 仅含该特权级对应的中断号码, M 为 11, S 为 9。
 #
-# ============================================================
+
 
 # M/S 模式对应的 CPU intc 中断号.
 _IMSIC_IRQ_M = 11  # MEIP
@@ -284,6 +293,7 @@ class DefaultDtbDev:
     virtio_net_s: VirtIONet | None = None
     watchdog: HartWatchdog | None = None
     crng: CRNG | None = None
+    power_ctrl: PowerCtrl | None = None
     plic: PLIC | None = None
     imsic: IMSIC | None = None
     aplic_s: APLIC | None = None
@@ -501,7 +511,11 @@ def _dtb_virtio_net_s(
     """
     if net_s is None:
         return
-    _dtb_virtio_node(sw, cfg.periph.virtio_net_s_base, cfg.periph.virtio_net_s_irq)
+    _dtb_virtio_node(
+        sw,
+        cfg.periph.virtio_net_s_base,
+        cfg.periph.virtio_net_s_irq,
+    )
 
 
 def _dtb_watchdog(
@@ -557,9 +571,41 @@ def _dtb_crng(
     sw.end_node()  # crng
 
 
-# ============================================================
+def _dtb_power_ctrl(
+    sw: libfdt.FdtSw,
+    power_ctrl: PowerCtrl | None,
+    phandle: int,
+) -> None:
+    """syscon@ + syscon-poweroff + syscon-reboot — 关机与复位请求设备.
+
+    设备节点由 regmap 驱动按 compatible = "syscon" 接管; 两个子节点给出关机与
+    复位要写入的偏移与取值, 由同名驱动经 regmap 写入.
+    """
+    if power_ctrl is None:
+        return
+    base = power_ctrl.base_addr
+    sw.begin_node(f"syscon@{base:x}")
+    sw.property_string("compatible", "syscon")
+    sw.property("reg", _encode_reg_4mib(base, power_ctrl.size))
+    sw.property_u32("phandle", phandle)
+    sw.end_node()  # syscon
+
+    sw.begin_node("poweroff")
+    sw.property_string("compatible", "syscon-poweroff")
+    sw.property_u32("regmap", phandle)
+    sw.property_u32("offset", REG_CTRL)
+    sw.property_u32("value", PowerRequest.SHUTDOWN)
+    sw.end_node()  # poweroff
+
+    sw.begin_node("reboot")
+    sw.property_string("compatible", "syscon-reboot")
+    sw.property_u32("regmap", phandle)
+    sw.property_u32("offset", REG_CTRL)
+    sw.property_u32("value", PowerRequest.REBOOT)
+    sw.end_node()  # reboot
+
+
 #  DTB 构建入口
-# ============================================================
 
 
 def build_default_dtb(
@@ -616,25 +662,25 @@ def _dtb_soc(
 ) -> None:
     """生成 /soc 节点: 分配 intc phandle 并挂载全部 MMIO 外设."""
     # phandle 分配: CPU intc 占 [1..num_harts].
-    # 随后 AIA 模式下 IMSIC_M、IMSIC_S、APLIC 各分配一个; legacy 模式下分配 PLIC.
-    next_phandle = len(cpu_phandles) + 1
+    # 随后 AIA 模式下 IMSIC_M、IMSIC_S、APLIC 各分配一个;
+    # legacy 模式下分配 PLIC.
+    next_phandle = Counter(len(cpu_phandles) + 1)
     imsic_m_phandle: int | None = None
     imsic_s_phandle: int | None = None
     aplic_phandle: int | None = None
     ext_irq_handle_prop: int | None = None
     if is_aia:
         if devices.imsic is not None:
-            imsic_m_phandle = next_phandle
-            next_phandle += 1
-            imsic_s_phandle = next_phandle
-            next_phandle += 1
+            imsic_m_phandle = next_phandle()
+            imsic_s_phandle = next_phandle()
         if devices.aplic_s is not None:
-            aplic_phandle = next_phandle
-            next_phandle += 1
+            aplic_phandle = next_phandle()
             ext_irq_handle_prop = aplic_phandle
     elif devices.plic is not None:
-        ext_irq_handle_prop = next_phandle
-        next_phandle += 1
+        ext_irq_handle_prop = next_phandle()
+    # 串口的固定时钟节点与关机与复位请求设备的 syscon 节点各占一个.
+    uart_clock_phandle = next_phandle()
+    power_phandle = next_phandle()
 
     sw.begin_node("soc")
     sw.property_u32("#address-cells", 2)
@@ -646,11 +692,17 @@ def _dtb_soc(
 
     _dtb_clint(sw, cfg, cpu_phandles)
     if is_aia:
-        _dtb_imsic_nodes(sw, cfg, devices, cpu_phandles, (imsic_m_phandle, imsic_s_phandle))
+        _dtb_imsic_nodes(
+            sw,
+            cfg,
+            devices,
+            cpu_phandles,
+            (imsic_m_phandle, imsic_s_phandle),
+        )
         _dtb_aplic(sw, cfg, devices.aplic_s, aplic_phandle, imsic_s_phandle)
     else:
         _dtb_plic(sw, cfg, devices.plic, ext_irq_handle_prop, cpu_phandles)
-    _dtb_uart(sw, cfg, devices.uart, ext_irq_handle_prop, next_phandle)
+    _dtb_uart(sw, cfg, devices.uart, ext_irq_handle_prop, uart_clock_phandle)
     _dtb_spi(sw, cfg, devices.spi)
     _dtb_i2c(sw, cfg, devices.i2c_gen)
     _dtb_gpio(sw, cfg, devices.gpio)
@@ -658,6 +710,7 @@ def _dtb_soc(
     _dtb_virtio_net_s(sw, cfg, devices.virtio_net_s)
     _dtb_watchdog(sw, cfg, devices.watchdog, ext_irq_handle_prop, is_aia)
     _dtb_crng(sw, cfg, devices.crng)
+    _dtb_power_ctrl(sw, devices.power_ctrl, power_phandle)
 
     sw.end_node()  # soc
 
@@ -699,5 +752,9 @@ def _dtb_imsic_nodes(
         devices,
         imsic_s_phandle,
         cpu_phandles,
-        ImsicNodeSpec(_IMSIC_IRQ_S, m_base + padded_count * page_stride, m_size),
+        ImsicNodeSpec(
+            _IMSIC_IRQ_S,
+            m_base + padded_count * page_stride,
+            m_size,
+        ),
     )

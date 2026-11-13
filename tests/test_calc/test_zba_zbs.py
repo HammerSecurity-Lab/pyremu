@@ -85,7 +85,9 @@ class TestZbaAddressGeneration:
     ):
         hart.gprs[1] = rs1
         hart.gprs[2] = rs2
-        instr = r_type(OP_ALU, 3, pack_funct(ZBA_FUNCT7_ADDR_GEN, fn3), pack_src_regs(1, 2))
+        instr = r_type(
+            OP_ALU, 3, pack_funct(ZBA_FUNCT7_ADDR_GEN, fn3), pack_src_regs(1, 2)
+        )
         hart.exec_instr(instr)
         assert hart.gprs[3] == expect_rd, (
             f"wrong at instr<{instr_name}>:fn3<{fn3}>, gpr1<{rs1}>, gpr2<{rs2}>"
@@ -104,8 +106,22 @@ class TestZbaWordAddressGeneration:
         "rs1, rs2, fn7, fn3, expect_rd, instr_name",
         [
             # rs1 的第 32 位至第 63 位被丢弃
-            (0xFFFF_FFFF_FFFF_FFFF, 0, ZBA_FUNCT7_ADD_UW, 0b000, 0xFFFF_FFFF, "add.uw"),
-            (0x0000_0000_8000_0000, 0, ZBA_FUNCT7_ADD_UW, 0b000, 0x8000_0000, "add.uw"),
+            (
+                0xFFFF_FFFF_FFFF_FFFF,
+                0,
+                ZBA_FUNCT7_ADD_UW,
+                0b000,
+                0xFFFF_FFFF,
+                "add.uw",
+            ),
+            (
+                0x0000_0000_8000_0000,
+                0,
+                ZBA_FUNCT7_ADD_UW,
+                0b000,
+                0x8000_0000,
+                "add.uw",
+            ),
             # rs2 的第 32 位保留, 结果不做符号扩展
             (
                 0xFFFF_FFFF,
@@ -141,7 +157,14 @@ class TestZbaWordAddressGeneration:
                 "sh3add.uw",
             ),
             # 左移进入第 32 位以上
-            (0xFFFF_FFFF, 0, ZBA_FUNCT7_ADDR_GEN, 0b110, 0x7_FFFF_FFF8, "sh3add.uw"),
+            (
+                0xFFFF_FFFF,
+                0,
+                ZBA_FUNCT7_ADDR_GEN,
+                0b110,
+                0x7_FFFF_FFF8,
+                "sh3add.uw",
+            ),
         ],
     )
     def test_zba_uw_rtype(  # noqa: PLR0913, PLR0917 — 参数化测试, 每列一个形参
@@ -193,7 +216,9 @@ class TestZbaSlliUw:
         # I 型的 imm[11:5] 为 funct7, 第 6 个移位位并入 funct7 的最低位
         imm = (ZBA_FUNCT7_ADD_UW << 5) | shamt
         hart.exec_instr(i_type(OP_IMM32, 3, 0b001, 1, imm))
-        assert hart.gprs[3] == expect_rd, f"wrong at slli.uw:shamt<{shamt}>, gpr1<{rs1}>"
+        assert hart.gprs[3] == expect_rd, (
+            f"wrong at slli.uw:shamt<{shamt}>, gpr1<{rs1}>"
+        )
 
 
 # =====================================================================
@@ -254,7 +279,14 @@ class TestZbsItype:
             # 第 40 位: 掩码到 5 位会错误地置第 8 位
             (0, ZBS_FUNCT6_BSETI, 0b001, 40, BIT40, "bseti"),
             (0, ZBS_FUNCT6_BCLRI_BEXTI, 0b001, 40, 0, "bclri"),
-            (MASK64, ZBS_FUNCT6_BCLRI_BEXTI, 0b001, 40, MASK64 ^ BIT40, "bclri"),
+            (
+                MASK64,
+                ZBS_FUNCT6_BCLRI_BEXTI,
+                0b001,
+                40,
+                MASK64 ^ BIT40,
+                "bclri",
+            ),
             (0, ZBS_FUNCT6_BINVI, 0b001, 40, BIT40, "binvi"),
             (BIT40, ZBS_FUNCT6_BINVI, 0b001, 40, 0, "binvi"),
             (BIT40, ZBS_FUNCT6_BCLRI_BEXTI, 0b101, 40, 1, "bexti"),

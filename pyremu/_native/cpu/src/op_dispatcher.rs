@@ -10,10 +10,6 @@ use crate::fpu::{fp_exec_fma, fp_exec_op};
 use crate::state::HartState;
 use crate::trap::deliver_illegal_instruction;
 
-// ============================================================
-//  辅助函数
-// ============================================================
-
 /// mstatus.FS 字段的掩码, 取自 bits[14:13], 表示浮点单元状态。
 const MSTATUS_FS: u64 = 0b11 << 13;
 /// mstatus 的 SD 位, 取自 bit 63, 任一扩展状态为 Dirty 时置位。
@@ -47,11 +43,9 @@ fn check_alu_trap(state: &mut HartState, trap: u8, tval: u64) -> bool {
 	return true;
 }
 
-// ============================================================
 //  R 型 ALU 指令: ADD、SUB、SLL、SLT、
 //  SLTU、XOR、SRL、SRA、OR、AND、MUL、
 //  MULH、MULHSU、MULHU、DIV、DIVU、REM、REMU
-// ============================================================
 
 pub fn handle_alu(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	let v1 = read_gpr(state, f.rs1);
@@ -64,9 +58,7 @@ pub fn handle_alu(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	4
 }
 
-// ============================================================
 //  I 型 ALU 指令: ADDI、SLLI、SLTI、SLTIU、XORI、SRLI、SRAI、ORI、ANDI
-// ============================================================
 
 pub fn handle_op_imm(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	let v1 = read_gpr(state, f.rs1);
@@ -78,9 +70,7 @@ pub fn handle_op_imm(state: &mut HartState, f: &DecodedFields, instr: u32) -> u6
 	4
 }
 
-// ============================================================
 //  RV64 的 32 位字 ALU 指令: ADDW、SUBW、SLLW、SRLW、SRAW、MULW、DIVW、DIVUW、REMW、REMUW
-// ============================================================
 
 pub fn handle_op32(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	let v1 = read_gpr(state, f.rs1);
@@ -93,9 +83,7 @@ pub fn handle_op32(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 
 	4
 }
 
-// ============================================================
 //  RV64 的 32 位立即数 ALU 指令: ADDIW、SLLIW、SRLIW、SRAIW
-// ============================================================
 
 pub fn handle_op_imm32(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	let v1 = read_gpr(state, f.rs1);
@@ -107,9 +95,7 @@ pub fn handle_op_imm32(state: &mut HartState, f: &DecodedFields, instr: u32) -> 
 	4
 }
 
-// ============================================================
 //  F/D 浮点指令
-// ============================================================
 
 /// 读取 FPR 的原始位值; 其中 f0 区别于恒为 0 的 x0，是正常的浮点寄存器。
 #[inline]
@@ -190,9 +176,7 @@ pub fn handle_fp_fma(state: &mut HartState, f: &DecodedFields, instr: u32) -> u6
 	4
 }
 
-// ============================================================
 //  LUI: rd = imm20 << 12, 结果按 32 位符号扩展
-// ============================================================
 
 pub fn handle_lui(state: &mut HartState, f: &DecodedFields) -> u64 {
 	// imm20_raw 是 bits[31:12] 零扩展为 u64 的值。
@@ -202,9 +186,7 @@ pub fn handle_lui(state: &mut HartState, f: &DecodedFields) -> u64 {
 	4
 }
 
-// ============================================================
 //  AUIPC: rd = pc + (imm20 << 12), 结果按 32 位符号扩展
-// ============================================================
 
 pub fn handle_auipc(state: &mut HartState, f: &DecodedFields) -> u64 {
 	let imm = (f.imm20_raw << 12) as i32 as i64 as u64;
@@ -212,9 +194,7 @@ pub fn handle_auipc(state: &mut HartState, f: &DecodedFields) -> u64 {
 	4
 }
 
-// ============================================================
 //  JAL: rd = pc + 4, 随后 pc = pc + imm_j
-// ============================================================
 
 pub fn handle_jal(state: &mut HartState, f: &DecodedFields) -> u64 {
 	let next_pc = state.pc.wrapping_add(4);
@@ -223,9 +203,7 @@ pub fn handle_jal(state: &mut HartState, f: &DecodedFields) -> u64 {
 	0
 }
 
-// ============================================================
 //  JALR: rd = pc + 4, 随后 pc = (rs1 + imm) & ~1
-// ============================================================
 
 pub fn handle_jalr(state: &mut HartState, f: &DecodedFields) -> u64 {
 	let next_pc = state.pc.wrapping_add(4);
@@ -235,9 +213,7 @@ pub fn handle_jalr(state: &mut HartState, f: &DecodedFields) -> u64 {
 	0
 }
 
-// ============================================================
 //  分支指令: BEQ、BNE、BLT、BGE、BLTU、BGEU
-// ============================================================
 
 pub fn handle_br(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	let v1 = read_gpr(state, f.rs1);
@@ -264,9 +240,7 @@ pub fn handle_br(state: &mut HartState, f: &DecodedFields, instr: u32) -> u64 {
 	}
 }
 
-// ============================================================
 //  FENCE 与 FENCE.I: 指令执行顺序与访存屏障
-// ============================================================
 //
 // 并发模型中每个 hart 对应一个线程, FENCE 必须发出真实的 CPU 内存屏障。
 // OpenSBI 在 hart 之间以无锁方式对 FIFO 入队与出队时依赖 ``fence ow,ow`` 与
@@ -288,9 +262,7 @@ pub fn handle_fence(_state: &mut HartState, f: &DecodedFields, instr: u32) -> u6
 	4
 }
 
-// ============================================================
 //  测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -538,9 +510,7 @@ mod tests {
 		);
 	}
 
-	// ============================================================
 	//  rd == rs1 的回归测试
-	// ============================================================
 
 	/// rd 与 rs1 相同时, ADDI 必须以旧值作为操作数, 然后写入结果。
 	#[test]

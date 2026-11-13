@@ -20,7 +20,11 @@ def seize_err_if_any(logger_enable: bool = True):
                 if not logger_enable:
                     return None
                 dump_stk = format_exc()
-                print(f"an exception was detected: {e}\n" + "current trace stack\n" + dump_stk)
+                print(
+                    f"an exception was detected: {e}\n"
+                    + "current trace stack\n"
+                    + dump_stk
+                )
             return None
 
         return wrapper

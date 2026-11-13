@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
 
-"""IPI delivery chain tests: cross-hart seteipnum -> SEIP -> stopi -> claim -> clear.
+"""IPI delivery chain tests: cross-hart seteipnum -> SEIP -> stopi ->
+claim -> clear.
 
 Verifies the complete IMSIC IPI path at the Python level (no native batch),
 then at the Emulator integration level.  Native batch is disabled by default
@@ -84,15 +85,20 @@ class TestIpiLifecycle:
         assert imsic.get_pending_mip(0) & (1 << 9), "SEIP should be set"
 
     def test_mfile_ipi_stays_in_mfile(self):
-        """M-file seteipnum + IID=1 -> stays in M-file (no cross-file routing)."""
+        """M-file seteipnum + IID=1 -> stays in M-file
+        (no cross-file routing)."""
         imsic = IMSIC(num_harts=2, m_base_addr=_IMSIC_M_BASE)
-        imsic.write(0 * _PAGE_STRIDE, (1).to_bytes(4, "little"))  # M-file, IID=1
+        imsic.write(
+            0 * _PAGE_STRIDE, (1).to_bytes(4, "little")
+        )  # M-file, IID=1
 
         mf = imsic._file_for(0, "M")
         assert mf is not None
         assert mf.eip[0] & (1 << IID_S_IPI), "M-file eip[0] bit 1 should be set"
         assert imsic.peek_topei(0, "M") != 0, "M-file should have pending IPI"
-        assert imsic.peek_topei(0, "S") == 0, "S-file should have no pending IPI"
+        assert imsic.peek_topei(0, "S") == 0, (
+            "S-file should have no pending IPI"
+        )
 
     def test_external_interrupt_blocked_without_eidelivery(self):
         """External IID blocked when eidelivery=0; IPI IIDs still visible."""
@@ -100,15 +106,20 @@ class TestIpiLifecycle:
         s_base = 1 * _PAGE_STRIDE
         # External IID=10 with eidelivery=0
         imsic.write(s_base + _EIPNUM_SET_OFF, (10).to_bytes(4, "little"))
-        # Should NOT be visible — peek_topei blocks external IIDs without eidelivery
-        assert imsic.peek_topei(0, "S") == 0, "external IID blocked without eidelivery"
+        # Should NOT be visible — peek_topei blocks external IIDs
+        # without eidelivery
+        assert imsic.peek_topei(0, "S") == 0, (
+            "external IID blocked without eidelivery"
+        )
         assert imsic.get_pending_mip(0) == 0, (
             "external IID should not set SEIP with eidelivery=0"
         )
 
         # But IPI (IID=1) should still be visible via IPI fast-path
         imsic.write(s_base + _EIPNUM_SET_OFF, (1).to_bytes(4, "little"))
-        assert imsic.peek_topei(0, "S") != 0, "IPI visible even with eidelivery=0"
+        assert imsic.peek_topei(0, "S") != 0, (
+            "IPI visible even with eidelivery=0"
+        )
         assert imsic.get_pending_mip(0) & (1 << 9), (
             "IPI should set SEIP via peek_topei fast-path"
         )
@@ -123,7 +134,8 @@ class TestCrossHartIpi:
     """Cross-hart IPI delivery via IMSIC seteipnum."""
 
     def test_hart0_sends_ipi_to_hart1_sfile(self):
-        """Write to hart 1's S-file seteipnum -> hart 1 sees IPI, hart 0 does not."""
+        """Write to hart 1's S-file seteipnum -> hart 1 sees IPI,
+        hart 0 does not."""
         imsic = IMSIC(num_harts=2, m_base_addr=_IMSIC_M_BASE)
         s_base = 2 * _PAGE_STRIDE
         target = s_base + 1 * _PAGE_STRIDE + _EIPNUM_SET_OFF
@@ -167,7 +179,8 @@ class TestIpiCsrLevel:
     # ---- stopi (0xDB0, S-mode combined view) ----
 
     def test_stopi_read_after_ipi(self, make_aia_emu):
-        """stopi (0xDB0) read -> IID=9 (SEI); write stopi to claim -> next read returns 0."""
+        """stopi (0xDB0) read -> IID=9 (SEI); write stopi to claim ->
+        next read returns 0."""
         emu = make_aia_emu(num_harts=2)
         imsic = emu.imsic
         h1 = emu.harts[1]
@@ -187,7 +200,8 @@ class TestIpiCsrLevel:
         assert val2 == 0, f"stopi after claim: expected 0, got {val2}"
 
     def test_stopi_ipi_major_identity_is_sei_regression(self, make_aia_emu):
-        """Regression: S-file IPI (minor 1) -> stopi returns major identity 9 (SEI).
+        """Regression: S-file IPI (minor 1) -> stopi returns
+        major identity 9 (SEI).
 
         Linux 的 riscv_intc_aia_irq() 将 stopi>>16 分发给 intc domain。
         若 stopi 对 S-file IPI 返回 1 (SSI) 而非 9 (SEI)，IMSIC 模式下
@@ -205,17 +219,20 @@ class TestIpiCsrLevel:
         # stopi must report the MAJOR identity (SEI=9), not the minor (1).
         stopi = h1.read_csr(_CSR_STOPI)
         assert ((stopi >> 16) & 0x7FF) == 9, (
-            f"stopi>>16 must be SEI (9) for the S-file IPI, got {(stopi >> 16) & 0x7FF}"
+            f"stopi>>16 must be SEI (9) for the S-file IPI, "
+            f"got {(stopi >> 16) & 0x7FF}"
         )
 
         # stopei must still reveal the MINOR identity (1 = IPI).
         stopei = h1.read_csr(_CSR_STOPEI)
         assert ((stopei >> 16) & 0x7FF) == IID_S_IPI, (
-            f"stopei>>16 must be the minor IPI identity (1), got {(stopei >> 16) & 0x7FF}"
+            f"stopei>>16 must be the minor IPI identity (1), "
+            f"got {(stopei >> 16) & 0x7FF}"
         )
 
     def test_stopi_read_idempotent_no_auto_claim(self, make_aia_emu):
-        """stopi read does NOT auto-claim — same IID returned on repeated reads."""
+        """stopi read does NOT auto-claim —
+        same IID returned on repeated reads."""
         emu = make_aia_emu(num_harts=1)
         imsic = emu.imsic
         h = emu.harts[0]
@@ -312,7 +329,9 @@ class TestIpiCsrLevel:
 
         # After delivery, mcause should reflect SEI
         mcause = h1.csrs["mcause"].val
-        assert (mcause & 0x7FFFFFFFFFFFFFFF) == 9, f"mcause should be 9 (SEI), got {mcause}"
+        assert (mcause & 0x7FFFFFFFFFFFFFFF) == 9, (
+            f"mcause should be 9 (SEI), got {mcause}"
+        )
 
 
 # ============================================================
@@ -348,7 +367,8 @@ class TestCsrStateConsistency:
         assert val & (1 << 3), f"eip bit 3 should be visible, got {val:#x}"
 
     def test_eie_controls_external_interrupt_visibility(self):
-        """External interrupt needs eie: topei returns 0 when eie bit is clear."""
+        """External interrupt needs eie: topei returns 0 when eie bit is
+        clear."""
         imsic = IMSIC(num_harts=1, m_base_addr=_IMSIC_M_BASE)
         imsic.csr_write(0, "M", 0x70, 1)  # eidelivery=1
         imsic.set_ip_number(0, "M", 10)  # external IID=10
@@ -358,7 +378,9 @@ class TestCsrStateConsistency:
 
         # Set eie for bit 10
         imsic.csr_write(0, "M", 0xC0, 1 << 10)
-        assert imsic.peek_topei(0, "M") != 0, "external IID visible with eie set"
+        assert imsic.peek_topei(0, "M") != 0, (
+            "external IID visible with eie set"
+        )
 
 
 # ============================================================
@@ -378,11 +400,16 @@ class TestImsicAddressing:
             resolved = imsic._resolve(off)
             assert resolved is not None
             hart_id, file, file_off = resolved
-            assert hart_id == h, f"offset {off:#x} -> hart {hart_id}, expected {h}"
-            assert file_off == 0, f"offset {off:#x} -> file_off {file_off}, expected 0"
+            assert hart_id == h, (
+                f"offset {off:#x} -> hart {hart_id}, expected {h}"
+            )
+            assert file_off == 0, (
+                f"offset {off:#x} -> file_off {file_off}, expected 0"
+            )
 
     def test_sfile_offset_maps_to_correct_hart(self):
-        """S-file offset = N*0x1000 + hart_id * 0x1000 -> correct (hart_id, S-file)."""
+        """S-file offset = N*0x1000 + hart_id * 0x1000 ->
+        correct (hart_id, S-file)."""
         num_harts = 4
         imsic = IMSIC(num_harts=num_harts, m_base_addr=_IMSIC_M_BASE)
         for h in range(num_harts):
@@ -390,7 +417,9 @@ class TestImsicAddressing:
             resolved = imsic._resolve(off)
             assert resolved is not None
             hart_id, file, file_off = resolved
-            assert hart_id == h, f"S-file offset {off:#x} -> hart {hart_id}, expected {h}"
+            assert hart_id == h, (
+                f"S-file offset {off:#x} -> hart {hart_id}, expected {h}"
+            )
             assert file_off == 0
 
 
@@ -412,7 +441,12 @@ class TestEmulatorIPI:
     # fmt: on
     def test_ipi_pending_detection(self, num_harts: int):
         """CLINT send_ipi -> 多个目标 hart 同时检测到待处理 MSIP."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x6000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
 
         targets = self._ipi_targets(num_harts)
@@ -430,7 +464,10 @@ class TestEmulatorIPI:
         # 每个 target 都应检测到 MSIP
         for tid in targets:
             interrupted = emu.harts[tid].check_pending_interrupts()
-            assert interrupted, f"hart {tid} 应检测到 MSIP (num_harts={num_harts})"
+            assert interrupted, (
+                f"hart {tid} 应检测到 MSIP "
+                f"(num_harts={num_harts})"
+            )
 
         # hart 0 未开启 MSIE, check 应返回 False (中断不使能)
         emu.harts[0].mie = True
@@ -444,7 +481,12 @@ class TestEmulatorIPI:
     # fmt: on
     def test_ipi_diverges_hart_pc(self, num_harts: int):
         """多目标 hart 收到 IPI 后跳转 mtvec; 未开启中断的 hart 正常推进 PC."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x6000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
 
         for h in emu.harts:
@@ -477,7 +519,8 @@ class TestEmulatorIPI:
         non_target = targets[-1] + 1
         if non_target < num_harts:
             assert emu.harts[non_target].pc == 0x1004, (
-                f"hart {non_target} (非 target) 应正常推进 PC (num_harts={num_harts})"
+                f"hart {non_target} (非 target) 应正常推进 PC "
+                f"(num_harts={num_harts})"
             )
 
     # fmt: off
@@ -485,7 +528,12 @@ class TestEmulatorIPI:
     # fmt: on
     def test_ipi_causes_trap_context_save(self, num_harts: int):
         """多 target 同时收 IPI, 每个 hart 的 mepc/mcause/MIE 独立正确."""
-        emu = Emulator(num_harts=num_harts, prog_cnt=0x1000, ram_base=0, ram_size=0x6000)
+        emu = Emulator(
+            num_harts=num_harts,
+            prog_cnt=0x1000,
+            ram_base=0,
+            ram_size=0x6000,
+        )
         emu.load_code(0x1000, b"\x13\x00\x00\x00" * 10)
 
         targets = self._ipi_targets(num_harts)

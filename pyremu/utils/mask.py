@@ -123,7 +123,8 @@ def ror32(val: int, shamt: int) -> int:
 
 
 def sext(val: int, bits: int) -> int:
-    """Sign-extend *val* from *bits* width to a canonical 64-bit unsigned Python int.
+    """Sign-extend *val* from *bits* width to a canonical 64-bit unsigned
+    Python int.
 
     Python's arbitrary-precision integers behave differently from finite-width
     hardware in bitwise operations (|, &, ^, <<, >>) when values are negative.
