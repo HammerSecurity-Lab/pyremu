@@ -2,8 +2,8 @@ pub(crate) mod clint;
 pub(crate) mod imsic;
 pub(crate) mod wfi;
 
-use crate::concurrent::ConcurrentClintCtx;
 use crate::ffi::FfiExtIrqCtx;
+use crate::shared::ConcurrentClintCtx;
 use crate::state::{riscv_mode, HartState};
 use std::sync::atomic::Ordering;
 
@@ -18,9 +18,9 @@ const MIE_MSIE: u64 = 1 << 3; // M 模式软件中断
 const MIE_SSIE: u64 = 1 << 1; // S 模式软件中断
 
 pub(crate) use imsic::{
-	decode_imsic_addr, imsic_reg_read, imsic_reg_write, imsic_topei_claim_iid, imsic_topei_peek,
-	sync_imsic, sync_imsic_one, try_handle_imsic_concurrent, try_handle_imsic_read_concurrent,
-	IID_M_IPI, IID_S_IPI,
+	decode_imsic_addr, imsic_reg_read, imsic_reg_write, imsic_topei_claim_iid,
+	imsic_topei_peek, sync_imsic, sync_imsic_one, try_handle_imsic_concurrent,
+	try_handle_imsic_read_concurrent, IID_M_IPI, IID_S_IPI,
 };
 
 pub(crate) fn check_pending_interrupts(state: &HartState) -> Option<(u64, bool)> {
@@ -171,7 +171,10 @@ pub(crate) fn check_and_deliver_interrupt_concurrent(
 /// 位由文件的 eip 派生: ``eip_ext_any`` 非零时调用 ``sync_imsic_one``, 为零时保持
 /// mip 不变, 清除由 ``step_interrupts`` 执行. 线路不由 IMSIC 负责时在此直接置位.
 #[inline]
-pub(crate) fn sync_ext_irq_mip(state: &mut HartState, ext_irq: *mut FfiExtIrqCtx) -> bool {
+pub(crate) fn sync_ext_irq_mip(
+	state: &mut HartState,
+	ext_irq: *mut FfiExtIrqCtx,
+) -> bool {
 	if ext_irq.is_null() || unsafe { (*ext_irq).pending == 0 } {
 		return false;
 	}
@@ -197,8 +200,8 @@ pub(crate) fn sync_ext_irq_mip(state: &mut HartState, ext_irq: *mut FfiExtIrqCtx
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::concurrent::ConcurrentClintCtx;
 	use crate::ffi::FfiExtIrqCtx;
+	use crate::shared::ConcurrentClintCtx;
 	use crate::state::{riscv_mode, HartState};
 	use std::cell::Cell;
 	use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};

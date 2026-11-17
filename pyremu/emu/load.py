@@ -5,7 +5,7 @@
 
 """LoadOps — 固件、设备树与内存设备的装载.
 
-装载目标为物理地址; 落在引导只读存储器窗口内的内容经 BootRom.load 写入, 其余
+装载目标为物理地址; 落在引导只读存储器内的内容经 BootRom.load 写入, 其余
 写入主存 bytearray 并预热 L2 缓存.
 """
 
@@ -88,7 +88,7 @@ class LoadOps:
         """将 dtb 写入物理内存的 addr, 并设所有 hart 的 a1.
 
         Raises:
-            ValueError: 设备树的区间范围不在 RAM 窗口或引导只读存储器窗口内,
+            ValueError: 设备树的区间范围不在 RAM 或引导只读存储器的范围之内,
                 或与已装载的 initramfs 的区间范围重叠.
         """
         bus = self.bus
@@ -98,9 +98,9 @@ class LoadOps:
             or bus.is_rom_range(start, len(dtb))
         ):
             raise ValueError(
-                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 窗口"
+                f"设备树的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM的范围"
                 f" [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
-                f"引导只读存储器的窗口内"
+                f"引导只读存储器内"
             )
         initrd = self._initrd
         if initrd is not None and ranges_overlap(
@@ -134,7 +134,7 @@ class LoadOps:
         rootfs. 必须在生成 DTB 之前调用, 使该范围进入设备树.
 
         Raises:
-            ValueError: initramfs 的区间范围不在 RAM 窗口内.
+            ValueError: initramfs 的区间范围不在 RAM内.
         """
         data = Path(path).read_bytes()
         bus = self.bus
@@ -143,7 +143,7 @@ class LoadOps:
             raise ValueError(
                 f"initramfs 的区间范围"
                 f" [0x{addr:x}, 0x{addr + len(data):x}) 不在"
-                f" RAM 窗口 [0x{bus.ram_base:x}, 0x{ram_end:x}) 内"
+                f" RAM的范围 [0x{bus.ram_base:x}, 0x{ram_end:x}) 内"
             )
         self.load_code(addr, data)
         self._initrd = dev_tree.Initrd(start=addr, end=addr + len(data))
@@ -156,7 +156,7 @@ class LoadOps:
     ) -> None:
         """将机器码写入物理 RAM 或引导只读存储器的指定地址.
 
-        裸金属程序应加载到复位向量对应的地址. 地址落在引导只读存储器的窗口内时
+        裸金属程序应加载到复位向量对应的地址. 地址落在引导只读存储器内时
         经 BootRom.load 写入, 不经总线写路径, 也不预热 L2 缓存.
 
         其余地址直接写入主存 bytearray, 即加速执行引擎读取指令与数据的数据源;
@@ -174,7 +174,7 @@ class LoadOps:
     def _write_segment(self, seg, vaddr_offset: int) -> None:
         """将段数据写入物理地址 vaddr + vaddr_offset, 并按 memsz 填零.
 
-        目标落在引导只读存储器的窗口内时经 BootRom.load 写入; 其余目标写入主存
+        目标落在引导只读存储器内时经 BootRom.load 写入; 其余目标写入主存
         bytearray, 即加速执行引擎读取指令与数据的数据源. 不超过
         _FAST_LOAD_THRESHOLD 的写入同时写进 L2 缓存, 供 Python 执行路径读取.
         """

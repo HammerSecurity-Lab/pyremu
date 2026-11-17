@@ -20,6 +20,28 @@ AIA_APLIC_M_BASE = 0x0C00_8000
 TEST_RAM_BASE = 0x8000_0000
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _stable_feature_knobs():
+    """构建选项不应改变用例结果: 会话内把可运行时切换的特性开关固定为开启.
+
+    ``PYREMU_NO_TLB`` 在每次查询与插入时读取, 故可在此临时覆盖; 关闭 TLB 的
+    构建若直接跑用例, 与 TLB 数据结构相关的用例会整体失效, 掩盖真正的回归.
+    ``PYREMU_NO_L2`` 在模块导入时取值为常量, 无法在此覆盖, 依赖 L2 行为的
+    用例改用 skipif 处理.
+    """
+    with force_config("PYREMU_NO_TLB", 0):
+        yield
+
+
+# 测试代码所在的物理地址.
+TEST_PROG_PA = 0x8000_8000
+
+# 三级页表在测试平台 RAM 内的基址, 一级为根页表.
+TEST_PT_L1_BASE = 0x8000_0000
+TEST_PT_L2_BASE = 0x8000_1000
+TEST_PT_L3_BASE = 0x8000_2000
+
+
 def make_test_config(
     *,
     num_harts: int = 1,
@@ -98,6 +120,16 @@ def make_test_ram(
             ram[addr + i] = b
 
     return ram, read_fn, write_fn
+
+
+def make_test_image() -> FirmwareImage:
+    """构造最小固件映像: 入口 0x1000, 不带段, 带三个符号."""
+    return FirmwareImage(
+        format="elf",
+        entry_point=0x1000,
+        segments=[],
+        symbols={"main": 0x2000, "_start": 0x1000, "uart_puts": 0x3000},
+    )
 
 
 class DbgTestBase:

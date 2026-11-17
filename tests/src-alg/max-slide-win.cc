@@ -8,7 +8,6 @@ std::vector<int> max_slide_window(
 	std::vector<int> res;
 	std::deque<int> q;
 	while (i < len) {
-
 		prev_idx = i - win_size;
 		if (!q.empty() && q.front() <= prev_idx) {
 			q.pop_front();

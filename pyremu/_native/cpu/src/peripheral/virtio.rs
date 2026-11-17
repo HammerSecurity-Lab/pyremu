@@ -41,7 +41,11 @@ pub fn try_handle_virtio(
 }
 
 /// 就地处理 virtio-blk 的 MMIO 写, 返回值约定见 ``try_handle_virtio``.
-fn virtio_write(offset: u64, write_data: u64, raw: *mut crate::ffi::FfiVirtIoCtx) -> Option<u64> {
+fn virtio_write(
+	offset: u64,
+	write_data: u64,
+	raw: *mut crate::ffi::FfiVirtIoCtx,
+) -> Option<u64> {
 	match offset {
 		// DeviceFeaturesSel: 0x014, 选择设备特性页
 		0x014 => unsafe {
@@ -68,7 +72,8 @@ fn virtio_write(offset: u64, write_data: u64, raw: *mut crate::ffi::FfiVirtIoCtx
 		},
 		// QueueNum: 0x038, 取值不超过 queue_num_max
 		0x038 => unsafe {
-			(*raw).queue_num = core::cmp::min(write_data as u32, (*raw).queue_num_max);
+			(*raw).queue_num =
+				core::cmp::min(write_data as u32, (*raw).queue_num_max);
 			Some(0)
 		},
 		// QueueReady: 0x044, 队列就绪标志
@@ -99,7 +104,10 @@ fn virtio_write(offset: u64, write_data: u64, raw: *mut crate::ffi::FfiVirtIoCtx
 			unsafe { (*raw).interrupt_status = new };
 			Some(0)
 		}
-		// Status: 0x070, 写入 0 复位设备
+		// Status: 0x070, 写入 0 复位设备. 复位强制 MMIO 退出, 由 Python 侧的
+		// 设备模型执行: 队列的消费位置与中断线电平不由本结构体持有, 在此只清零
+		// 寄存器字段会使驱动从 avail ring 索引 0 重新提交之后, 设备仍按旧的消费
+		// 位置比较, 重复处理驱动已经回收的描述符并把数据写入已改作他用的缓冲区.
 		0x070 => {
 			if write_data != 0 {
 				unsafe {
@@ -107,51 +115,39 @@ fn virtio_write(offset: u64, write_data: u64, raw: *mut crate::ffi::FfiVirtIoCtx
 				}
 				return Some(0);
 			}
-			unsafe {
-				(*raw).status = 0;
-				(*raw).device_features_sel = 0;
-				(*raw).driver_features_sel = 0;
-				(*raw).driver_features = 0;
-				(*raw).queue_sel = 0;
-				(*raw).queue_ready = 0;
-				(*raw).interrupt_status = 0;
-				(*raw).queue_desc = 0;
-				(*raw).queue_driver = 0;
-				(*raw).queue_device = 0;
-			}
-			Some(0)
+			None
 		}
 		// QueueDescLow 与 QueueDescHigh: 0x080 与 0x084
 		0x080 => unsafe {
-			(*raw).queue_desc =
-				((*raw).queue_desc & 0xFFFF_FFFF_0000_0000) | (write_data as u64 & 0xFFFF_FFFF);
+			(*raw).queue_desc = ((*raw).queue_desc & 0xFFFF_FFFF_0000_0000)
+				| (write_data as u64 & 0xFFFF_FFFF);
 			Some(0)
 		},
 		0x084 => unsafe {
-			(*raw).queue_desc =
-				((*raw).queue_desc & 0xFFFF_FFFF) | ((write_data as u64 & 0xFFFF_FFFF) << 32);
+			(*raw).queue_desc = ((*raw).queue_desc & 0xFFFF_FFFF)
+				| ((write_data as u64 & 0xFFFF_FFFF) << 32);
 			Some(0)
 		},
 		// QueueDriverLow 与 QueueDriverHigh: 0x090 与 0x094
 		0x090 => unsafe {
-			(*raw).queue_driver =
-				((*raw).queue_driver & 0xFFFF_FFFF_0000_0000) | (write_data as u64 & 0xFFFF_FFFF);
+			(*raw).queue_driver = ((*raw).queue_driver & 0xFFFF_FFFF_0000_0000)
+				| (write_data as u64 & 0xFFFF_FFFF);
 			Some(0)
 		},
 		0x094 => unsafe {
-			(*raw).queue_driver =
-				((*raw).queue_driver & 0xFFFF_FFFF) | ((write_data as u64 & 0xFFFF_FFFF) << 32);
+			(*raw).queue_driver = ((*raw).queue_driver & 0xFFFF_FFFF)
+				| ((write_data as u64 & 0xFFFF_FFFF) << 32);
 			Some(0)
 		},
 		// QueueDeviceLow 与 QueueDeviceHigh 分别对应 0x0A0 与 0x0A4
 		0x0A0 => unsafe {
-			(*raw).queue_device =
-				((*raw).queue_device & 0xFFFF_FFFF_0000_0000) | (write_data as u64 & 0xFFFF_FFFF);
+			(*raw).queue_device = ((*raw).queue_device & 0xFFFF_FFFF_0000_0000)
+				| (write_data as u64 & 0xFFFF_FFFF);
 			Some(0)
 		},
 		0x0A4 => unsafe {
-			(*raw).queue_device =
-				((*raw).queue_device & 0xFFFF_FFFF) | ((write_data as u64 & 0xFFFF_FFFF) << 32);
+			(*raw).queue_device = ((*raw).queue_device & 0xFFFF_FFFF)
+				| ((write_data as u64 & 0xFFFF_FFFF) << 32);
 			Some(0)
 		},
 		// 配置空间位于 0x100 起, 只读。其余未定义偏移的写入同样无效果.
@@ -245,5 +241,42 @@ mod tests {
 		let r = try_handle_virtio(0x1000_8000 + 0x064, true, 0, 4, &dev);
 		assert_eq!(r, Some(0));
 		assert_eq!(ctx.interrupt_status, 1);
+	}
+
+	/// 写 Status=0 复位设备时必须强制 MMIO 退出, 返回 ``None``, 且不改动本结构体.
+	///
+	/// 队列的消费位置 ``last_avail_idx`` 与中断线电平由 Python 侧的设备模型持有.
+	/// 若在引擎内直接清零寄存器字段, 驱动复位后从 avail ring 索引 0 重新提交时,
+	/// 设备仍按复位之前的消费位置比较 ``avail.idx``, 会继续消费其后并不存在的
+	/// 条目, 重复处理驱动已经回收的描述符, 并把旧数据写入已改作他用的缓冲区.
+	#[test]
+	fn status_zero_forces_mmio_exit_without_touching_state() {
+		let mut ctx: FfiVirtIoCtx = unsafe { std::mem::zeroed() };
+		ctx.status = 0x0F; // DRIVER_OK 等位均置位
+		ctx.queue_ready = 1;
+		ctx.queue_desc = 0x1000;
+		ctx.queue_driver = 0x2000;
+		ctx.queue_device = 0x3000;
+		let dev = make_dev(&mut ctx);
+
+		let r = try_handle_virtio(0x1000_8000 + 0x070, true, 0, 4, &dev);
+
+		assert_eq!(r, None, "复位必须移交 Python 侧设备模型执行");
+		assert_eq!(ctx.status, 0x0F, "复位写不得在引擎内改动状态");
+		assert_eq!(ctx.queue_ready, 1);
+		assert_eq!(ctx.queue_desc, 0x1000);
+		assert_eq!(ctx.queue_driver, 0x2000);
+		assert_eq!(ctx.queue_device, 0x3000);
+	}
+
+	/// 写入非零的 Status 就地置位, 不退出加速执行.
+	#[test]
+	fn status_nonzero_stays_inline() {
+		let mut ctx: FfiVirtIoCtx = unsafe { std::mem::zeroed() };
+		ctx.status = 1;
+		let dev = make_dev(&mut ctx);
+		let r = try_handle_virtio(0x1000_8000 + 0x070, true, 3, 4, &dev);
+		assert_eq!(r, Some(0));
+		assert_eq!(ctx.status, 3);
 	}
 }

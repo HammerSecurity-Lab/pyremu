@@ -421,16 +421,10 @@ class StackWalkOps(SharedAttrs):
         prev_mode = h.spp
         if prev_mode == RiscvMode.U and trapped_pc >= (1 << 63):
             prev_mode = RiscvMode.S
-        # 检测残留 sepc: 从 M 模式经 mret 进入 S 模式后 SPP=U 且 sepc 为残留
-        # RAM 地址, 或 Sv39 启用时 sepc 落在 RAM 物理地址范围, 即非规范虚拟地址.
-        # 仅当 Sv39 启用或 trapped_pc 高于 RAM 窗口时才认为无效,
-        # Bare 翻译下 U 模式的虚拟地址即 RAM 物理地址, 属合法 trap 现场.
-        # 直接从 satp CSR 读 MODE 字段, 避免依赖缓存 _mmu_mode.
+
         satp_mode = (h.satp_val >> 60) & 0xF
         if self._emu.bus.is_ram_addr(trapped_pc):
             if satp_mode != 0 or prev_mode != RiscvMode.U:
-                # Sv39 启用则内核与 sepc 应为规范高虚拟地址, 该地址为残留值
-                # Bare 翻译下 SPP=S 而 sepc 落在 RAM 窗口: 按残留值处理, 跳过
                 return None
         entry = TrapEntry(h.stvec_val, trapped_pc, prev_mode)
         return entry, 0, RiscvMode.U

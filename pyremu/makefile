@@ -1,5 +1,5 @@
 
-#  pyremu/makefile — 从 mk/ 下的配置分片生成 pyremu/configs_gen.py
+#  pyremu/makefile — 从 mk/ 下的配置生成 pyremu/configs_gen.py
 
 CONFIG_GEN = configs_gen.py
 

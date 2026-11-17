@@ -270,6 +270,17 @@ class VirtIONet(Device):
 
     # ---- 后端接入 ----
 
+    def reset(self) -> None:
+        """重置 virtqueue、待收帧与设备状态."""
+        self._rx_frames.clear()
+        self._rx_dropped = 0
+        self.mmio.reset()
+
+    @property
+    def irq(self) -> int:
+        """本设备的中断源编号, 0 表示不投递中断."""
+        return self.mmio.irq
+
     @property
     def mac(self) -> bytes:
         """本设备的 MAC 地址."""

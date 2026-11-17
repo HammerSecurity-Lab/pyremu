@@ -1,6 +1,6 @@
 # Pyremu — RISC-V 64 位模拟器
 
-|缩略 |含义        |
+|缩略 |含义      |
 |:--:|:---------:|
 |Py  | python    |
 |r   | riscv/rust|
@@ -43,8 +43,11 @@ uv run python tools/jmp_instr_counter.py  # 统计基本块终结指令的静态
 
 仓库自带的 [tools/git-hooks/pre-commit](tools/git-hooks/pre-commit) 在每次 `git commit` 前
 运行检查与格式化: 逐个文件做格式检查, 需要格式化的文件由挂载器(hook)格式化并加入索引, 格式化
-失败或静态检查不通过时中止提交。Git 默认只从 `.git/hooks/` 读取待挂载执行的脚本, 需在仓库根目录
-执行一次以下命令, 把项目挂载目录指向该脚本:
+失败或静态检查不通过时中止提交. 格式化与静态检查全部通过后, 钩子在仓库根目录执行 `make test`,
+用例失败同样中止提交. `make test` 需要 `llvm-mc`、`ld.lld`、`cargo` 与 `uv`. 需要跳过全部钩子时
+使用 `git commit --no-verify`。
+Git 默认只从 `.git/hooks/` 读取待挂载执行的脚本, 需在仓库根目录执行一次以下命令, 把项目
+挂载目录指向该脚本:
 
 ```bash
 git config core.hooksPath tools/git-hooks
@@ -99,6 +102,7 @@ pyremu/                       模拟器包
     status.py                 hart 状态与 CSR 位域显示
     tlb_cache.py              TLB 与 L2 缓存的视图
     mmu_view.py               PMP、SATP 与页表遍历的视图
+    device_map.py             主存、存储区间与虚拟设备的总线区间列表
     bins.py                   命令行传入的各映像所占的物理地址范围
     disk.py                   磁盘映像的格式摘要与块布局
     sym/                      多来源符号的解析、加载与登记
@@ -142,13 +146,12 @@ pyremu/                       模拟器包
     termio.py                 终端输入输出桥接
   disk/                       磁盘映像格式的只读解析, 每种文件系统格式一个模块
   utils/                      工具
-    disassem.py               RV64 反汇编器
+    disasm/                    RV64 反汇编器 (按指令类别分模块)
     parse_bin.py              ELF、PE 与纯二进制的固件解析
     dev_tree/                 设备树: 文本格式解析、读取、改写与生成
     str_aux.py                地址与十六进制转储的格式化
     mask.py                   位宽掩码
     wrapper.py                异常处理装饰器
-    regname.py                寄存器名称查找
     tick.py                   时钟辅助
     counter.py                顺序编号计数器
     file_ops.py               文件路径操作
@@ -164,10 +167,17 @@ bsp/                          板级支持包
     ext-mod-svc/              扩展模块服务
     sign-mod/                 为扩展模块文件追加 ECDSA 签名
   eval-suites/                TEE 评测工具, 部署到根文件系统的 /eval
+    common/                   各套件共用: enclave_abi.h (设备与 ioctl 定义),
+                              host_util.{h,c} (宿主侧辅助), mod_loader.{h,c} 与
+                              ext_mod_table.inc (模块请求服务), stress_common.h
+                              (载荷侧压力操作), toolchain.mk (交叉编译参数)
     cache-sidechannel/        TEE 缓存侧信道评测套件, 部署到 /eval/cache-sidechannel
+      host/                   宿主侧控制与探测程序 (glibc)
+      payload/                飞地内载荷 (musl)
     basic-test/               TEE 飞地生命周期批处理测试套件, 部署到 /eval/basic-test
+      host/                   宿主侧控制程序 (glibc)
+      payload/                飞地内载荷 (musl)
     app-loader/               应用装载器, 部署到 /eval/app-loader
-    mod-loader/               模块装载器, 部署到 /eval/mod-loader
 	fn_apps/                  可信应用载荷
   linux/                      内核源码树, 需要自行复制到本仓库
   setup-rootfs/               用 debootstrap 构建根文件系统, 并打包测试程序与驱动

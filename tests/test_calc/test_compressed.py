@@ -119,13 +119,25 @@ class TestCompressedC1:
         assert h.pc == old_ra, f"PC 应为 ra 旧值 0x{old_ra:x}, 实际 0x{h.pc:x}"
 
     def test_c_ebreak(self):
-        """C.EBREAK -> Breakpoint trap."""
+        """C.EBREAK -> Breakpoint trap. 编码为 bit12 置位且 rd 与 rs2 均为 0."""
         h = Hart(id=0)
         h.csrs["mtvec"].val = 0x80000000
         h.pc = 0x1000
-        instr = _c2(0b100, 0, 0)
+        instr = _c2(0b100, 0, 1 << 12)
         h.exec_instr(instr)
         assert h.mcause_val == 3
+
+    def test_c_jr_zero_is_illegal(self):
+        """bit12 清零且 rd 与 rs2 均为 0 是保留的 C.JR x0, 必须投递非法指令.
+
+        该编码与 C.EBREAK 只差 bit12; 两者都按断点处理时, 保留编码被静默接受.
+        """
+        h = Hart(id=0)
+        h.csrs["mtvec"].val = 0x80000000
+        h.pc = 0x1000
+        h.exec_instr(_c2(0b100, 0, 0))
+        assert h.mcause_val == 2, "C.JR x0 必须投递 IllInstr"
+        assert h.mepc_val == 0x1000
 
     def test_c_beqz_taken(self):
         """C.BEQZ x8, +4 — x8==0, 跳转."""

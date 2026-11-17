@@ -11,7 +11,7 @@
 //! eip 的写入值是中断编号, 不是中断原因; 写入只作用于被寻址的文件. eidelivery 为 0
 //! 时 IPI 由 CLINT MSIP 投递, eip 生命周期由 Python 侧 trap_handler.py 管理.
 
-use crate::concurrent::ConcurrentClintCtx;
+use crate::shared::ConcurrentClintCtx;
 use crate::state::{HartState, ImsicFile, CFG_AIA};
 use core::sync::atomic::Ordering;
 
@@ -234,7 +234,12 @@ pub(crate) fn try_handle_imsic_concurrent(
 		);
 	}
 	if addr.reg_off == 0x0008 {
-		imsic_handle_clreipnum(clint.hart_states.get(), addr.hart, file_tag, eip_num);
+		imsic_handle_clreipnum(
+			clint.hart_states.get(),
+			addr.hart,
+			file_tag,
+			eip_num,
+		);
 		return true;
 	}
 	false
@@ -245,7 +250,10 @@ pub(crate) fn try_handle_imsic_concurrent(
 /// 未启用 AIA 或地址不在 IMSIC 区间内时返回 None; 否则返回 0. IMSIC 的可读寄存器
 /// 经 CSR 访问, MMIO 侧只提供 seteipnum 与 clreipnum 的写入, 故读取一律为 0.
 #[inline]
-pub(crate) fn try_handle_imsic_read_concurrent(pa: u64, num_harts: u32) -> Option<u64> {
+pub(crate) fn try_handle_imsic_read_concurrent(
+	pa: u64,
+	num_harts: u32,
+) -> Option<u64> {
 	if !CFG_AIA {
 		return None;
 	}
@@ -745,7 +753,8 @@ mod tests {
 		// 第 0 个字中编号 1 与编号 3 同时挂起时, topei_peek 返回优先级较高者,
 		// 即位索引较大的编号 3.
 		let state = make_state_no_delivery();
-		state.imsic_m.eip[0].store((1 << IID_S_IPI) | (1 << IID_M_IPI), Ordering::Relaxed);
+		state.imsic_m.eip[0]
+			.store((1 << IID_S_IPI) | (1 << IID_M_IPI), Ordering::Relaxed);
 		let (val, _) = imsic_topei_peek(&state.imsic_m);
 		assert_eq!(
 			(val >> 16) as u32,
@@ -996,7 +1005,14 @@ mod tests {
 
 		// 模拟跨 hart 写入 seteipnum: 目标 hart 为 0, 操作 M 文件, 编号为 1
 		let states = &state as *const HartState;
-		let result = imsic_handle_seteipnum(states, std::ptr::null(), 1, 0, 0x0000, IID_S_IPI);
+		let result = imsic_handle_seteipnum(
+			states,
+			std::ptr::null(),
+			1,
+			0,
+			0x0000,
+			IID_S_IPI,
+		);
 		assert!(result, "seteipnum must return true (handled)");
 
 		// M 文件须记录该 IPI.
@@ -1024,7 +1040,14 @@ mod tests {
 		// 对 M 文件写入编号 3 时, 该 IPI 留在 M 文件.
 		let state = make_state_no_delivery();
 		let states = &state as *const HartState;
-		let result = imsic_handle_seteipnum(states, std::ptr::null(), 1, 0, 0x0000, IID_M_IPI);
+		let result = imsic_handle_seteipnum(
+			states,
+			std::ptr::null(),
+			1,
+			0,
+			0x0000,
+			IID_M_IPI,
+		);
 		assert!(result);
 
 		assert_eq!(
@@ -1044,7 +1067,14 @@ mod tests {
 		// 对 S 文件写入编号 1 时, 该 IPI 留在 S 文件.
 		let state = make_state_no_delivery();
 		let states = &state as *const HartState;
-		let result = imsic_handle_seteipnum(states, std::ptr::null(), 1, 0, 0x1000, IID_S_IPI);
+		let result = imsic_handle_seteipnum(
+			states,
+			std::ptr::null(),
+			1,
+			0,
+			0x1000,
+			IID_S_IPI,
+		);
 		assert!(result);
 
 		assert_eq!(
@@ -1532,7 +1562,9 @@ mod tests {
 		assert_eq!(topei_val, 0, "topei returns 0 when no IMSIC pending");
 
 		// 执行清理, 与 step_interrupts 的逻辑相同.
-		if (h1.mip.load(Ordering::Acquire) & (1 << 11)) != 0 && h1.imsic_m.present != 0 {
+		if (h1.mip.load(Ordering::Acquire) & (1 << 11)) != 0
+			&& h1.imsic_m.present != 0
+		{
 			if h1.imsic_m.eidelivery != 0 {
 				let (val, _) = imsic_topei_peek(&h1.imsic_m);
 				if val == 0 {
@@ -1540,7 +1572,8 @@ mod tests {
 				}
 			} else {
 				let ipi_mask: u32 = (1 << IID_S_IPI) | (1 << IID_M_IPI);
-				let has_ipi = (h1.imsic_m.eip[0].load(Ordering::Acquire) & ipi_mask) != 0;
+				let has_ipi =
+					(h1.imsic_m.eip[0].load(Ordering::Acquire) & ipi_mask) != 0;
 				if !has_ipi {
 					h1.mip.fetch_and(!(1 << 11), Ordering::AcqRel);
 				}

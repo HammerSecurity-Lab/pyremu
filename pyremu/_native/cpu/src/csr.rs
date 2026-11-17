@@ -5,16 +5,19 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::concurrent::{ConcurrentClintCtx, NS_PER_INSTR};
+use crate::clock::NS_PER_INSTR;
 use crate::ffi::InstrToBeExec;
-use crate::handlers::PmpCtx;
+use crate::instr::handlers::PmpCtx;
 use crate::interrupt::clint::write_stimecmp;
 use crate::interrupt::{
-	compute_mtopi, compute_stopi, imsic_reg_read, imsic_reg_write, imsic_topei_claim_iid,
-	imsic_topei_peek, sync_imsic_one, IID_M_IPI, IID_S_IPI,
+	compute_mtopi, compute_stopi, imsic_reg_read, imsic_reg_write,
+	imsic_topei_claim_iid, imsic_topei_peek, sync_imsic_one, IID_M_IPI, IID_S_IPI,
 };
-use crate::pmp::PMP_L;
-use crate::state::{exit_reason, riscv_mode, HartState, CFG_AIA, CPU_FREQ_HZ};
+use crate::mem::pmp::PMP_L;
+use crate::shared::ConcurrentClintCtx;
+use crate::state::{
+	exit_reason, read_gpr, riscv_mode, write_gpr, HartState, CFG_AIA, CPU_FREQ_HZ,
+};
 use crate::trap::deliver_illegal_instruction;
 
 //  CsrContext: csr_read 与 csr_write 的合并参数
@@ -219,7 +222,8 @@ const SSTATUS_READ_MASK: u64 = MSTATUS_SIE
 	| MSTATUS_SD;
 
 // 写入 sstatus 只更新可写的那部分位, VS、UXL 与 SD 为只读
-const SSTATUS_WRITE_MASK: u64 = SSTATUS_READ_MASK & !(MSTATUS_VS | MSTATUS_UXL | MSTATUS_SD);
+const SSTATUS_WRITE_MASK: u64 =
+	SSTATUS_READ_MASK & !(MSTATUS_VS | MSTATUS_UXL | MSTATUS_SD);
 
 //  公开接口
 
@@ -284,7 +288,8 @@ pub fn csr_read(ctx: &mut CsrContext, addr: u16) -> (u64, u8) {
 				}
 			}
 			riscv_mode::U => {
-				if ctx.state.mcounteren & bit == 0 || ctx.state.scounteren & bit == 0 {
+				if ctx.state.mcounteren & bit == 0 || ctx.state.scounteren & bit == 0
+				{
 					return (0, CSR_ILL);
 				}
 			}
@@ -466,7 +471,12 @@ pub fn csr_write(ctx: &mut CsrContext, addr: u16, val: u64) -> u8 {
 
 /// 按写入掩码写入 CSR 的值, 返回 ``status``.
 /// write_mask 为指令实际改写的位: CSRRW 为全部位, CSRRS 与 CSRRC 为 rs1.
-pub fn csr_write_masked(ctx: &mut CsrContext, addr: u16, val: u64, write_mask: u64) -> u8 {
+pub fn csr_write_masked(
+	ctx: &mut CsrContext,
+	addr: u16,
+	val: u64,
+	write_mask: u64,
+) -> u8 {
 	let priv_req = (addr >> 8) as u8 & 0x3;
 	if !csr_priv_ok(ctx.state.mode, priv_req) {
 		return CSR_ILL;
@@ -903,8 +913,9 @@ pub fn handle_csr(
 			// 仅当 mtimecmp 仍已到期时才推进, 避免覆盖 sbi_timer_process()
 			// 已经设定的未来期限.
 			let cur = ctx.mtime();
-			let cmp = unsafe { &*ctx.clint.mtimecmp.add(ctx.extern_hart_id as usize) }
-				.load(Ordering::Acquire);
+			let cmp =
+				unsafe { &*ctx.clint.mtimecmp.add(ctx.extern_hart_id as usize) }
+					.load(Ordering::Acquire);
 			if cmp <= cur {
 				ctx.bump_mtimecmp(4);
 			}
@@ -940,24 +951,6 @@ pub fn handle_csr(
 	4
 }
 
-//  GPR 读取与写入
-
-#[inline]
-fn read_gpr(state: &HartState, rs: u8) -> u64 {
-	if rs == 0 {
-		0
-	} else {
-		state.gprs[rs as usize]
-	}
-}
-
-#[inline]
-fn write_gpr(state: &mut HartState, rd: u8, val: u64) {
-	if rd != 0 {
-		state.gprs[rd as usize] = val;
-	}
-}
-
 /// 处理函数返回该值表示请求退出到 Python.
 pub const EXIT_SENTINEL: u64 = u64::MAX;
 
@@ -986,7 +979,8 @@ mod tests {
 	/// 需要推进定时器的测试必须自行设置.
 	fn test_clint(mtime_val: u64) -> ConcurrentClintCtx {
 		let mtime_box = Box::new(std::sync::atomic::AtomicU64::new(mtime_val));
-		let mtime_ptr = Box::into_raw(mtime_box) as *const std::sync::atomic::AtomicU64;
+		let mtime_ptr =
+			Box::into_raw(mtime_box) as *const std::sync::atomic::AtomicU64;
 		ConcurrentClintCtx {
 			base: 0,
 			mtime: mtime_ptr,
@@ -1000,7 +994,10 @@ mod tests {
 		}
 	}
 
-	fn test_csr_ctx<'a>(state: &'a mut HartState, clint: &'a ConcurrentClintCtx) -> CsrContext<'a> {
+	fn test_csr_ctx<'a>(
+		state: &'a mut HartState,
+		clint: &'a ConcurrentClintCtx,
+	) -> CsrContext<'a> {
 		// 使测试过程中，引用具有 'static 生命周期.
 		CsrContext::new(state, 0, Box::leak(Box::new(test_pmp())), clint)
 	}
@@ -1680,7 +1677,8 @@ mod tests {
 			let clint = test_clint(0);
 			let mut ctx = test_csr_ctx(&mut s, &clint);
 			// CSRRW x0, mscratch, t0: funct3 为 001, rs1 为 5 即 t0, rd 为 0, csr 为 0x340
-			let adv = handle_csr(&mut ctx, 0, 5, MSCRATCH, 0b001, 0x34051073, &mut r);
+			let adv =
+				handle_csr(&mut ctx, 0, 5, MSCRATCH, 0b001, 0x34051073, &mut r);
 			(adv, ctx.state.mscratch)
 		};
 		assert_eq!(advance, 4);
@@ -1699,7 +1697,8 @@ mod tests {
 			let clint = test_clint(0);
 			let mut ctx = test_csr_ctx(&mut s, &clint);
 			// CSRRWI x0, mscratch, 5: funct3 为 101, rs1 字段为 5, rd 为 0, csr 为 0x340
-			let adv = handle_csr(&mut ctx, 0, 5, MSCRATCH, 0b101, 0x340552f3, &mut r);
+			let adv =
+				handle_csr(&mut ctx, 0, 5, MSCRATCH, 0b101, 0x340552f3, &mut r);
 			(adv, ctx.state.mscratch)
 		};
 		assert_eq!(advance, 4);
@@ -1720,7 +1719,8 @@ mod tests {
 			let clint = test_clint(0);
 			let mut ctx = test_csr_ctx(&mut s, &clint);
 			// CSRRS t0, mscratch, x0: funct3 为 010, rs1 为 0, rd 为 5
-			let adv = handle_csr(&mut ctx, 5, 0, MSCRATCH, 0b010, 0x3402b2f3, &mut r);
+			let adv =
+				handle_csr(&mut ctx, 5, 0, MSCRATCH, 0b010, 0x3402b2f3, &mut r);
 			(adv, ctx.state.mscratch, ctx.state.gprs[5])
 		};
 		assert_eq!(advance, 4);
@@ -1972,7 +1972,8 @@ mod tests {
 		let clint = test_clint(0);
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		// csrrs t0, miselect, x0: funct3 为 CSRRS, rd 为 5, rs1 为 0, csr 为 0x350
-		let advance = handle_csr(&mut ctx, 5, 0, MISELECT, 0b010, 0x3502F073u32, &mut r);
+		let advance =
+			handle_csr(&mut ctx, 5, 0, MISELECT, 0b010, 0x3502F073u32, &mut r);
 		if CFG_AIA {
 			assert_eq!(advance, 4, "AIA enabled -> normal advance");
 			assert_eq!(ctx.state.mcause, 0, "mcause must not be set");
@@ -1995,7 +1996,8 @@ mod tests {
 		let clint = test_clint(0);
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		// csrrw x0, miselect, a0: funct3 为 CSRRW, rd 为 0, rs1 为 10, csr 为 0x350
-		let advance = handle_csr(&mut ctx, 0, 10, MISELECT, 0b001, 0x35051073u32, &mut r);
+		let advance =
+			handle_csr(&mut ctx, 0, 10, MISELECT, 0b001, 0x35051073u32, &mut r);
 		if CFG_AIA {
 			assert_eq!(advance, 4, "AIA enabled -> normal advance");
 			assert_eq!(ctx.state.imsic_m.select, 0x70, "miselect stored");
@@ -2015,7 +2017,8 @@ mod tests {
 		let clint = test_clint(0);
 		let mut ctx = test_csr_ctx(&mut s, &clint);
 		// csrrs t1, mtopi, x0: funct3 为 CSRRS, rd 为 6, rs1 为 0, csr 为 0xFB0
-		let advance = handle_csr(&mut ctx, 6, 0, 0xFB0, 0b010, 0xFB032F73u32, &mut r);
+		let advance =
+			handle_csr(&mut ctx, 6, 0, 0xFB0, 0b010, 0xFB032F73u32, &mut r);
 		if CFG_AIA {
 			assert_eq!(advance, 4, "AIA enabled -> normal advance");
 		} else {

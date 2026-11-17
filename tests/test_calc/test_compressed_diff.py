@@ -13,7 +13,8 @@
 import pytest
 
 from pyremu.core.decoder import Hart
-from pyremu.utils.disassem import Opc, sext
+from pyremu.disasm import Opc
+from pyremu.utils.mask import sext
 from tests.instr_encode import (
     b_type,
     i_type,

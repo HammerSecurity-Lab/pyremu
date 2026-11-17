@@ -28,6 +28,7 @@ RX: 可通过 preload() 预填入数据; RXDATA 读取返回队首字节;
 
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 import threading
 from typing import Callable, IO
@@ -151,10 +152,8 @@ class UART(Device):
     def close_logs(self) -> None:
         """关闭所有已打开的 hart 日志文件."""
         for f in self._hart_log_files.values():
-            try:
+            with suppress(OSError):
                 f.close()
-            except OSError:
-                pass
         self._hart_log_files.clear()
 
     def _hart_log_file(self, hart_id: int) -> IO | None:

@@ -221,6 +221,16 @@ class VirtQueue:
         ring_off = 4 + (avail_idx % self.num) * 2
         return self._read_u16(self.driver + ring_off)
 
+    def pending_avail(self, avail_idx: int) -> int:
+        """返回设备尚未消费的 available ring 项数.
+
+        ``avail.idx`` 是受调试程序写入的 16 位字段, 以 2 的 16 次幂为取模对象
+        循环使用; ``last_avail_idx`` 是本侧的计数, 不受该位宽限制. 两者直接比较
+        会在 ``avail.idx`` 越过 65535 之后不再相等, 使设备按新的 ``avail.idx``
+        继续消费其后并不存在的条目, 重复处理驱动已经回收的描述符.
+        """
+        return mask16(avail_idx - self.last_avail_idx)
+
     # ---- used ring ----
 
     def push_used(self, desc_head: int, length: int) -> None:
@@ -527,9 +537,10 @@ class VirtioMMIO:
             return False
 
         avail_idx = queue.avail_idx()
+        pending = queue.pending_avail(avail_idx)
 
         processed = 0
-        while queue.last_avail_idx != avail_idx:
+        while processed < pending:
             if max_descriptors > 0 and processed >= max_descriptors:
                 break
 
@@ -548,7 +559,7 @@ class VirtioMMIO:
             self.interrupt_status |= VIRTIO_MMIO_INT_VRING
             self.raise_irq()
 
-        return queue.last_avail_idx != avail_idx  # 仍有未处理? 调用方需再次调用
+        return processed < pending  # 仍有未处理? 调用方需再次调用
 
     def _process_chain(
         self,
@@ -565,6 +576,11 @@ class VirtioMMIO:
         return handle_request(queue, chain)
 
     # ---- 中断 ----
+
+    @property
+    def irq(self) -> int:
+        """本设备的中断源编号, 0 表示不投递中断."""
+        return self._irq
 
     def raise_irq(self) -> None:
         """向中断控制器拉高本设备中断源."""

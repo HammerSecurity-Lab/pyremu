@@ -1,6 +1,9 @@
-use crate::concurrent::{ConcurrentClintCtx, ModuleState, StopInfo, WATCHDOG_POLL_US};
+use crate::clock::WATCHDOG_POLL_US;
 use crate::ffi::FfiExtIrqCtx;
-use crate::interrupt::{clint::sync_msip, clint::sync_mtip, imsic_topei_peek, sync_imsic};
+use crate::interrupt::{
+	clint::sync_msip, clint::sync_mtip, imsic_topei_peek, sync_imsic,
+};
+use crate::shared::{ConcurrentClintCtx, ModuleState, StopInfo};
 use crate::state::{exit_reason, riscv_mode, HartState};
 use std::sync::atomic::Ordering;
 
@@ -53,7 +56,8 @@ pub(crate) fn wfi_sync_and_check(
 	//
 	// 故此处与 trap 分发路径 compute_mtopi 一致, 不采信 mip.MEIP, 改为直接查询
 	// IMSIC 是否仍有挂起的中断.
-	let mfile_pending = state.imsic_m.present != 0 && imsic_topei_peek(&state.imsic_m).0 != 0;
+	let mfile_pending =
+		state.imsic_m.present != 0 && imsic_topei_peek(&state.imsic_m).0 != 0;
 	let mut wake_mask = state.mie;
 	if state.imsic_m.present != 0 {
 		wake_mask &= !(1 << 11); // MEIP 排除, 改由上面的 IMSIC 直查承担
@@ -168,7 +172,8 @@ pub(crate) fn wfi_spin(
 	// hart; 超时取 WATCHDOG_POLL_US, 上述来源都不发生时由该超时使循环继续.
 	loop {
 		// 同步中断并检查唤醒
-		let (woke, msip_pending) = wfi_sync_and_check(state, clint, uart_rx_notify, ext_irq);
+		let (woke, msip_pending) =
+			wfi_sync_and_check(state, clint, uart_rx_notify, ext_irq);
 		if woke {
 			state.waiting = 0;
 			state.wfi_woken = 1;
@@ -197,7 +202,9 @@ pub(crate) fn wfi_spin(
 				None => {} // 仍有挂起的 MSIP, 继续自旋
 			}
 		}
-		std::thread::park_timeout(std::time::Duration::from_micros(WATCHDOG_POLL_US));
+		std::thread::park_timeout(std::time::Duration::from_micros(
+			WATCHDOG_POLL_US,
+		));
 	}
 
 	module.wfi_flags[hart_id].store(0, Ordering::Release);
@@ -241,7 +248,15 @@ mod tests {
 			hart_threads: Cell::new(std::ptr::null()),
 			hart_states: Cell::new(std::ptr::null()),
 		};
-		let module = ModuleState::new(1, 1, 0, vec![0].into_boxed_slice(), false, 0, Box::new([]));
+		let module = ModuleState::new(
+			1,
+			1,
+			0,
+			vec![0].into_boxed_slice(),
+			false,
+			0,
+			Box::new([]),
+		);
 
 		// 本 hart 无挂起的 MSIP, 也无定时器截止时刻, 但 MSIP 字节的边沿计数非零.
 		// 判定只检查电平位, 故返回 Some(false).
@@ -317,8 +332,12 @@ mod tests {
 		// 本 hart 返回 false.
 		match rx.recv_timeout(Duration::from_millis(500)) {
 			Ok(false) => {}
-			Ok(v) => panic!("stop_flag 置位后 WFI hart 应返回 false (exit), 实际 {v:?}"),
-			Err(_) => panic!("stop_flag 置位后 WFI hart 未在有界时间内退出 (旧行为: 无限 park)"),
+			Ok(v) => {
+				panic!("stop_flag 置位后 WFI hart 应返回 false (exit), 实际 {v:?}")
+			}
+			Err(_) => panic!(
+				"stop_flag 置位后 WFI hart 未在有界时间内退出 (旧行为: 无限 park)"
+			),
 		}
 	}
 
@@ -364,8 +383,12 @@ mod tests {
 		// M 文件中有一个挂起的软件中断, IID 为 3
 		state.imsic_m.eip[0].store(1 << IID_M_IPI, Ordering::Relaxed);
 
-		let (woke_before, _) =
-			wfi_sync_and_check(&mut state, &clint, std::ptr::null(), std::ptr::null_mut());
+		let (woke_before, _) = wfi_sync_and_check(
+			&mut state,
+			&clint,
+			std::ptr::null(),
+			std::ptr::null_mut(),
+		);
 		assert!(
 			woke_before,
 			"挂起 IPI 期间 WFI 必须醒来处理该 IPI, 唤醒判定不可过弱"
@@ -375,8 +398,12 @@ mod tests {
 		imsic_topei_claim_iid(&mut state.imsic_m, IID_M_IPI);
 
 		// 响应之后 IMSIC 已无挂起的中断, WFI 应当能够进入等待.
-		let (woke_after, _) =
-			wfi_sync_and_check(&mut state, &clint, std::ptr::null(), std::ptr::null_mut());
+		let (woke_after, _) = wfi_sync_and_check(
+			&mut state,
+			&clint,
+			std::ptr::null(),
+			std::ptr::null_mut(),
+		);
 		assert!(
 			!woke_after,
 			"mtopei claim 之后 MEIP 残留 (mip=0x{:x} mie=0x{:x}) -> WFI 永远无法进入等待",

@@ -6,7 +6,7 @@
 """芯片设备树的回写 — 把已解析的芯片树改写为交给受调试程序的 DTB blob.
 
 回写使用 pyfdt. 交给受调试程序的设备树以芯片树为底, 由 `chip_dt_to_dtb` 按
-`DeliveredTree` 写入模拟器装配出的 RAM 窗口、保留区间、/chosen 的内容与
+`DeliveredTree` 写入模拟器装配出的 RAM、保留区间、/chosen 的内容与
 芯片树未声明的设备节点, 不由 build.py 重新生成.
 """
 
@@ -55,7 +55,7 @@ from pyremu.utils.dev_tree.parser import Node
 class DeliveredTree:
     """模拟器写入交付设备树的内容.
 
-    ram 为实际装配的主存窗口, 改写 /memory; num_harts 为实际装配的 hart 数,
+    ram 为实际装配的主存, 改写 /memory; num_harts 为实际装配的 hart 数,
     改写 CPU 节点的 hart 编号; reserved_ranges 为平台保留区间,
     追加到 /reserved-memory; bootargs 与 initrd 写入 /chosen;
     devices 为芯片树没有声明、由模拟器补充的设备节点,
@@ -77,7 +77,7 @@ def chip_dt_to_dtb(
 ) -> bytes:
     """把已解析的树回写为 DTB blob, 供受调试程序读取.
 
-    模拟器自己决定的内容取自 delivered, 与 build.py 生成的树一致: 主存窗口改写
+    模拟器自己决定的内容取自 delivered, 与 build.py 生成的树一致: 主存范围改写
     /memory 的区间范围, 保留区间补充为 /reserved-memory 的 no-map 节点, 命令行与
     initramfs 写入 /chosen, 补充的设备按给定参数追加为节点. 树中已有的同名内容由
     delivered 的取值取代. 根节点声明的单元格数不足以描述这些区间时改为 2 与 2,

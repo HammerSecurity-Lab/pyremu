@@ -195,6 +195,30 @@ class TestBusPMA:
             ("引导只读存储器", 0x4000_0000, 0x10000),
         )
 
+    # -------- 设备 DMA 的主存读 --------
+
+    # -------- 设备区间列举 --------
+
+    def test_device_entries_empty(self, bus):
+        """未注册设备时返回空元组."""
+        assert bus.device_entries() == ()
+
+    def test_device_entries_sorted_by_base(self, bus):
+        """按基址升序返回 (基址, 设备)."""
+        low = _DummyDevice(base=0, sz=0x100)
+        high = _DummyDevice(base=0, sz=0x100)
+        bus.add_device(0x1000_4000, high)
+        bus.add_device(0x1000_0000, low)
+        assert bus.device_entries() == (
+            (0x1000_0000, low),
+            (0x1000_4000, high),
+        )
+
+    def test_device_entries_include_boot_rom(self, bus):
+        """引导只读存储器同样属于设备表."""
+        rom = bus.add_boot_rom(0x4000_0000, 0x10000)
+        assert bus.device_entries() == ((0x4000_0000, rom),)
+
     def test_is_storage_range_accepts_boot_rom(self, bus):
         """引导只读存储器内的区间可存放映像, 越过其两端则否."""
         bus.add_boot_rom(0x4000_0000, 0x10000)

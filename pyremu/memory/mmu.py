@@ -205,13 +205,14 @@ class PTE:
     # -- 叶节点判断 --
 
     def is_leaf(self) -> bool:
-        """非叶 PTE: 仅 V 置位, R/W/X 均为 0 (指向下一级页表).
+        """叶 PTE: V 置位且 R、W、X 中至少一位置位.
 
-        叶 PTE: R 或 X 至少有一个置位 (也可同时有 W).
+        R、W、X 全为 0 且 V 置位的页表项指向下一级页表. W 置位而 R 清零属
+        保留编码, 仍按叶处理并由权限检查投递缺页.
         """
         if not self.v:
             return False
-        return self.r or self.x
+        return self.r or self.w or self.x
 
     def is_ptr(self) -> bool:
         """是否为指向下一级页表的指针 (非叶, 非无效)."""
@@ -235,7 +236,8 @@ class PTE:
         """
         if not self.v:
             return False
-        if want_r and not self.r:
+        # 规范要求写访问同时具备 R 与 W: W 置位而 R 清零属保留编码.
+        if (want_r or want_w) and not self.r:
             return False
         if want_w and not self.w:
             return False
@@ -349,7 +351,6 @@ def sv39_walk(
     l1_ppn = _level1_next_ppn(raw)
     if l1_ppn is None:
         return False, 0, 0, 0
-    _mark_accessed(mem_write_phy, pte_addr, raw)
 
     # 二级页表
     table_addr = mask64(l1_ppn << PAGE_SHIFT)
@@ -362,7 +363,6 @@ def sv39_walk(
     l2_ppn = _level2_next_ppn(raw)
     if l2_ppn is None:
         return False, 0, 0, 0
-    _mark_accessed(mem_write_phy, pte_addr, raw)
 
     # 三级页表 (4 KiB 普通页)
     table_addr = mask64(l2_ppn << PAGE_SHIFT)
@@ -375,66 +375,97 @@ def sv39_walk(
     return True, leaf[0], leaf[1], PAGE_SIZE
 
 
-def _level1_leaf(raw: int, va: int) -> tuple[int, int] | None:
-    """返回根页表中 1 GiB 叶子项的 (PPN, 权限位); 该项不是叶子项时返回 None."""
-    if _NATIVE_MMU:
-        l1 = pte_parse(raw)
-        if not (l1.v and l1.is_leaf):
-            return None
-        return pte_assemble_pa(l1.ppn, va, level=2) >> 12, l1.perm
-    pte = PTE.from_int(raw)
-    if not (pte.v and (pte.r or pte.x)):
+def _pte_reserved_violated(raw: int) -> bool:
+    """页表项是否违反 Sv39 的保留位约束.
+
+    未实现 Svnapot、Svpbmt 与 Svade, 页表项的位 [63:54] 为保留位, 必须为 0;
+    非叶页表项的 D、A 与 U 位同为保留位, 必须为 0. 任一约束被违反时该页表项
+    无效, 按缺页处理.
+    """
+    if raw >> 54:
+        return True
+    if raw & (PTE_R | PTE_W | PTE_X):
+        return False
+    return raw & (PTE_D | PTE_A | PTE_U) != 0
+
+
+def _is_leaf_pte(pte) -> bool:
+    """页表项是否为叶子项: V 置位且 R、W、X 中至少一位置位.
+
+    W 置位而 R 清零属保留编码, 仍按叶子项处理, 由权限检查投递缺页; 按指针
+    处理会深入该页继续遍历.
+    """
+    return bool(pte.v) and bool(pte.r or pte.w or pte.x)
+
+
+def _leaf_fields(raw: int) -> tuple[int, int] | None:
+    """取叶子页表项的 (PPN, 权限位); 不是合法叶子项时返回 None."""
+    if _pte_reserved_violated(raw):
         return None
-    ppn = (pte.ppn & 0xFFFF_FFFF_FFFC_0000) | ((va >> 12) & 0x3FFFF)
-    return ppn, _pte_perm_flags(pte)
+    if _NATIVE_MMU:
+        pte = pte_parse(raw)
+        if not (pte.v and pte.is_leaf):
+            return None
+        return pte.ppn, pte.perm
+    pte = PTE.from_int(raw)
+    if not _is_leaf_pte(pte):
+        return None
+    return pte.ppn, _pte_perm_flags(pte)
+
+
+def _next_ppn(raw: int) -> int | None:
+    """取指向下一级页表的指针项的 PPN; 不是指针项时返回 None."""
+    if _pte_reserved_violated(raw):
+        return None
+    if _NATIVE_MMU:
+        pte = pte_parse(raw)
+        return pte.ppn if pte.is_ptr else None
+    pte = PTE.from_int(raw)
+    return pte.ppn if pte.v and not (pte.r or pte.w or pte.x) else None
+
+
+def _level1_leaf(raw: int, va: int) -> tuple[int, int] | None:
+    """返回根页表中 1 GiB 叶子项的 (PPN, 权限位); 该项不是叶子项时返回 None.
+
+    1 GiB 超级页要求 PPN[1:0] 为 0, 否则该页表项无效.
+    """
+    got = _leaf_fields(raw)
+    if got is None or got[0] & 0x3FFFF:
+        return None
+    if _NATIVE_MMU:
+        return pte_assemble_pa(got[0], va, level=2) >> 12, got[1]
+    return (got[0] & 0xFFFF_FFFF_FFFC_0000) | ((va >> 12) & 0x3FFFF), got[1]
 
 
 def _level1_next_ppn(raw: int) -> int | None:
     """返回一级页表项指向的二级页表 PPN; 该项不是指向下一级的指针时返回 None."""
-    if _NATIVE_MMU:
-        l1 = pte_parse(raw)
-        return l1.ppn if l1.is_ptr else None
-    pte = PTE.from_int(raw)
-    return pte.ppn if pte.v and not (pte.r or pte.x) else None
+    return _next_ppn(raw)
 
 
 def _level2_leaf(raw: int, va: int) -> tuple[int, int] | None:
     """返回二级页表中 2 MiB 叶子项的 (PPN, 权限位); 该项不是叶子项时
     返回 None.
+
+    2 MiB 超级页要求 PPN[0] 为 0, 否则该页表项无效.
     """
-    if _NATIVE_MMU:
-        l2 = pte_parse(raw)
-        if not (l2.v and l2.is_leaf):
-            return None
-        return pte_assemble_pa(l2.ppn, va, level=1) >> 12, l2.perm
-    pte = PTE.from_int(raw)
-    if not (pte.v and (pte.r or pte.x)):
+    got = _leaf_fields(raw)
+    if got is None or got[0] & 0x1FF:
         return None
-    ppn = (pte.ppn & 0xFFFF_FFFF_FFFF_FE00) | ((va >> 12) & 0x1FF)
-    return ppn, _pte_perm_flags(pte)
+    if _NATIVE_MMU:
+        return pte_assemble_pa(got[0], va, level=1) >> 12, got[1]
+    return (got[0] & 0xFFFF_FFFF_FFFF_FE00) | ((va >> 12) & 0x1FF), got[1]
 
 
 def _level2_next_ppn(raw: int) -> int | None:
     """返回二级页表项指向的三级页表 PPN; 该项不是指向下一级的指针时返回 None."""
-    if _NATIVE_MMU:
-        l2 = pte_parse(raw)
-        return l2.ppn if l2.v and l2.is_ptr else None
-    return PTE.from_int(raw).ppn
+    return _next_ppn(raw)
 
 
 def _level3_leaf(raw: int) -> tuple[int, int] | None:
     """返回三级页表中 4 KiB 叶子项的 (PPN, 权限位); 该项不是叶子项时
     返回 None.
     """
-    if _NATIVE_MMU:
-        l3 = pte_parse(raw)
-        if not (l3.v and l3.is_leaf):
-            return None
-        return l3.ppn, l3.perm
-    pte = PTE.from_int(raw)
-    if not (pte.v and (pte.r or pte.x)):
-        return None
-    return pte.ppn, _pte_perm_flags(pte)
+    return _leaf_fields(raw)
 
 
 def _pte_perm_flags(pte: PTE) -> int:

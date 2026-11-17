@@ -4,32 +4,26 @@
 //!     Sv39 页表遍历与 ALU 运算.
 //! 全部公开符号以 `#[no_mangle] pub extern "C"` 导出供 ctypes 调用.
 
-mod alu;
-mod atom_instr;
-mod check_ext_isa;
+mod clock;
 mod concurrent;
 mod consts;
 pub mod csr;
-mod decode;
 mod ffi;
-mod fpu;
-pub mod handlers;
 mod hart_sched;
+pub mod instr;
 mod interrupt;
-mod mem;
-mod mmu;
-mod op_dispatcher;
+pub mod mem;
 mod peripheral;
-mod pmp;
+mod shared;
 mod state;
-pub mod translate;
 mod trap;
+mod utils;
 
-pub use alu::*;
 pub use consts::*;
-pub use decode::*;
 pub use ffi::*;
-pub use mem::*;
-pub use mmu::*;
-pub use pmp::*;
+pub use instr::alu::*;
+pub use instr::decode::*;
+pub use mem::access::*;
+pub use mem::mmu::*;
+pub use mem::pmp::*;
 pub use state::*;

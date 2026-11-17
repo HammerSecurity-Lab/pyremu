@@ -898,3 +898,14 @@ class TestTermioHostKeys:
         finally:
             os.close(read_fd)
             os.close(write_fd)
+
+
+class TestSatpFlushNotification:
+    """Python 侧写 satp 时通知加速执行引擎作废既有翻译条目."""
+
+    def test_satp_write_bumps_tlb_flush_counter(self):
+        emu = Emulator(num_harts=1)
+        hart = emu.harts[0]
+        before = emu.bus.tlb_flush_cnt.value
+        hart.satp_val = (8 << 60) | 0x1000
+        assert emu.bus.tlb_flush_cnt.value == before + 1

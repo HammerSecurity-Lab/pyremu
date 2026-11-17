@@ -22,7 +22,12 @@ from pyremu.peripheral.watchdog import WATCHDOG_IRQ
 from pyremu.platform import PlatformConfig
 from pyremu.utils.isa import isa_ext_list
 from pyremu.utils.parse_bin import FirmwareImage, FirmwareSegment
-from tests.conftest import make_test_emu
+from tests.conftest import (
+    make_test_dbg,
+    make_test_emu,
+    make_test_image,
+    TEST_PROG_PA,
+)
 
 RAM_BASE = 0x8000_0000
 RAM_SIZE = 0x0040_0000  # 4 MiB, 容纳默认 DTB 与 initramfs 地址算式
@@ -1332,3 +1337,242 @@ class TestCliConsoleOutput:
         out = capsys.readouterr().out
         assert "--entry-symbol" in out
         assert "firmware.bin --harts 4 --ram 256M" in out
+
+
+class TestDispatch:
+    """REPL 命令分发."""
+
+    @pytest.mark.parametrize(
+        "v, expected",
+        [
+            ("q", False),
+            ("quit", False),
+            ("exit", False),
+            ("e", True),  # 未知命令, 返回 True 保持 REPL 运行
+        ],
+    )
+    def test_quit_returns_false(self, v, expected: bool):
+        dbg = make_test_dbg()
+        assert dbg._dispatch([v]) is expected
+
+    def test_step_dispatches(self):
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA)
+        assert dbg._dispatch(["s"]) is True
+        assert dbg._instr_count > 0
+
+    def test_step_with_count(self):
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA, is_code_loaded=False)
+        dbg._emu.load_code(TEST_PROG_PA, b"\x13\x00\x00\x00" * 3)
+        assert dbg._dispatch(["step", "3"]) is True
+        assert dbg._instr_count == 3
+
+    def test_continue_dispatches(self):
+        # ram_base=0 使 0x1000 落在 RAM 内 (native 与纯 Python 取指路径一致);
+        # 在 NOP 之后的 0x1004 设地址断点, continue 执行完 NOP 后命中断点
+        # 即刻暂停 — 无连续 trap 兜底, 断点是连续执行的自然停止条件.
+        emu = make_test_emu(ram_base=0, ram_size=0x10000, prog_cnt=0x1000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00")
+        dbg = Debugger(emulator=emu, hart_id=0)
+        dbg.cmd_bp_set("0x1004")
+        assert dbg._dispatch(["c"]) is True
+
+    @pytest.mark.parametrize(
+        "parts",
+        [
+            ["r", "2"],
+            ["s", "-1"],  # 负计数被拒绝, 不崩溃
+            ["r", "-1"],  # 同上
+            ["undo"],
+            ["regs"],
+            ["gpr"],
+            ["reg", "a0"],
+            ["reg"],  # 缺参数, 警告
+            ["set", "a0", "0x42"],
+            ["set", "a0"],  # 缺参数, 警告
+            ["csr", "mstatus"],
+            ["csrw", "mstatus", "0x100"],
+            ["pc"],
+            ["mode"],
+            ["mstatus"],
+            ["tlb"],
+            ["tlbflush"],
+            ["cache"],
+            ["satp"],
+            ["mem", "0x1000"],
+            ["mem"],  # 缺参数, 警告
+            ["disasm", "0x1000"],
+            ["status"],
+            ["info"],
+            ["stack"],
+            ["bt"],
+            ["frame"],
+        ],
+    )
+    def test_dispatch_returns_true(self, parts):
+        dbg = make_test_dbg()
+        assert dbg._dispatch(parts) is True
+
+    def test_sym_dispatches(self):
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        assert dbg._dispatch(["sym"]) is True
+
+    def test_sym_no_args_shows_grouped_counts(self):
+        """sym (无参数) 按首字符分组显示各前缀的符号数量."""
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        # make_test_image 提供: _start, main, uart_puts
+        assert dbg._dispatch(["sym"]) is True
+
+    def test_sym_prefix_lists_matching_symbols(self):
+        """sym <prefix> 列出以前缀开头的符号, 按地址升序."""
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        assert dbg._dispatch(["sym", "m"]) is True  # 匹配 main
+
+    def test_sym_prefix_underscore(self):
+        """sym _ 匹配以下划线开头的符号."""
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        assert dbg._dispatch(["sym", "_"]) is True  # 匹配 _start
+
+    def test_sym_prefix_no_match(self):
+        """sym <prefix> 无匹配时不报错."""
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        assert dbg._dispatch(["sym", "zzz"]) is True  # 无匹配
+
+    def test_sym_empty_symbols(self):
+        """空符号表不应崩溃."""
+        dbg = make_test_dbg()
+        dbg._image = FirmwareImage(
+            format="elf", entry_point=0x1000, segments=[], symbols={}
+        )
+        assert dbg._dispatch(["sym"]) is True
+
+    def test_sym_no_image(self):
+        """无 ELF 镜像时显示警告, 不崩溃."""
+        dbg = make_test_dbg()
+        assert dbg._image is None
+        assert dbg._dispatch(["sym"]) is True
+
+    def test_hart_dispatches(self):
+        emu = make_test_emu(num_harts=4, prog_cnt=0x1000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00")
+        dbg = Debugger(emulator=emu)
+        assert dbg._dispatch(["hart", "2"]) is True
+
+    def test_help_dispatches(self):
+        dbg = make_test_dbg()
+        assert dbg._dispatch(["help"]) is True
+        assert dbg._dispatch(["h"]) is True
+        assert dbg._dispatch(["?"]) is True
+
+    def test_unknown_command(self):
+        dbg = make_test_dbg()
+        assert dbg._dispatch(["nonexistent_cmd"]) is True  # 不中断 REPL
+
+    def test_w_alias_for_set(self):
+        dbg = make_test_dbg()
+        assert dbg._dispatch(["w", "a0", "99"]) is True
+        assert dbg.hart.gprs[10] == 99
+
+
+class TestPrintHelp:
+    """帮助显示."""
+
+    def test_help(self):
+        dbg = make_test_dbg()
+        dbg._print_help()  # 不抛异常
+
+
+class TestDebuggerIntegration:
+    """端到端集成."""
+
+    def test_multi_step_with_pc_check(self):
+        """step 多次后 PC 正确推进."""
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA, is_code_loaded=False)
+        # 在 TEST_PROG_PA 起的 16 字节填 NOP
+        nops = b"\x13\x00\x00\x00" * 4
+        dbg._emu.load_code(TEST_PROG_PA, nops)
+
+        dbg.cmd_step(3)
+        assert dbg.hart.pc == TEST_PROG_PA + 0xC  # 3 × 4 = 12
+        assert dbg._instr_count == 3
+
+    def test_rollback_after_step(self):
+        """step + rollback 恢复 PC.
+
+        step_one 总是在执行前保存快照。cmd_step(2) 执行两条 NOP:
+        - 第一条前: 保存快照 A (PC=TEST_PROG_PA), 执行后 PC=TEST_PROG_PA+4
+        - 第二条前: 保存快照 B (PC=TEST_PROG_PA+4), 执行后 PC=TEST_PROG_PA+8
+        最终 _snapshot = B (PC=TEST_PROG_PA+4), rollback 恢复到 B.
+        """
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA, is_code_loaded=False)
+        nops = b"\x13\x00\x00\x00" * 4
+        dbg._emu.load_code(TEST_PROG_PA, nops)
+
+        assert dbg.hart.pc == TEST_PROG_PA
+        dbg.cmd_step(2)
+        assert dbg.hart.pc == TEST_PROG_PA + 8  # 两条 NOP 后
+
+        dbg.rollback()
+        # rollback 恢复到最后一条指令执行前的快照: PC=TEST_PROG_PA+4
+        assert dbg.hart.pc == TEST_PROG_PA + 4
+
+    def test_hart_switch_preserves_state(self):
+        """hart 切换后各 hart 状态独立."""
+        emu = make_test_emu(num_harts=2, prog_cnt=0x1000)
+        nops = b"\x13\x00\x00\x00" * 4
+        emu.load_code(0x1000, nops)
+        emu.harts[0].gprs[10] = 0xAAAA
+        emu.harts[1].gprs[10] = 0xBBBB
+
+        dbg = Debugger(emulator=emu, hart_id=0)
+        assert dbg.hart.gprs[10] == 0xAAAA
+
+        dbg.cmd_hart(1)
+        assert dbg.hart.gprs[10] == 0xBBBB
+
+    def test_mem_with_uart_device(self):
+        """mem 命令读取设备区域."""
+        dbg = make_test_dbg()
+        dbg.cmd_mem("0x10000000", "16")  # UART 基址
+
+    def test_disasm_across_pages(self):
+        """反汇编跨页."""
+        dbg = make_test_dbg()
+        # 在 0x1000 和 0x1FFC 附近写入指令
+        long_nops = b"\x13\x00\x00\x00" * 20
+        dbg._emu.load_code(0x1000, long_nops)
+        dbg.cmd_disasm("0x1000", "64")
+
+    def test_fetch_and_disasm_unreadable(self):
+        """未定义的物理地址不返回内容, 也不抛出异常."""
+        dbg = make_test_dbg()
+        result = dbg._fetch_and_disasm(0xDEAD0000)
+        assert result is None
+
+    def test_cmd_mem_with_unreadable_region(self):
+        """mem 读取空洞地址."""
+        dbg = make_test_dbg()
+        dbg.cmd_mem("0xDEAD0000", "4")
+
+    def test_set_gpr_64bit_truncation(self):
+        """set 应截断到 64 位."""
+        dbg = make_test_dbg()
+        # 值超出 64 位范围
+        dbg.cmd_set("a0", "0x1FFFFFFFFFFFFFFFF")  # 65 位
+        assert dbg.hart.gprs[10] == 0xFFFFFFFFFFFFFFFF
+
+    def test_last_command_repeat_mechanism(self):
+        """空输入重复上一条命令 (通过 _dispatch 间接覆盖)."""
+        dbg = make_test_dbg()
+        # 命令后 _last_command 被设置
+        dbg._last_command = "pc"
+        # 这里无法直接测试 repl 循环, 但可以验证 _last_command 存储机制
+        assert dbg._last_command == "pc"
+
+    def test_cmd_frame_invalid_input(self):
+        dbg = make_test_dbg()
+        dbg.cmd_frame("not_a_number")

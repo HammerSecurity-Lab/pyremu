@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 from collections.abc import Callable
+from contextlib import suppress
 import ctypes
 from dataclasses import dataclass
 import os
@@ -46,9 +47,7 @@ _EXT = {"linux": ".so", "darwin": ".dylib", "win32": ".dll"}.get(
     sys.platform, ".so"
 )
 _NATIVE_DIR = Path(__file__).resolve().parent
-_LIB_PATH = (
-    _NATIVE_DIR / f"libdecode{_EXT}"
-)  # 单独留在外部，好减少SIGBUS/SIGSEGM一类的错误
+_LIB_PATH = _NATIVE_DIR / f"libdecode{_EXT}"
 
 
 #  ctypes type definitions (must match Rust #[repr(C)] layout)
@@ -69,6 +68,38 @@ from pyremu._native._ctypes import (  # noqa: E402, F401 — re-export
 )
 
 #  Library loading
+
+
+def _newest_rust_source() -> float:
+    """返回 Rust 源码中最新的修改时间; 找不到源码时返回 0."""
+    roots = [
+        Path(__file__).resolve().parent / "cpu" / "src",
+        Path(__file__).resolve().parent / "termio" / "src",
+    ]
+    newest = 0.0
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.rs"):
+            newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def _warn_if_stale(lib_path: Path) -> None:
+    """加速库比 Rust 源码旧时给出提示.
+
+    直接以 python -m pyremu.debugger 启动不经过 make, 不会重编加速库; 此时运行
+    的是旧实现, 排查源码改动时极易误判. 经 make emu-linux-sh 启动无此问题.
+    """
+    try:
+        if _newest_rust_source() > lib_path.stat().st_mtime:
+            logger.warning(
+                "{} 比 Rust 源码旧, 当前运行的是旧实现; "
+                "请先执行 make build-native 重新编译",
+                lib_path.name,
+            )
+    except OSError:
+        pass
 
 
 _lib = None
@@ -104,15 +135,14 @@ def _cleanup_tmp_so() -> None:
     """Remove the temporary .so copy, ignoring errors (best-effort)."""
     if _tmp_so_path is None:
         return
-    try:
+    with suppress(OSError):
         os.unlink(_tmp_so_path)
-    except OSError:
-        pass
 
 
 _lib: ctypes.CDLL | None = None
 
 try:
+    _warn_if_stale(_LIB_PATH)
     _lib = _load_lib_safe(_LIB_PATH)
     if _lib is None:
         raise OSError(f"无法加载 {_LIB_PATH.name}")
@@ -534,17 +564,18 @@ def pte_parse(raw: int) -> PteFields:
         return _lib.pte_parse(raw)
     raw &= 0xFFFF_FFFF_FFFF_FFFF
     pte_v = 1 << 0
-    pte_r = 1 << 1
-    pte_x = 1 << 3
+    # 叶子页表项要求 R、W、X 中至少一位置位; W 置位而 R 清零属保留编码,
+    # 仍按叶子项处理, 由权限检查投递缺页.
+    pte_rwx = 0b1110
     ppn = (raw >> 10) & 0xFFF_FFFF_FFFF
     v = 1 if raw & pte_v else 0
-    r_or_x = raw & (pte_r | pte_x)
+    rwx = raw & pte_rwx
     f = PteFields()
     f.ppn = ppn
     f.perm = raw & 0x1E  # R|W|X|U = bits 4:1
     f.v = v
-    f.is_leaf = 1 if v and r_or_x else 0
-    f.is_ptr = 1 if v and not r_or_x else 0
+    f.is_leaf = 1 if v and rwx else 0
+    f.is_ptr = 1 if v and not rwx else 0
     return f
 
 
@@ -1148,21 +1179,21 @@ def fp_exec_fma(
 
 
 def bus_read_ram(
-    ram_win: tuple[int, int, int, int, int],
+    ram_range: tuple[int, int, int, int, int],
     pa: int,
     size: int,
     out_buf,  # ctypes array for output (pre-allocated 8 bytes)
 ) -> int:
     """Read *size* bytes from physical address *pa* directly into *out_buf*.
 
-    *ram_win* 为 RAM 直读窗口: (RAM 缓冲区首地址, 字节数, 基址, 影子窗口基址,
-    影子窗口字节数).
+    ram_range 为 RAM 直读范围:
+        (RAM 缓冲区首地址, 字节数, 基址, 影子基址及其字节数).
 
     Returns 1 if the address falls within RAM (primary or shadow); 0 otherwise.
     Caller falls back to device / L2-cache / error logic on failure.
     """
     if _lib:
-        return _lib.bus_read_ram(*ram_win, pa, size, out_buf)
+        return _lib.bus_read_ram(*ram_range, pa, size, out_buf)
     return 0  # no native lib — caller uses pure-Python path
 
 

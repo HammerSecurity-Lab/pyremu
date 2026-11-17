@@ -289,6 +289,49 @@ class SetupOps:
         for h in self.harts:
             h.all_harts = self.harts
 
+    def rebuild_harts(self) -> None:
+        """按当前配置重建全部 hart, 逐 hart 接线与构造时一致.
+
+        供调试器的 restart 使用. 重建复用 ``_create_harts``, 以免与构造流程各写
+        一份接线, 造成 UART 写包装或 IMSIC 引用只在其中一处生效. 重建之后必须
+        重新绑定加速执行引擎的 PMP 缓冲区与各 hart 的状态数组: 这些缓冲区在构造
+        时按 hart 切片绑定, 不重新绑定则固件在引擎内写入的条目落在旧对象上,
+        Python 侧读到的 PMP 始终为空.
+        """
+        self.harts = []
+        self._create_harts(self._cfg)
+        self._bind_pmp_buffers()
+        self._pmp_cfg_snapshot = bytes(self._pmp_cfg_buf)
+        self._pmp_addr_snapshot = bytes(self._pmp_addr_buf)
+        if self._speedup_hart_states is not None:
+            for i, hart in enumerate(self.harts):
+                hart.marshal_isa_exts(self._speedup_hart_states[i])
+
+    def reset_internal_state(self) -> None:
+        """清除上一轮运行留在模拟器内部的状态, 供调试器的 restart 使用.
+
+        覆盖 L2 缓存的全部条目、TLB 刷新计数与 virtqueue 索引, 以及加速
+        执行引擎镜像的 CLINT 边沿与指令计数. 平台装配不受影响.
+        """
+        l2 = self.bus.l2
+        if l2 is not None:
+            l2.invalidate_all()
+        # 递增全局刷新计数, 使引擎在下一轮丢弃既有翻译条目.
+        self.bus.note_tlb_flush()
+        for dev in (self.virtio_blk, self.virtio_net_s, self.virtio_net_m):
+            if dev is not None:
+                dev.reset()
+        # 设备重置可能拉低中断线, 故控制器放在其后清空.
+        for ctrl in (self.plic, self.imsic, self.aplic):
+            if ctrl is not None:
+                ctrl.reset()
+        # CLINT 边沿镜像只在启用加速执行时建立, 纯 Python 路径没有该数组.
+        for i, _ in enumerate(getattr(self, "_clint_msip_prev", [])):
+            self._clint_msip_prev[i] = 0
+            self._clint_msip_edge[i] = 0
+        self._prev_all_exec_cnt = 0
+        self._native_stop_flag.value = 0
+
     def _init_termio(self) -> None:
         """初始化终端 I/O 管理器.
 

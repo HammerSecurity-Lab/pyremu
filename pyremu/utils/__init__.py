@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
 
-"""工具函数: 文件操作, 错误处理, 固件解析, 反汇编, 格式化."""
+"""工具函数: 文件操作, 错误处理, 固件解析, 格式化."""
 
-from pyremu.utils.disassem import disasm
 from pyremu.utils.file_ops import (
     get_abs_filename_arr_from_dir,
     is_file,
@@ -31,7 +30,6 @@ __all__ = [
     "FirmwareSegment",
     "detect_format",
     "die_if_err",
-    "disasm",
     "dye_hexdump",
     "fmt_addr",
     "fmt_hexdump",

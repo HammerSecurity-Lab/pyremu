@@ -51,18 +51,19 @@ class Preloader:
 
         Args:
             code: 原始 RISC-V 机器码字节.
-            addr: 写入地址 (None = 自动选择 RAM 窗口内的默认位置).
+            addr: 写入地址 (None = 自动选择 RAM 内的默认位置).
 
         Returns:
             载荷的起始物理地址, 即入口地址.
 
         Raises:
-            ValueError: 载荷的区间范围不在 RAM 窗口或引导只读存储器窗口内, 或与
+            ValueError: 载荷的区间范围不在 RAM 或引导只读存储器内, 或与
                 已装载的设备树、initramfs 的区间范围重叠.
         """
         emu = self._emu
         if addr is None:
-            # 默认注入位置: 自 RAM 窗口 [ram_base, ram_base + ram_size) 的
+            # 默认注入位置: 自 RAM 内存范围
+            # [ram_base, ram_base + ram_size) 的
             # 上界往下 RAM_PRELOAD_OFFSET 字节, 该存储位置在设备树的默认
             # 位置之下, 见 mk/memory.mk.
             addr = (
@@ -78,9 +79,9 @@ class Preloader:
             or bus.is_rom_range(start, len(code))
         ):
             raise ValueError(
-                f"载荷的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 窗口"
-                f" [0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
-                f"引导只读存储器的窗口内"
+                f"载荷的区间范围 [0x{start:x}, 0x{end:x}) 不在 RAM 的范围"
+                f"[0x{bus.ram_base:x}, 0x{bus.ram_base + bus.ram_size:x}) 或"
+                f"引导只读存储器内"
             )
         dtb_addr = emu.dtb_addr
         if dtb_addr is not None and ranges_overlap(

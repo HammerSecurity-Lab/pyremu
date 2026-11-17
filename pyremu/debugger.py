@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
 
-"""RISC-V 交互式调试器 (rvdb)"""
+"""RISC-V 交互式调试器 (rvdbg)"""
 
 from pyremu.debug import (
     Debugger,
@@ -12,7 +12,6 @@ from pyremu.debug import (
     StackFrame,
 )
 from pyremu.debug.cli import debugger
-from pyremu.debug.utils import MAX_INSTR_COUNT
 
 __all__ = [
     "Debugger",
@@ -20,7 +19,6 @@ __all__ = [
     "MemoryChange",
     "MemWriteTracker",
     "StackFrame",
-    "MAX_INSTR_COUNT",
     "debugger",
 ]
 

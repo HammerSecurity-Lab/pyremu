@@ -10,7 +10,7 @@ from typing import Callable
 import pytest
 
 from pyremu.core.decoder import decode_sd_sp
-from pyremu.utils.disassem import disasm
+from pyremu.disasm import disasm
 from tests.instr_encode import b_type, i_type, j_type, r_type, s_type, u_type
 
 # Opcodes
@@ -276,9 +276,21 @@ class TestAMO:
         assert disasm(instr, 0) == "amoxor.d     x10, x12, (x11)"
 
     def test_lr_w(self):
-        # LR.W: funct5=00010, funct3=010, rs2=0 (unused)
+        # LR.W: funct5=00010, funct3=010, rs2 恒为 0, 不属于操作数
         instr = (2 << 27) | (0 << 20) | (11 << 15) | (2 << 12) | (10 << 7) | AMO
-        assert disasm(instr, 0) == "lr.w         x10, x0, (x11)"
+        assert disasm(instr, 0) == "lr.w         x10, (x11)"
+
+    def test_lr_w_aqrl_suffix(self):
+        # bits[26] 为 aq, bits[25] 为 rl, 两者置位时按 .aqrl 书写
+        instr = (2 << 27) | (1 << 26) | (1 << 25) | (0 << 20)
+        instr |= (11 << 15) | (2 << 12) | (10 << 7) | AMO
+        assert disasm(instr, 0) == "lr.w.aqrl    x10, (x11)"
+
+    def test_amoswap_w_aq_suffix(self):
+        # AMOSWAP.W: funct5=00001, 置 aq 位
+        instr = (1 << 27) | (1 << 26) | (12 << 20) | (11 << 15)
+        instr |= (2 << 12) | (10 << 7) | AMO
+        assert disasm(instr, 0) == "amoswap.w.aq x10, x12, (x11)"
 
 
 # ============================================================
@@ -347,6 +359,41 @@ class TestCompressed:
         result = disasm(0x8D89, 0x620)
         assert result.startswith("c.sub")
         assert "x11" in result and "x10" in result
+
+    def test_c_addw_a1_a5(self):
+        """llvm-mc: c.addw a1, a5 -> 0x9dbd, bit12 置位取 32 位运算."""
+        result = disasm(0x9DBD, 0x628)
+        assert result.startswith("c.addw")
+        assert "x11" in result and "x15" in result
+
+    def test_c_subw_a1_a5(self):
+        """llvm-mc: c.subw a1, a5 -> 0x9d9d."""
+        result = disasm(0x9D9D, 0x628)
+        assert result.startswith("c.subw")
+        assert "x11" in result and "x15" in result
+
+    def test_c_sub_a1_a5_when_bit12_clear(self):
+        """llvm-mc: c.sub a1, a5 -> 0x8d9d, bit12 清零取 64 位运算."""
+        result = disasm(0x8D9D, 0x620)
+        assert result.split()[0] == "c.sub"
+        assert "x11" in result and "x15" in result
+
+    def test_c_subw_addw_reserved_combo(self):
+        """bit12 置位且 bits[6:5] 为 0b10 属保留编码."""
+        result = disasm(0x9DCD, 0x628)
+        assert result.startswith("c.?")
+
+    def test_c_lwsp_offset_from_bits_6_4(self):
+        """llvm-mc: c.lwsp a4, 40(sp) -> 0x5722, 偏移取 bits[6:4] 与 [3:2]."""
+        result = disasm(0x5722, 0x5E0)
+        assert result.startswith("c.lwsp")
+        assert "40(sp)" in result
+
+    def test_c_lwsp_offset_high_bits(self):
+        """llvm-mc: c.lwsp a4, 132(sp) -> 0x471a."""
+        result = disasm(0x471A, 0x5E0)
+        assert result.startswith("c.lwsp")
+        assert "132(sp)" in result
 
     def test_c_beqz_a5(self):
         """nonsense.o @60a: c391 -> c.beqz a5, 0x60e."""
@@ -486,13 +533,10 @@ class TestCompressedLargeOffset:
     # -- C2 quadrant: SP-relative --
 
     def test_c_lwsp_offset_40(self):
-        """C.LWSP x10, 40(sp)."""
-        instr = (0b010 << 13) | (1 << 12) | (10 << 7) | (0b010 << 2) | 0b10
-        result = disasm(instr, 0x80000000)
+        """llvm-mc: c.lwsp a0, 40(sp) -> 0x5522."""
+        result = disasm(0x5522, 0x80000000)
         assert result.startswith("c.lwsp"), f"期望 C.LWSP, 得到: {result}"
-        assert "40" in result and "sp" in result, (
-            f"期望偏移 40(sp), 得到: {result}"
-        )
+        assert "40(sp)" in result, f"期望偏移 40(sp), 得到: {result}"
 
     def test_c_ldsp_offset_40(self):
         """C.LDSP x10, 40(sp)."""

@@ -86,7 +86,7 @@ class PLIC(Device):
 
         # pending 与 level 同样由本对象持有, 引擎在批次内直接改写这两份数组.
         # PLIC gateway 语义: claim 清除 pending, complete 时若电平仍为高则重新
-        # 置位 pending, 否则电平中断在 claim 后无设备寄存器访问的窗口内丢失.
+        # 置位 pending, 否则电平中断在 claim 后无设备寄存器访问而丢失.
         self.pending = (ctypes.c_uint8 * (num_sources + 1))()
         self.level = (ctypes.c_uint8 * (num_sources + 1))()
 
@@ -103,6 +103,19 @@ class PLIC(Device):
         self._lock = threading.Lock()
 
     # ---- 硬件集成 API (供模拟器其他组件调用) ----
+
+    def reset(self) -> None:
+        """恢复上电复位状态: 清空优先级、使能、阈值、挂起与电平."""
+        with self._lock:
+            for arr in (
+                self.priority,
+                self.enable,
+                self.threshold,
+                self.pending,
+                self.level,
+            ):
+                for i in range(len(arr)):
+                    arr[i] = 0
 
     def set_irq(self, source: int, pending: bool) -> None:
         """由设备模型调用: 设置中断源电平与挂起状态.

@@ -202,6 +202,8 @@ class DispatchOps(SharedAttrs):
             self._dispatch_aux(parts, 1, "")
         ),
         "sym": lambda self, parts: self.cmd_sym(self._command_rest),
+        "devices": lambda self, parts: self.cmd_devices(),
+        "dev": lambda self, parts: self.cmd_devices(),
         # 映像与磁盘
         "bins-info": lambda self, parts: self.cmd_bins_info(self._command_rest),
         "bins": lambda self, parts: self.cmd_bins_info(self._command_rest),
@@ -266,7 +268,7 @@ class DispatchOps(SharedAttrs):
                     "Type [bold]help/h/?[/] for commands",
                 ]
             ),
-            title="RISC-V Interactive Debugger [bold green](rvdb)[/]",
+            title="RISC-V Interactive Debugger [bold green](rvdbg)[/]",
             border_style="green",
         )
         self._console.print(banner)
@@ -433,6 +435,15 @@ class DispatchOps(SharedAttrs):
                     ("sym info", "显示外部符号文件信息"),
                     ("sym/symbols [filt]", "列出固件符号表 (可选过滤)"),
                     ("sym help", "显示符号子命令的用法"),
+                ],
+            ),
+            self._section(
+                "设备与地址",
+                [
+                    (
+                        "devices/dev",
+                        "列出主存、存储区间与全部虚拟设备的总线区间",
+                    ),
                 ],
             ),
             self._section(

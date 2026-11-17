@@ -10,16 +10,13 @@ lld      = ld.lld
 ASFLAGS  = --arch=riscv64 --triple=riscv64 --mattr=+m,+a
 
 
-# ---- 编译全部测试固件 ----
 phony = all
 all: build-multi build-lottery build-s2u
 
-# ---- 多程序内核 (kernel + fib + nqueen + A/B counter) ----
 build-multi:
 	$(MAKE) -C src-env/multi-proc elf_dir=../../build/elf
 phony += build-multi
 
-# ---- 多hart 彩票启动测试 ----
 build-lottery:
 	@mkdir -p $(elf_dir)
 	$(llvm_mc) $(ASFLAGS) src-env/lottery_boot.s --filetype=obj -o lottery_boot.tmp
@@ -28,7 +25,6 @@ build-lottery:
 	-rm -f lottery_boot.tmp
 phony += build-lottery
 
-# ---- M -> S -> U 移交固件 (Sv39 栈保护页 + UART 输入 + fib) ----
 build-s2u:
 	$(MAKE) -C src-env/s2u elf_dir=../../build/elf
 phony += build-s2u

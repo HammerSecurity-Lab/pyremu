@@ -1,5 +1,6 @@
-use crate::concurrent::{timer_deadline_own, ConcurrentClintCtx};
-use crate::handlers::MemAccess;
+use crate::clock::timer_deadline_own;
+use crate::instr::handlers::MemAccess;
+use crate::shared::ConcurrentClintCtx;
 use crate::state::HartState;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -13,7 +14,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 ///
 /// 清除只发生在写入未来值或 0 时; 以未来值写入后, ``sync_mtip`` 在本 hart 的指令
 /// 计数到达 deadline 或该位已置位时按共享 mtime 复核, 未到期即清除该位。
-pub(crate) fn write_mtimecmp(state: &mut HartState, now_mtime: u64, val: u64, timebase_hz: u64) {
+pub(crate) fn write_mtimecmp(
+	state: &mut HartState,
+	now_mtime: u64,
+	val: u64,
+	timebase_hz: u64,
+) {
 	if val == 0 {
 		state.mip.fetch_and(!(1 << 7), Ordering::AcqRel);
 		state.mtip_deadline = 0;
@@ -21,14 +27,20 @@ pub(crate) fn write_mtimecmp(state: &mut HartState, now_mtime: u64, val: u64, ti
 		state.mtip_deadline = 0;
 		state.mip.fetch_or(1 << 7, Ordering::AcqRel);
 	} else {
-		state.mtip_deadline = timer_deadline_own(state.total_instrs, now_mtime, val, timebase_hz);
+		state.mtip_deadline =
+			timer_deadline_own(state.total_instrs, now_mtime, val, timebase_hz);
 		state.mip.fetch_and(!(1 << 7), Ordering::AcqRel);
 	}
 }
 
 /// stimecmp 写入处理, 与 ``write_mtimecmp`` 对称。
 /// stimecmp 仅由本 hart 写入, 故只取 ``&mut HartState``。
-pub(crate) fn write_stimecmp(state: &mut HartState, now_mtime: u64, val: u64, timebase_hz: u64) {
+pub(crate) fn write_stimecmp(
+	state: &mut HartState,
+	now_mtime: u64,
+	val: u64,
+	timebase_hz: u64,
+) {
 	if val == 0 {
 		state.mip.fetch_and(!(1 << 5), Ordering::AcqRel);
 		state.stip_deadline = 0;
@@ -36,7 +48,8 @@ pub(crate) fn write_stimecmp(state: &mut HartState, now_mtime: u64, val: u64, ti
 		state.stip_deadline = 0;
 		state.mip.fetch_or(1 << 5, Ordering::AcqRel);
 	} else {
-		state.stip_deadline = timer_deadline_own(state.total_instrs, now_mtime, val, timebase_hz);
+		state.stip_deadline =
+			timer_deadline_own(state.total_instrs, now_mtime, val, timebase_hz);
 		state.mip.fetch_and(!(1 << 5), Ordering::AcqRel);
 	}
 }
@@ -47,7 +60,11 @@ pub(crate) fn write_stimecmp(state: &mut HartState, now_mtime: u64, val: u64, ti
 /// 以原始指针加原子对齐 u64 读写, 与 clint_write_msip_concurrent 的跨 hart mip 访问相同。
 /// ``hart_states`` 未初始化时跳过设定, MTIP 退化为共享 mtime 比较。
 #[inline]
-pub(crate) fn write_mtimecmp_for_target(clint: &ConcurrentClintCtx, target: usize, val: u64) {
+pub(crate) fn write_mtimecmp_for_target(
+	clint: &ConcurrentClintCtx,
+	target: usize,
+	val: u64,
+) {
 	let now = (unsafe { &*clint.mtime }).load(Ordering::Acquire);
 	let hart_states = clint.hart_states.get();
 	if !hart_states.is_null() && target < (clint.num_harts as usize) {
@@ -79,7 +96,12 @@ fn clear_mip_bit(state: &mut HartState, bit: u64) {
 /// ``cmp`` 为 0, 即比较值未设定时目标恒为清除, 该分支不读取共享 mtime; mtime 由
 /// 全部 hart 以取最大值写入, 是唯一被并发写入的共享行。
 #[inline]
-fn sync_timer_bit_shared(state: &mut HartState, clint: &ConcurrentClintCtx, bit: u64, cmp: u64) {
+fn sync_timer_bit_shared(
+	state: &mut HartState,
+	clint: &ConcurrentClintCtx,
+	bit: u64,
+	cmp: u64,
+) {
 	if cmp == 0 {
 		clear_mip_bit(state, bit);
 		return;
@@ -139,11 +161,14 @@ pub(crate) fn sync_mtip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 		// 随之醒来; 受调试程序的 rdtime 读取共享 mtime, 定时器到期即在共享时间中越过
 		// mtimecmp。
 		sync_timer_bit_shared(state, clint, 1 << 7, cmp);
-	} else if state.mtip_deadline != 0 && needs_timer_confirm(state, 1 << 7, state.mtip_deadline) {
+	} else if state.mtip_deadline != 0
+		&& needs_timer_confirm(state, 1 << 7, state.mtip_deadline)
+	{
 		// 活跃且已设定 deadline: 本 hart 的指令计数越过写入时固定的 deadline, 或该位
 		// 已置位时, 以共享 mtime 复核, 仅在 mtime 已越过 mtimecmp 时保留置位。
 		let deadline = state.mtip_deadline;
-		state.mtip_deadline = confirm_timer_deadline(state, clint, 1 << 7, cmp, deadline);
+		state.mtip_deadline =
+			confirm_timer_deadline(state, clint, 1 << 7, cmp, deadline);
 	} else if state.mtip_deadline == 0 {
 		// 活跃且 deadline 为 0: 写入未经过 ``write_mtimecmp``, 例如 Python 单步执行
 		// 路径写入、测试直接写字段或写入即到期; 此时按共享 mtime 比较。已设定 deadline
@@ -162,11 +187,14 @@ pub(crate) fn sync_mtip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 	} else if state.waiting != 0 {
 		// 按共享 mtime 比较, 用于在定时器到期时唤醒本 hart。
 		sync_timer_bit_shared(state, clint, 1 << 5, sstc_cmp);
-	} else if state.stip_deadline != 0 && needs_timer_confirm(state, 1 << 5, state.stip_deadline) {
+	} else if state.stip_deadline != 0
+		&& needs_timer_confirm(state, 1 << 5, state.stip_deadline)
+	{
 		// 活跃且已设定 deadline: 与 MTIP 相同, 到达 deadline 或该位已置位时以共享
 		// mtime 复核。
 		let deadline = state.stip_deadline;
-		state.stip_deadline = confirm_timer_deadline(state, clint, 1 << 5, sstc_cmp, deadline);
+		state.stip_deadline =
+			confirm_timer_deadline(state, clint, 1 << 5, sstc_cmp, deadline);
 	} else if state.stip_deadline == 0 {
 		// 活跃且 deadline 为 0: Python 单步执行路径或写入即到期, 此时按共享 mtime 比较。
 		sync_timer_bit_shared(state, clint, 1 << 5, sstc_cmp);
@@ -237,7 +265,11 @@ pub(crate) fn sync_msip(state: &mut HartState, clint: &ConcurrentClintCtx) {
 	}
 }
 
-pub(crate) fn clint_write_msip_concurrent(clint: &ConcurrentClintCtx, target: usize, val: u8) {
+pub(crate) fn clint_write_msip_concurrent(
+	clint: &ConcurrentClintCtx,
+	target: usize,
+	val: u8,
+) {
 	if target >= (clint.num_harts as usize) {
 		return;
 	}
@@ -318,7 +350,8 @@ pub(crate) fn try_handle_clint_concurrent(
 			return Some(0);
 		}
 		if !is_write {
-			let val = ((unsafe { &*clint.msip.add(target) }).load(Ordering::Relaxed) as u64) & 1;
+			let val = ((unsafe { &*clint.msip.add(target) }).load(Ordering::Relaxed)
+				as u64) & 1;
 			return Some(val);
 		}
 		clint_write_msip_concurrent(clint, target, (write_data & 1) as u8);
@@ -337,7 +370,8 @@ pub(crate) fn try_handle_clint_concurrent(
 		let reg = unsafe { &*clint.mtimecmp.add(target) };
 		if is_write {
 			// 一次访问只覆盖寄存器中的 size 个字节, 未覆盖的字节保持原值。
-			let merged = merge_lane(reg.load(Ordering::Relaxed), lane, size, write_data);
+			let merged =
+				merge_lane(reg.load(Ordering::Relaxed), lane, size, write_data);
 			reg.store(merged, Ordering::Release);
 			// 写入后按合并结果为目标 hart 的 MTIP 设定 deadline。
 			write_mtimecmp_for_target(clint, target, merged);
@@ -393,7 +427,12 @@ pub struct ClintCtx {
 
 /// 为目标 hart 写 MSIP 并更新其 mip, 在目标为另一个 hart 时设置跨 hart 让出标志。
 #[inline]
-pub(crate) fn clint_write_msip(clint: &ClintCtx, target: usize, current: usize, val: u8) {
+pub(crate) fn clint_write_msip(
+	clint: &ClintCtx,
+	target: usize,
+	current: usize,
+	val: u8,
+) {
 	if target >= (clint.num_harts as usize) {
 		return;
 	}
@@ -465,7 +504,12 @@ pub(crate) fn try_handle_clint(
 		if hart_id < (clint.num_harts as usize) && !clint.states.is_null() {
 			let t = unsafe { &mut *clint.states.add(hart_id) };
 			// 写入后为目标 hart 的 MTIP 设定 deadline。
-			write_mtimecmp(t, unsafe { *clint.mtime }, write_data, clint.timebase_hz);
+			write_mtimecmp(
+				t,
+				unsafe { *clint.mtime },
+				write_data,
+				clint.timebase_hz,
+			);
 		}
 		return Some(0);
 	} else if offset < 0xc000 && is_write == 0 {
@@ -477,7 +521,7 @@ pub(crate) fn try_handle_clint(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::concurrent::MSIP_PENDING_STRIDE;
+	use crate::shared::MSIP_PENDING_STRIDE;
 	use crate::state::HartState;
 	use std::sync::atomic::{AtomicU64, AtomicU8};
 
@@ -492,7 +536,8 @@ mod tests {
 			.map(|_| AtomicU64::new(0))
 			.collect();
 		let mtime = AtomicU64::new(0);
-		let mtimecmp: Vec<AtomicU64> = (0..NUM_HARTS).map(|_| AtomicU64::new(0)).collect();
+		let mtimecmp: Vec<AtomicU64> =
+			(0..NUM_HARTS).map(|_| AtomicU64::new(0)).collect();
 		let msip: Vec<AtomicU8> = (0..NUM_HARTS).map(|_| AtomicU8::new(0)).collect();
 
 		let clint = ConcurrentClintCtx {
@@ -534,7 +579,10 @@ mod tests {
 			if hid == 2 {
 				assert_eq!(msip_set, 1 << 3, "hart 2 必须读到发往自己的 IPI 边沿");
 			} else {
-				assert_eq!(msip_set, 0, "hart {hid} 不得读到发往 hart 2 的 IPI 边沿");
+				assert_eq!(
+					msip_set, 0,
+					"hart {hid} 不得读到发往 hart 2 的 IPI 边沿"
+				);
 			}
 		}
 	}
@@ -826,7 +874,10 @@ mod tests {
 	}
 
 	/// 构造单 hart 的 CLINT 上下文, 共享 mtime 与 mtimecmp 由调用方持有.
-	fn clint_with(mtime: &AtomicU64, mtimecmp: &AtomicU64) -> (ConcurrentClintCtx, AtomicU8) {
+	fn clint_with(
+		mtime: &AtomicU64,
+		mtimecmp: &AtomicU64,
+	) -> (ConcurrentClintCtx, AtomicU8) {
 		let msip = AtomicU8::new(0);
 		let clint = ConcurrentClintCtx {
 			base: 0x2000000,
@@ -1079,17 +1130,38 @@ mod tests {
 		let clint = clint_10mhz(&mtime, &mtimecmp, &msip);
 
 		assert_eq!(
-			try_handle_clint_concurrent(clint.base + 0x4000, false, 0, 4, &mut state, &clint),
+			try_handle_clint_concurrent(
+				clint.base + 0x4000,
+				false,
+				0,
+				4,
+				&mut state,
+				&clint
+			),
 			Some(0x9abc_def0),
 			"低字读出第 0 至 31 位"
 		);
 		assert_eq!(
-			try_handle_clint_concurrent(clint.base + 0x4004, false, 0, 4, &mut state, &clint),
+			try_handle_clint_concurrent(
+				clint.base + 0x4004,
+				false,
+				0,
+				4,
+				&mut state,
+				&clint
+			),
 			Some(0x1234_5678),
 			"高字读出第 32 至 63 位"
 		);
 		assert_eq!(
-			try_handle_clint_concurrent(clint.base + 0x4002, false, 0, 2, &mut state, &clint),
+			try_handle_clint_concurrent(
+				clint.base + 0x4002,
+				false,
+				0,
+				2,
+				&mut state,
+				&clint
+			),
 			Some(0x9abc),
 			"偏移 2 起读出 2 字节"
 		);

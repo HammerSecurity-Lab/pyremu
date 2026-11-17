@@ -10,6 +10,7 @@
 
 import re
 
+from rich.markup import escape
 from rich.table import Table
 
 from pyremu._native import decode_fields
@@ -20,15 +21,18 @@ from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.utils import (
     check_rv64_addr,
     hex_addr,
-    MAX_INSTR_COUNT,
     read_pa_bytes,
     read_va_bytes,
 )
-from pyremu.memory.mmu import sv39_walk
-from pyremu.utils.disassem import disasm
+from pyremu.disasm import disasm
+from pyremu.memory.mmu import PTE_R, PTE_U, PTE_W, PTE_X, sv39_walk
 from pyremu.utils.mask import mask64
 from pyremu.utils.str_aux import dye_hexdump
 from pyremu.utils.wrapper import seize_val_err
+
+# 计算反汇编首条指令与参照 PC 之间的距离时, 最多遍历的指令条数.
+# 超过该条数视为距离无法确定, 反汇编不再给出相对步数.
+_DISASM_SCAN_LIMIT = 100_000
 
 # 反汇编着色常量
 _GPR_ALIASES = frozenset(
@@ -465,17 +469,21 @@ class MemoryOps(SharedAttrs):
     #  反汇编命令
     # ----------------------------------------------------------
 
-    def _count_instrs_between(self, start: int, end: int) -> int:
-        """计算从 [start, end) 的指令条数."""
+    def _count_instrs_between(self, start: int, end: int) -> int | None:
+        """计算 [start, end) 内的指令条数.
+
+        起始地址不属于主存或引导只读存储器, 或条数超过 _DISASM_SCAN_LIMIT 时
+        返回 None, 表示距离无法确定.
+        """
         bus = self._emu.bus
-        # 引导只读存储器同样可以存放指令, 从该窗口起始的区间参与计数.
+        # 引导只读存储器同样可以存放指令, 从该起始区间参与计数.
         if not (bus.is_ram_addr(start) or bus.is_rom_addr(start)):
-            return MAX_INSTR_COUNT
+            return None
         count = 0
         addr = start
         while addr < end:
-            if count >= MAX_INSTR_COUNT:
-                return count
+            if count >= _DISASM_SCAN_LIMIT:
+                return None
             raw = bus.try_read(addr, 4)
             if raw is None:
                 break
@@ -575,33 +583,33 @@ class MemoryOps(SharedAttrs):
         instrs: list[tuple[int, str, str, str]],
         is_continue: bool,
     ) -> None:
-        """本次反汇编接续上一次时直接返回. 否则以当前 PC 为参照 PC, 计算首条指令
-        到参照 PC 之间的指令条数并写入 `_disasm_base_step`; 条数达到上限时置
-        `_disasm_past_terminator`.
+        """计算本次反汇编首条指令相对参照 PC 的步数.
+
+        接续上一次反汇编时沿用既有步数, 不重算. 参照 PC 落在本次区间内时按其
+        序号直接给出; 否则按两者之间的指令条数给出. 条数无法确定时置 None,
+        此后不再显示相对步数.
         """
         if is_continue:
             return
         self._disasm_ref_pc = self.hart.pc
-        self._disasm_past_terminator = False
-        ref_idx: int | None = None
-        for i, (pc_addr, _, _, _) in enumerate(instrs):
-            if pc_addr == self._disasm_ref_pc:
-                ref_idx = i
-                break
+        ref_idx: int | None = next(
+            (
+                i
+                for i, (pc_addr, _, _, _) in enumerate(instrs)
+                if pc_addr == self._disasm_ref_pc
+            ),
+            None,
+        )
         if ref_idx is not None:
             self._disasm_base_step = -ref_idx
             return
-        if self._disasm_ref_pc is None:
-            self._disasm_base_step = 0
-            return
         if addr > self._disasm_ref_pc:
-            step_cnt = self._count_instrs_between(self._disasm_ref_pc, addr)
-            self._disasm_base_step = step_cnt
+            self._disasm_base_step = self._count_instrs_between(
+                self._disasm_ref_pc, addr
+            )
         else:
-            step_cnt = self._count_instrs_between(addr, self._disasm_ref_pc)
-            self._disasm_base_step = -step_cnt
-        if step_cnt >= MAX_INSTR_COUNT:
-            self._disasm_past_terminator = True
+            count = self._count_instrs_between(addr, self._disasm_ref_pc)
+            self._disasm_base_step = None if count is None else -count
 
     def _scope_label(self, pc_addr: int) -> str:
         """按符号名与段名给出作用域标注; 都解析不到时返回空串."""
@@ -615,11 +623,11 @@ class MemoryOps(SharedAttrs):
         return ""
 
     @staticmethod
-    def _disasm_prefix(step: int, at_ref: bool, past_term: bool) -> str:
-        """给出反汇编行首的步数标注."""
+    def _disasm_prefix(step: int | None, at_ref: bool) -> str:
+        """给出反汇编行首的步数标注; 步数未知时不给出."""
         if at_ref:
             return "pc -> "
-        if step > 0 and not past_term:
+        if step is not None and step > 0:
             return f"+{step:<5d}"
         return "      "
 
@@ -627,33 +635,33 @@ class MemoryOps(SharedAttrs):
         self,
         instrs: list[tuple[int, str, str, str]],
     ) -> list[str]:
-        """渲染反汇编行, 并更新下一次续接时使用的步数值与终止标记."""
+        """渲染反汇编行, 并更新下一次续接时使用的步数基准."""
         base = self._disasm_base_step
-        past_term = self._disasm_past_terminator
         next_base = base
         lines: list[str] = []
         last_scope: str | None = None
         for i, (pc_addr, raw_hex, asm, ctrl) in enumerate(instrs):
-            step = base + i
+            step = None if base is None else base + i
             scope = self._scope_label(pc_addr)
             if scope and scope != last_scope:
                 last_scope = scope
                 lines.append(f"  {scope}")
-            prefix = self._disasm_prefix(
-                step, pc_addr == self._disasm_ref_pc, past_term
-            )
+            prefix = self._disasm_prefix(step, pc_addr == self._disasm_ref_pc)
             lines.append(
                 f"{prefix}    [blue]{hex_addr(pc_addr)}[/]    "
                 f"[bright_black]{raw_hex:>8s}[/]    {self._colorize_asm(asm)}"
             )
             if ctrl in _TERMINATOR_KINDS:
                 lines.append(f"  {'─' * 80}")
-                if not past_term and step >= 0:
-                    past_term = True
-            if not past_term:
-                next_base = step + 1
+            if base is not None:
+                # 参照 PC 之后遇到分支或跳转, 其后的地址不再按序执行,
+                # 相对步数随之中断.
+                if ctrl in _TERMINATOR_KINDS and step >= 0:
+                    base = None
+                    next_base = None
+                else:
+                    next_base = step + 1
         self._disasm_base_step = next_base
-        self._disasm_past_terminator = past_term
         return lines
 
     def cmd_vdisasm(self, addr_str: str, inst_count_str: str = "16") -> None:
@@ -840,13 +848,13 @@ class MemoryOps(SharedAttrs):
                     )
                     continue
             pa = ppn << 12
-            r = "r" if perm & 1 else "-"
-            w = "w" if perm & 2 else "-"
-            x = "x" if perm & 4 else "-"
-            u = "u" if perm & 8 else "s"
-            lines.append(
-                f"  VA 0x{page_va:016x} -> PA 0x{pa:016x}  [{r}{w}{x}{u}]"
-            )
+            r = "r" if perm & PTE_R else "-"
+            w = "w" if perm & PTE_W else "-"
+            x = "x" if perm & PTE_X else "-"
+            u = "u" if perm & PTE_U else "s"
+            # 权限字母两侧的方括号按字面输出, 避免被 Rich 当作样式标签.
+            flags = escape(f"[{r}{w}{x}{u}]")
+            lines.append(f"  VA 0x{page_va:016x} -> PA 0x{pa:016x}  {flags}")
         self._console.print("\n".join(lines))
 
     @seize_val_err("addr 和 size 需为整数 (支持 0x 前缀)")

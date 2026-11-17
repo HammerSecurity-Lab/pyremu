@@ -15,7 +15,8 @@
 # 全仓库检查另行执行 uv run ruff check . 等对应指令, 不在此处完成.
 #
 # 每个文件先做格式检查; 检查不通过时格式化该文件, 格式化仍失败则以 1 退出.
-# 全部检查通过后, 把本次被格式化的文件加入索引, 提交继续进行.
+# 全部检查通过后, 把本次被格式化的文件加入索引; 随后在仓库根目录执行 make test,
+# 用例失败则以 1 退出, 提交不进行.
 #
 # 语言与工具:
 #   .py               uv run ruff format 与 uv run ruff check
@@ -162,5 +163,12 @@ if [ -s "$FORMATTED" ]; then
 	while IFS= read -r f; do
 		git add -- "$f"
 	done < "$FORMATTED"
+fi
+
+echo "==> make test ..."
+if ! make test; then
+	echo "" >&2
+	echo "pre-commit: make test failed, commit aborted." >&2
+	exit 1
 fi
 echo "==> pre-commit OK"

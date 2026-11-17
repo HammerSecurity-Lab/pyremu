@@ -152,7 +152,7 @@ VIRTIO_BLK_IRQ = 1
 _BLK_OUTHDR_SIZE = 16
 
 # 一条请求的描述符链长度: 请求头、数据缓冲区、状态字节
-_BLK_CHAIN_DESC_NUM = 3
+_BLK_CHAIN_MAX_DESC = 128
 
 # 单个 virtqueue 支持的描述符数上限, 经 QUEUE_NUM_MAX 报告给驱动
 _BLK_QUEUE_NUM_MAX = 256
@@ -239,11 +239,20 @@ class VirtIOBlock(Device):
                 irq=irq,
                 irq_resp_fn=on_irq,
                 cfg_space_data=self._build_config_space(),
-                chain_max_desc=_BLK_CHAIN_DESC_NUM,
+                chain_max_desc=_BLK_CHAIN_MAX_DESC,
             )
         )
 
     # ---- Device 接口 ----
+
+    def reset(self) -> None:
+        """重置 virtqueue 与设备状态; 镜像句柄保持不变."""
+        self.mmio.reset()
+
+    @property
+    def irq(self) -> int:
+        """本设备的中断源编号, 0 表示不投递中断."""
+        return self.mmio.irq
 
     @property
     def read_only(self) -> bool:
@@ -330,20 +339,21 @@ class VirtIOBlock(Device):
         hdr_desc = chain[0]
         if hdr_desc.length < _BLK_OUTHDR_SIZE:
             return False, 0
-        if len(chain) < _BLK_CHAIN_DESC_NUM:
+        if len(chain) < 2:
             return False, 0
 
-        data_desc = chain[1]
-        status_addr = chain[2].addr
+        # 数据段可以跨多个描述符, 最末一个描述符承载状态字节.
+        data_descs = chain[1:-1]
+        status_addr = chain[-1].addr
 
         hdr_data = self._mem_read_chunk(hdr_desc.addr, _BLK_OUTHDR_SIZE)
         req_type = int.from_bytes(hdr_data[0:4], "little")
         sector = int.from_bytes(hdr_data[8:16], "little")
 
         if req_type == VIRTIO_BLK_T_IN:
-            ok = self._do_read(sector, data_desc.addr, data_desc.length)
+            ok = self._do_read(sector, data_descs)
         elif req_type == VIRTIO_BLK_T_OUT:
-            ok = self._do_write(sector, data_desc.addr, data_desc.length)
+            ok = self._do_write(sector, data_descs)
         elif req_type == VIRTIO_BLK_T_FLUSH:
             ok = self._do_flush()
         elif req_type in (VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_WRITE_ZEROES):
@@ -358,23 +368,35 @@ class VirtIOBlock(Device):
 
         return ok, 0
 
-    def _do_read(self, sector: int, buf_pa: int, buf_len: int) -> bool:
-        """从扇区 *sector* 读取数据到受调试程序的物理地址 *buf_pa*."""
+    def _do_read(self, sector: int, descs: list[VirtqDesc]) -> bool:
+        """把扇区 *sector* 起的数据按描述符顺序写入各数据段."""
+        total = sum(desc.length for desc in descs)
+        if total <= 0:
+            return True
         offset = sector * SECTOR_SIZE
         if offset >= self._disk_size:
-            data = b"\x00" * buf_len
+            data = b"\x00" * total
         else:
-            data = os.pread(self._fd, buf_len, offset)
-        self.mmio.write_phys(buf_pa, data)
+            data = os.pread(self._fd, total, offset)
+            if len(data) < total:
+                data += b"\x00" * (total - len(data))
+        pos = 0
+        for desc in descs:
+            self.mmio.write_phys(desc.addr, data[pos : pos + desc.length])
+            pos += desc.length
         return True
 
-    def _do_write(self, sector: int, buf_pa: int, buf_len: int) -> bool:
-        """从受调试程序的物理地址 *buf_pa* 写入数据到扇区 *sector*."""
+    def _do_write(self, sector: int, descs: list[VirtqDesc]) -> bool:
+        """按描述符顺序从受调试程序收集数据并写入扇区 *sector*."""
         # 只读镜像: 静默忽略写并返回成功, 避免内核报 I/O 错。
         # 用户已确认暂不支持写磁盘 (root=/dev/vda ro 不会写数据块)。
         if self._read_only:
             return True
-        data = self._mem_read_chunk(buf_pa, buf_len)
+        data = b"".join(
+            self._mem_read_chunk(desc.addr, desc.length) for desc in descs
+        )
+        if not data:
+            return True
         offset = sector * SECTOR_SIZE
         os.pwrite(self._fd, data, offset)
         end = offset + len(data)

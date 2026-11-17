@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import atexit
+from contextlib import suppress
 import ctypes
 import fcntl
 import os
@@ -320,10 +321,8 @@ class TerminalIO:
             fd = getattr(self, name, -1)
             if fd < 0:
                 continue
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
             setattr(self, name, -1)
 
     def _create_pipes(self) -> None:
@@ -351,10 +350,8 @@ class TerminalIO:
     def __del__(self) -> None:
         """对象回收时释放 fd: 未显式 stop() 的实例也在此关闭管道,
         避免测试或长进程泄漏 fd."""
-        try:
+        with suppress(Exception):
             self._close_pipes()
-        except Exception:
-            pass
 
     def pause(self) -> None:
         """暂停 I/O 线程 (调试器断点)."""
@@ -372,10 +369,8 @@ class TerminalIO:
         投递 recv 中剩余字节; (2) stop 时唤醒阻塞在 poll(-1) 的线程使其看到
         stop_flag 退出, 修复 join 挂起。写端非阻塞, 满则通知丢失可接受。
         """
-        try:
+        with suppress(OSError):
             os.write(self._rx_drain_w, b"\x01")
-        except OSError:
-            pass
 
     def drain_rx(self) -> bool:
         """将 Rust 线程写入的 RX 环形缓冲数据转移到 Python UART 模型.

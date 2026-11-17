@@ -131,6 +131,15 @@ class APLIC(Device):
         return "M" if self.is_mmode else "S"
 
     #  外设编程接口
+    def reset(self) -> None:
+        """恢复上电复位状态: 清空 sourcecfg、target 与输入状态."""
+        with self._lock:
+            for i in range(self.num_sources + 1):
+                self._sourcecfg[i] = 0
+                self._target[i] = 0
+                self._state[i] = 0
+            self._domaincfg = _DOMAINCFG_IE
+
     def set_irq(self, source_num: int, level: bool = True) -> None:
         """外设调用入口: 拉高/拉低指定 wired 中断源输入电平。
 

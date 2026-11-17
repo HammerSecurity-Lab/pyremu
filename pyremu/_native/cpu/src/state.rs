@@ -456,3 +456,19 @@ mod tests {
 		assert_eq!(hs.mode, riscv_mode::M);
 	}
 }
+
+#[inline]
+pub(crate) fn read_gpr(state: &HartState, rs: u8) -> u64 {
+	if rs == 0 {
+		0
+	} else {
+		state.gprs[rs as usize]
+	}
+}
+
+#[inline]
+pub(crate) fn write_gpr(state: &mut HartState, rd: u8, val: u64) {
+	if rd != 0 {
+		state.gprs[rd as usize] = val;
+	}
+}

@@ -6,7 +6,7 @@
 原子操作的宽度与结果计算.
 """
 
-from pyremu.utils.disassem import AmoFunct5, AmoWidth, LdFn3
+from pyremu.disasm import AmoFunct5, AmoWidth, LdFn3
 from pyremu.utils.mask import (
     MASK32,
     MASK64,

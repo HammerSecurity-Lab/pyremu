@@ -46,7 +46,7 @@ from pyremu.peripheral.watchdog import WATCHDOG_IRQ
 class InterruptMode(Enum):
     """中断子系统模式."""
 
-    LEGACY = "legacy"  # CLINT (MSIP+MTIP) + PLIC (MEIP+SEIP)
+    LEGACY = "legacy"  # CLINT 维持软件中断与时钟中断，PLIC 维持所有外部中断
     # CLINT 只提供 MTIP, IMSIC 提供 MSIP+MEIP+SEIP, APLIC 把有线中断转为 MSI
     AIA = "aia"
 
@@ -87,14 +87,14 @@ class PlatformConfig:
     """模拟平台完整配置.
 
     字段:
-        num_harts: hart 数量 (1-8).
+        num_harts: hart 数量.
         ram_size: 物理 RAM 大小 (字节).
         ram_base: 物理 RAM 起始地址.
         rom_base: 引导只读存储器起始地址; 取 0 表示不注册该设备.
         rom_size: 引导只读存储器大小 (字节).
         prog_cnt: 程序计数器 — 上电复位入口地址.
         l2_size: L2 缓存大小 (字节).
-        isa: RISC-V ISA 字符串 (例: ``'rv64ima'``).
+        isa: RISC-V ISA 字符串，例: 'rv64ima'.
         timebase_freq: mtime 计数器频率 (Hz).
         periph: 外设基址配置.
     """
@@ -113,11 +113,8 @@ class PlatformConfig:
     interrupt_mode: InterruptMode = InterruptMode.LEGACY
     disk_image: str | None = None
 
-    # DTB /reserved-memory no-map 区域列表 (base, size).
-    # 默认值经 mk/memory.mk 生成 pyremu/configs_gen.py 注入. 第一项为固件
-    # 映像保留区 (含内嵌的 .sittim 飞地运行时), 第二项为飞地内存池, 后者需与
-    # custom-opensbi Kconfig POOL_BASE/POOL_SIZE 保持同步. 单边修改会导致内核
-    # 在保留区内分配页面, 与固件访问产生冲突.
+    # DTB /reserved-memory no-map 区域列表.
+    # 默认值经 mk/memory.mk 生成 pyremu/configs_gen.py 注入.
     reserved_memory_ranges: list[tuple[int, int]] = field(
         default_factory=lambda: [
             (
@@ -127,16 +124,14 @@ class PlatformConfig:
             (configs_gen.RESERVED_MEM_BASE, configs_gen.RESERVED_MEM_SIZE),
         ]
     )
-
     periph: PeripheralConfig = field(default_factory=PeripheralConfig)
 
     def __post_init__(self) -> None:
         """编译期 AIA 开关: PYREMU_AIA=1 时强制启用 IMSIC+APLIC.
 
-        基址从 configs_gen (由 mk/interrupt.mk 生成) 读取. 仅在 legacy 模式下
+        基址从 configs_gen读取. 仅在 legacy 模式下
         覆盖, 显式指定 AIA 的预设不受影响. 任何构造路径
-        (预设工厂 / from_dict / 直接实例化) 均经由此处统一解析, 故 Emulator
-        无需再对 interrupt_mode 做二次判断.
+        均经由此处统一解析, 故 Emulator 无需再对 interrupt_mode 做二次判断.
         """
         if (
             configs_gen.PYREMU_AIA
@@ -147,19 +142,18 @@ class PlatformConfig:
             self.periph.imsic_s_base = configs_gen.IMSIC_S_BASE
             self.periph.aplic_s_base = configs_gen.APLIC_S_BASE
             self.periph.aplic_m_base = configs_gen.APLIC_M_BASE
-        # 低于 1000 Hz 时 1 ms 内不足一个计数, 固件无法按毫秒配置定时器.
         assert self.timebase_freq >= 1_000, (
             f"timebase_freq={self.timebase_freq} < 1000 Hz!"
         )
-        # 引导只读存储器与 RAM 的窗口不允许重叠: 同一物理地址只能有一条访问路径.
+        # 引导只读存储器与 RAM 的范围不允许重叠，同一物理地址只能有一条访问路径.
         if self.rom_base:
             assert self.rom_size > 0, f"rom_size={self.rom_size} 须大于 0"
         self._check_overlap()
 
     def _check_overlap(self) -> None:
-        """断言 RAM、引导只读存储器与启动地址寄存器的地址窗口两两不重叠.
+        """断言 RAM、引导只读存储器与启动地址寄存器的地址范围两两不重叠.
 
-        外设窗口由 Bus.add_device 在注册时与全部已注册窗口一并校验.
+        外设由 Bus.add_device 在注册时与全部已注册的地址范围一并校验.
         """
         windows = [("RAM", self.ram_base, self.ram_size)]
         if self.rom_base:
@@ -239,7 +233,7 @@ class PlatformConfig:
         """SiFive Freedom U54 风格布局.
 
         DRAM @ 0x8000_0000, CLINT @ 0x0200_0000,
-        外设挂在 0x1000_0000 区域.
+        外设在 0x1000_0000 区域.
         """
         return cls(
             num_harts=4,
@@ -260,8 +254,7 @@ class PlatformConfig:
     def minimal(cls) -> PlatformConfig:
         """最小化单核平台 — 仅 CLINT + UART.
 
-        RAM 自 0x0000_0000 起始并覆盖 0x0200_0000 处的 CLINT 窗口, 装配模拟器时
-        被地址窗口重叠断言拒绝.
+        RAM 自 0x0000_0000 起始并覆盖 0x0200_0000 处的 CLINT,
         """
         return cls(
             num_harts=1,

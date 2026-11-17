@@ -5,9 +5,10 @@
 #   make all     编译宿主程序
 #   make clean   清理
 #
-# tee_enclave.h 取自 ../cache-sidechannel: 该头是 Linux 驱动用户态接口的唯一定义,
-# 各工具目录各留一份副本已在部署时出现过未同步的副本, 故本工具经包含路径引用它,
-# 不复写第二份。
+# enclave_abi.h 与模块请求服务 mod_loader.* 由 ../common 提供, 二者是 Linux 驱动
+# 用户态接口与宿主应答流程的唯一定义, 各工具经包含路径引用, 不复写副本.
+
+include ../common/toolchain.mk
 
 phony =
 
@@ -15,25 +16,18 @@ phony =
 # 防止在源码目录直接生成无 bin/ 前缀的二进制.
 %: %.c
 
-CROSS_CC ?= $(shell command -v riscv64-linux-gnu-gcc 2>/dev/null || echo riscv64-unknown-linux-gnu-gcc)
-CFLAGS	 = -static -O2 -Wall
-
-OUT_DIR	  = bin
-CACHE_SC_DIR = ../cache-sidechannel
-MOD_LOADER_DIR = ../mod-loader
-
-INCLUDES  = -I$(CACHE_SC_DIR) -I$(MOD_LOADER_DIR)
-MOD_LOADER_SRC = $(MOD_LOADER_DIR)/mod-loader.c
-MOD_LOADER_HDR = $(MOD_LOADER_DIR)/mod-loader.h
-MOD_LOADER_INC = $(MOD_LOADER_DIR)/ext_mod_table.inc
+OUT_DIR = bin
 
 all: $(OUT_DIR)/app-loader
 phony += all
 
-$(OUT_DIR)/app-loader: app-loader.c ../cache-sidechannel/tee_enclave.h \
-                       $(MOD_LOADER_SRC) $(MOD_LOADER_HDR) $(MOD_LOADER_INC)
+$(OUT_DIR)/app-loader: app-loader.c $(EVAL_INCLUDE)/enclave_abi.h \
+                       $(EVAL_INCLUDE)/mod_loader.c \
+                       $(EVAL_INCLUDE)/mod_loader.h \
+                       $(EVAL_INCLUDE)/ext_mod_table.inc
 	@mkdir -p $(@D)
-	$(CROSS_CC) $(CFLAGS) $(INCLUDES) app-loader.c $(MOD_LOADER_SRC) -o $@
+	$(CROSS_CC) $(HOST_CFLAGS) -I$(EVAL_INCLUDE) \
+		app-loader.c $(EVAL_INCLUDE)/mod_loader.c -o $@
 
 clean:
 	rm -rf $(OUT_DIR)

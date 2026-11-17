@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
 
+import pytest
+
+from pyremu.configs_aux import cfg_bool
 from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
@@ -175,6 +178,9 @@ class TestMfenceDid:
 
     # -- L2 缓存 flush --
 
+    @pytest.mark.skipif(
+        cfg_bool("PYREMU_NO_L2"), reason="构建时关闭 L2 缓存, 该用例不适用"
+    )
     def test_flushes_l2_cache_matching_mdid(self):
         """mfence.did 同时刷新 L2 缓存中匹配 mdid 的条目."""
         emu = make_test_emu(ram_size=8 * 1024 * 1024)
@@ -469,6 +475,11 @@ class TestMdidField:
 
 class TestL2AutoMdid:
     """L2 缓存分配时自动打上 current_mdid (由 emulator.step 逐 hart 设置)."""
+
+    pytestmark = pytest.mark.skipif(
+        cfg_bool("PYREMU_NO_L2"),
+        reason="构建时关闭 L2 缓存, 该用例不适用",
+    )
 
     def test_l2_read_hit_updates_mdid(self):
         """读命中时 L2 缓存条目 mdid 更新为当前 hart 的 mdid."""
@@ -791,6 +802,9 @@ class TestMultiEnclaveMdid:
         assert not h.dtlb.lookup(0x100)[0], "mdid=1 的 TLB 条目应被刷掉"
         assert h.dtlb.lookup(0x300)[0], "mdid=3 的仍应保留"
 
+    @pytest.mark.skipif(
+        cfg_bool("PYREMU_NO_L2"), reason="构建时关闭 L2 缓存, 该用例不适用"
+    )
     def test_multi_enclave_l2_isolation(self):
         """4 个伪飞地访问不同地址, 各自 L2 缓存条目标不同 mdid, 按域刷新
         互不干扰."""

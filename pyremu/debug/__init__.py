@@ -3,7 +3,7 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""RISC-V 交互式调试器 (rvdb) — 模块化实现.
+"""RISC-V 交互式调试器 (rvdbg) — 模块化实现.
 
 通过操作类的多重继承组合为完整的 Debugger 类, 与 pyremu.debugger 等价.
 """
@@ -12,6 +12,7 @@ from pyremu.core.trap_def import trap_cause_name
 from pyremu.debug.base import DebuggerBase
 from pyremu.debug.bins import BinsInfoOps
 from pyremu.debug.breakpoint import BreakpointOps
+from pyremu.debug.device_map import DeviceMapOps
 from pyremu.debug.disk import DiskViewOps
 from pyremu.debug.dispatch import DispatchOps
 from pyremu.debug.exec import ExecutionOps
@@ -43,6 +44,7 @@ class Debugger(
     SymLookupOps,
     SymCmdOps,
     BinsInfoOps,
+    DeviceMapOps,
     DiskViewOps,
     MmuViewOps,
     TlbCacheOps,

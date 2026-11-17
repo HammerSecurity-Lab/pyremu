@@ -80,8 +80,7 @@ class SharedAttrs:
     _disasm_next_addr: int | None
     _vdisasm_next_addr: int | None
     _disasm_ref_pc: int | None
-    _disasm_base_step: int
-    _disasm_past_terminator: bool
+    _disasm_base_step: int | None
 
     _breakpoints: list[Breakpoint]
     _bp_mode: str

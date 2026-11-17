@@ -17,7 +17,7 @@
 #
 # 另见: /eval/basic-test/ 批处理飞地生命周期压力测试。
 
-DRV     = ../tee_enclave_drv.ko
+DRV     = /eval/tee_enclave_drv.ko
 TEST    = tee_test
 MALICE  = tee_malice
 PAYLOAD = hello_payload
@@ -113,7 +113,7 @@ install:
 		echo "[eval] 驱动已加载 (/dev/tee_enclave 存在)"; \
 	else \
 		echo "[eval] 加载驱动..."; \
-		/sbin/insmod "$(TEE_BIN_DIR)/$(DRV)" && echo "[eval] 驱动加载完成. /dev/tee_enclave 就绪."; \
+		/sbin/insmod "$(DRV)" && echo "[eval] 驱动加载完成. /dev/tee_enclave 就绪."; \
 	fi
 
 uninstall:

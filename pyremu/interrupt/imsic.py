@@ -523,15 +523,6 @@ class IMSIC(Device):
             self._ffi_states = states
 
     def _publish_eip(self, hart_id: int, priv: str) -> None:
-        """把指定 interrupt file 的 eip 写穿到加速引擎的共享 ctypes 结构.
-
-        仅在 eip 变化处调用 (调用方已持有 self._lock). 未绑定数组时为 no-op,
-        故纯 Python 路径不受影响.
-
-        轮边界由 _marshal_imsic 全量重拷贝, 此处的实时写穿只覆盖单轮加速执行
-        期间由设备线程注入的位 — 那一窗口内主线程正阻塞在引擎里, 不可能靠
-        轮边界同步.
-        """
         states = self._ffi_states
         if states is None or not (0 <= hart_id < self.num_harts):
             return
@@ -545,6 +536,17 @@ class IMSIC(Device):
         # 仅外部中断门控位; 软件中断 (IID 1/3) 由 Rust 侧 IPI 快路径覆盖,
         # 不看该标志. 取"任一位非零"这一保守上界即可, 宁多扫不得漏判.
         mirror.eip_ext_any = 1 if file._any_ext else 0
+
+    def reset(self) -> None:
+        """恢复上电复位状态: 清空每个 hart 的 M 文件与 S 文件."""
+        for m_file, s_file in self._files:
+            for f in (m_file, s_file):
+                for i in range(len(f.eip)):
+                    f.eip[i] = 0
+                    f.eie[i] = 0
+                f.eidelivery = 0
+                f.eithreshold = 0
+                f._update_any_ext()
 
     def set_ip_number(self, hart_id: int, priv: str, eip_num: int) -> None:
         """向指定 hart 的指定 privilege IMSIC file 注入 MSI.

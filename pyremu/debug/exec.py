@@ -27,8 +27,7 @@ if TYPE_CHECKING:
 
 from pyremu._native import decode_fields
 from pyremu.configs_aux import cfg_float
-from pyremu.core.decoder import Hart
-from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
+from pyremu.core.hart import RiscvMode
 from pyremu.core.trap_def import TrapType
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import HartSnapshot, ImageKind, MemWriteTracker
@@ -67,8 +66,7 @@ class ExecutionOps(SharedAttrs):
     _disasm_next_addr: int | None
     _vdisasm_next_addr: int | None
     _disasm_ref_pc: int | None
-    _disasm_base_step: int
-    _disasm_past_terminator: bool
+    _disasm_base_step: int | None
     _stack_frames: list[StackFrame]
     _current_frame_idx: int
     _last_command: str | None
@@ -432,8 +430,7 @@ class ExecutionOps(SharedAttrs):
         self._trap_displayed_mcause = None
         self._disasm_next_addr = None
         self._disasm_ref_pc = None
-        self._disasm_base_step = 0
-        self._disasm_past_terminator = False
+        self._disasm_base_step = None
         self._stack_frames = []
         self._current_frame_idx = 0
         self._last_command = None
@@ -454,27 +451,13 @@ class ExecutionOps(SharedAttrs):
         if emu.power_ctrl is not None:
             emu.power_ctrl.clear_request()
 
-        emu.harts = []
-        attrs = RatifiedHartAttrs.from_platform(cfg.pmp_entries, cfg.isa)
-        for i in range(cfg.num_harts):
-            h = Hart(id=i, ratified_hart_attrs=attrs)
-            h.pc = cfg.prog_cnt
-            h.mem_read_phy = emu.bus.read
-            h.mem_write_phy = emu.bus.write
-            h.bus = emu.bus
-            h.interrupt_ctrl = emu.clint
-            h.plic = emu.plic
-            emu.harts.append(h)
-
-        for h in emu.harts:
-            h.all_harts = emu.harts
+        # 清空 L2、Virtqueue 与引擎镜像, 再按配置重建 hart.
+        # 重建走与构造相同的接线, imsic 引用与 UART 写包装随之恢复.
+        emu.reset_internal_state()
+        emu.rebuild_harts()
 
         # 清除加速执行所用动态链接库内管理的断点地址
         emu._bp_addrs.clear()
-
-        # 若 emu.__init__ 后 hart 数量未变, _speedup_hart_states 仍有效;
-        # 标记 _native_stop_flag 重置以防上一轮 Ctrl+Q 未清理.
-        emu._native_stop_flag.value = 0
 
         # 确保终端恢复 + SIGINT 设为 REPL 处理器;
         # 前次运行若异常退出 (未执行 _enter_repl_mode) 会残留

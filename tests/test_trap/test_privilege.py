@@ -26,8 +26,8 @@ from pyremu.core.priv_defs import (
     MSTATUS_UXL_64,
 )
 from pyremu.core.trap_def import TrapType
+from pyremu.disasm import Opc
 from pyremu.memory.bus import Bus
-from pyremu.utils.disassem import Opc
 from tests.test_trap.support import (
     MTVEC,
     STVEC,

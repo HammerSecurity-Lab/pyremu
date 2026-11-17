@@ -1,4 +1,5 @@
 phony =
+# Last modified at 2026/11/13 星期五 18:35:45
 
 # 全部用于编译配置的变量定义集中在mk/*.mk中。
 # 并通过统一导出文件mods.mk而导出。
@@ -35,11 +36,10 @@ __configs-gen:
 	@$(MAKE) -C pyremu
 phony += __configs-gen
 
-
 # CARGO_FLAGS 变化时强制重建 native .so
 CONFIG_GEN_RS = $(NATIVE_DIR)/cpu/src/configs_gen.rs
 
-# 由 mk/ 下的配置分片生成 Rust 常量定义
+# 由 mk/ 下的配置生成 Rust 常量定义
 $(CONFIG_GEN_RS): FORCE
 	@rm -f $@.tmp
 	@echo '// generated from mk/*.mk by Makefile — do not edit' >> $@.tmp
@@ -61,16 +61,12 @@ $(NATIVE_SO) $(TERMIO_SO): $(NATIVE_SRC) $(CONFIG_GEN_RS)
 	install -m 755 $(NATIVE_DIR)/target/release/libtermio.so $(TERMIO_SO)
 	@echo "libdecode.so and libtermio.so have built"
 
-# 加速执行库
-build-native: $(NATIVE_SO) $(TERMIO_SO)
-phony += build-native
-
 clean-native:
 	rm -f $(NATIVE_SO) $(TERMIO_SO)
 	rm -rf $(NATIVE_DIR)/target
 phony += clean-native
 
-# 清理 sittim、pyremu/_native 与 custom-opensbi 的编译产物.
+# 清理 sittim、pyremu/_native 与 opensbi 的编译产物.
 # custom-opensbi 目录不存在时跳过该步.
 clean: clean-native
 	$(MAKE) -C $(SITTIM_DIR) clean
@@ -82,19 +78,15 @@ phony += clean
 FORCE:
 phony += FORCE
 
+########## 依赖构建项
 
-# 编译 sittim.bin, 供 opensbi 嵌入 .sittim 段.
-#
-# 依赖分两类:
-#   源文件类: src 下全部 .rs; 生成 configs_gen.rs 的输入 config.mk 与 Makefile;
-#     生成 link.ld 的输入 link.ld.S; 以及 Cargo 清单. 任一文件更新即重建.
-#   编译控制类: config.mk 各项以 ?= 给出默认值, 命令行上的同名变量经递归 make 传给
-#     子 make 并覆盖默认值. 这一来源不改变任何文件的时间戳, 故以一份取值戳记判定,
-#     写法与 FW_CFG_STAMP 相同; 不在 config.mk 内、但经命令行覆盖即改变编译结果的
-#     变量一并列入戳记.
-#
-# 取值得在父 make 中可见才能写入戳记, 故一并读入该配置文件; 各项以 ?= 给出默认值,
-# 命令行覆盖优先生效.
+# 加速执行库
+build-native: $(NATIVE_SO) $(TERMIO_SO)
+phony += build-native
+
+
+# 取值得在父 make 中可见才能写入, 故一并读入该配置文件;
+# 各项以 ?= 给出默认值, 命令行覆盖优先生效.
 include $(SITTIM_DIR)/config.mk
 SITTIM_CFG_VARS := $(shell sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*?=.*/\1/p' $(SITTIM_DIR)/config.mk)
 SITTIM_CFG_VARS += CARGO_FLAGS
@@ -175,21 +167,11 @@ phony += build-fw-jump
 # 依赖固件产物, 保证启动模拟器前固件已构建完成
 kei-sav: $(fw_payload)
 	$(MAKE) -C bsp/kei-boot kei-sav
+phony += kei-sav
 
 build-fw-linux: $(fw_payload_linux)
 phony += build-fw-linux
 
-# ---- 符号导出: 把带符号表的 ELF 汇集到 $(sym_dir) ----
-#
-# 只汇集已构建完成的产物, 不触发任何编译; 尚未构建的产物跳过并报告。
-# 目录中每项是指向构建产物的相对符号链接, 产物重新链接后内容随之更新。
-# 文件名按来源加前缀, 供 sym ls 按类归组:
-#   fw-*      固件
-#   kernel-*  测试固件
-#   app-*     飞地载荷, 取自 bsp/eval-suites/fn_apps/bin
-#   kei-sav   零阶段启动器 (bsp/kei-boot/kei.sav.elf)
-#   sittim    Rust S 模式可信管理程序
-#   vmlinux   Linux 内核
 SYM_EXPORT_SPECS = \
 	$(fw_payload):fw-payload \
 	$(fw_jump):fw-jump \
@@ -227,40 +209,28 @@ phony += gen-dtb
 # 项目打包
 pkg-up: __pyenv-check
 	uv run python -m build --sdist --sdist-extract-dir pyremu
+phony += pkg-up
 
 
-# ---- 主入口: 启动模拟器 ----
+########## 主要功能项
 # 完整依赖链: Rust 编译、固件编译、拷贝、kei.sav、模拟器
 emu: kei-sav __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
 	uv run python -m pyremu.debugger --hart-logs=output/ $(pyargs)
 phony += emu
 
-# fw_payload 模式 (Linux 内嵌 OpenSBI payload)
-# 注意，嵌入的是vmlinux，会缺乏调试符号
+# fw_payload 模式，注意嵌入的是剥离符号了的vmlinux
 emu-linux-payload: kei-sav $(fw_payload_linux) __configs-gen __pyenv-check
 	@$(MAKE) --no-print-directory sym-export
 	uv run python -m pyremu.debugger \
-		--hart-logs=output/ --ram-base=0x80000000 --ram 512M $(zsbl_args) \
+		--hart-logs=output/ \
+		--ram-base=0x80000000 \
+		--ram 512M $(zsbl_args) \
 		--harts=$(NUM_HARTS) $(fw_payload_linux)
 phony += emu-linux-payload
 
 # 启动linux并调试整个调试系统与试验环境
 emu-linux-sh: kei-sav $(fw_jump) build-native __pyenv-check __configs-gen
-# 调试输出地址
-# 内存基地址
-# 模拟内存大小
-# 引导只读存储器的基址
-# 引导只读存储器的大小
-# 零阶段启动器
-# 内核镜像
-# 内核符号所在目录
-# 设备树生成
-# 芯片设备树
-# ext4参数
-# 启动参数
-# hart数量
-# 调试对象
 	@$(MAKE) -C pyremu
 	@$(MAKE) --no-print-directory sym-export
 	PYTHON_GIL=0 python -m pyremu.debugger \
@@ -282,8 +252,8 @@ emu-linux-sh: kei-sav $(fw_jump) build-native __pyenv-check __configs-gen
 phony += emu-linux-sh
 
 
-# ---- 测试 ----
-# 限制: 4 GiB 虚拟内存, --ignore 排除 ordering-dependent 失败.
+########## 测试
+# 限制: 4 GiB 虚拟内存.
 test-build:
 	$(MAKE) -C tests all
 	@$(MAKE) --no-print-directory sym-export

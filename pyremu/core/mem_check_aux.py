@@ -477,7 +477,7 @@ class MemoryAccessOps(TrapOps):
         self,
         pa: int,
     ) -> bool:
-        """该物理地址落在设备窗口; 未接总线时视为否."""
+        """该物理地址落在设备内存范围; 未接总线时视为否."""
         return self._bus is not None and self._bus.is_device_addr(pa)
 
     def _is_bus_access_denied(
@@ -486,7 +486,7 @@ class MemoryAccessOps(TrapOps):
         size: int,
         is_write: bool,
     ) -> bool:
-        """总线拒绝该物理地址: 区间越过窗口边界, 或写入引导只读存储器.
+        """总线拒绝该物理地址: 区间越过内存范围边界, 或写入引导只读存储器.
 
         引导只读存储器接受读取, 拒绝写入.
         """
@@ -821,7 +821,7 @@ class MemoryAccessOps(TrapOps):
             )
             return False, 0
 
-        # PMA 检查 — 取指按 32 位指令的宽度要求整个区间落在同一窗口内
+        # PMA 检查 — 取指按 32 位指令的宽度要求整个区间落在同一范围内
         if self._is_bus_access_denied(pa, 4, is_write=False):
             self.deliver_trap(
                 TrapType.InstrAccessFault, tval=va, is_interrupt=False

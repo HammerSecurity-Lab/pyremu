@@ -44,7 +44,7 @@ VIRTIO_BLK_DEVICE = dev_tree.DtDeviceRequest(
 def _build_arg_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器."""
     p = argparse.ArgumentParser(
-        description="RISC-V Interactive Debugger (rvdb)",
+        description="RISC-V Interactive Debugger (rvdbg)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
         "  %(prog)s firmware.bin\n"
@@ -388,7 +388,7 @@ def _reject_per_hart_difference(
 
 
 def _is_rom_addr(addr: int, rom_base: int, rom_size: int) -> bool:
-    """判断物理地址是否属于引导只读存储器的窗口; rom_base 取 0 时恒为 False."""
+    """判断物理地址是否属于引导只读存储器; rom_base 取 0 时恒为 False."""
     return bool(rom_base) and rom_base <= addr < rom_base + rom_size
 
 
@@ -397,7 +397,7 @@ def _image_in_rom(
     rom_base: int,
     rom_size: int,
 ) -> bool:
-    """判断固件的全部段是否落在引导只读存储器的窗口内."""
+    """判断固件的全部段是否落在引导只读存储器内."""
     if not rom_base:
         return False
     if not image.segments:
@@ -417,7 +417,7 @@ def _load_firmware_image(
     """解析固件并计算装载偏移.
 
     返回 (image, load_offset). 段的链接地址最小值不低于 ram_base, 或全部段落在
-    引导只读存储器的窗口内时偏移为 0; 其余 ELF 固件按链接地址加 ram_base 装入.
+    引导只读存储器内时偏移为 0; 其余 ELF 固件按链接地址加 ram_base 装入.
     """
     if not Path(fw_path).exists():
         logger.error(f"文件不存在: {fw_path}")
@@ -444,7 +444,7 @@ def _load_firmware_image(
 
     load_offset = 0
     if image.format == "elf":
-        # 段落在引导只读存储器的窗口内时按链接地址装入, 不施加装载偏移.
+        # 段落在引导只读存储器内时按链接地址装入, 不施加装载偏移.
         if _image_in_rom(image, rom_base, rom_size):
             logger.info(
                 f"固件段位于引导只读存储器 [0x{rom_base:x}, "
@@ -607,8 +607,8 @@ def _initrd_default_addr(
 ) -> int:
     """未给出 --initrd-addr 时的装载地址.
 
-    取 RAM 窗口的上界减去 RAM_PRELOAD_OFFSET 字节为上界, 该位置低于设备树与
-    预加载载荷的默认位置; 设备树或预加载载荷的装载地址落在 RAM 窗口内且更低
+    取 RAM 的上界减去 RAM_PRELOAD_OFFSET 字节为上界, 该位置低于设备树与
+    预加载载荷的默认位置; 设备树或预加载载荷的装载地址落在 RAM 内且更低
     时, 改取其中较低者, 使 initramfs 的区间范围与两者不重叠. 自该上界减去
     文件字节数, 再向下对齐到 2 MiB, 得到区间范围的下界.
     """
@@ -629,11 +629,11 @@ def _load_boot_images(
 ) -> tuple[int | None, tuple[int, int] | None]:
     """装载 initramfs、设备树与预加载载荷, 返回设备树地址与预加载信息.
 
-    initramfs 必须先于设备树装入, 其区间范围写入 /chosen. 装载位置越出窗口或与
+    initramfs 必须先于设备树装入, 其区间范围写入 /chosen. 装载位置越出或与
     已装入内容的区间范围重叠时报告原因并终止进程.
     """
     # 复位地址取预加载载荷的地址, 未给出载荷或其地址时取固件入口. 复位地址落在
-    # 引导只读存储器的窗口内时从该存储器启动.
+    # 引导只读存储器内时从该存储器启动.
     is_preload_boot = ns.preload is not None and ns.preload_addr is not None
     reset_addr = ns.preload_addr if is_preload_boot else prog_cnt
     is_rom_boot = _is_rom_addr(reset_addr, platform.rom_base, platform.rom_size)
@@ -844,8 +844,8 @@ def _build_peripheral_config(
     """按芯片设备树或 CLI 参数创建外设配置、内核命令行参数与块设备镜像.
 
     给出芯片设备树时外设区间全部取自该树, 树中没有块设备节点时按块设备镜像在树中
-    未占用的窗口补充一个; 否则各设备的基址取 mk/ 下生成的平台默认值, --disk 给出
-    时按该镜像启用 virtio-blk. 未显式给出 --bootargs 且启用了 virtio-blk 时提供
+    未占用的内存范围补充一个; 否则各设备的基址取mk/下生成的默认值, --disk给出
+    时按该镜像启用 virtio-blk. 未显式给出 --bootargs 且启用了virtio-blk时提供
     默认根挂载参数, 只读, 根文件系统位于 ext4 分区.
     """
     disk_image = _resolve_disk_image(ns, chip)

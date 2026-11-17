@@ -3,7 +3,7 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""rvdb 多来源调试符号.
+"""rvdbg 多来源调试符号.
 
 对外导出两个类:
 

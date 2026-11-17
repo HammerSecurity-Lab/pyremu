@@ -35,10 +35,10 @@ mod mem {
 
 	pub fn try_alloc_smode_page(n: u64) -> u64 {
 		let first = PAGES_USED.fetch_add(n as usize, Ordering::SeqCst);
-		if first + n as usize > POOL_PAGES {
+		if first + (n as usize) > POOL_PAGES {
 			return !0u64;
 		}
-		core::ptr::addr_of_mut!(POOL) as u64 + (first as u64) * 4096
+		(core::ptr::addr_of_mut!(POOL) as u64) + (first as u64) * 4096
 	}
 
 	/// 分区申请的次数。
@@ -114,11 +114,13 @@ mod println {
 
 #[macro_export]
 macro_rules! println {
-	($($arg:tt)*) => {{
+	($($arg:tt)*) => {
+		{
 		let mut __buf = $crate::println::FmtBuf::new();
 		let _ = core::fmt::Write::write_fmt(&mut __buf, format_args!($($arg)*));
 		$crate::ecall_aux::sbi_console_write(__buf.as_written());
-	}};
+		}
+	};
 }
 
 #[path = "../src/prim/mod.rs"]
@@ -179,31 +181,34 @@ struct LoadSegment {
 }
 
 /// 构造一个 ELF64 映像: 文件头与程序头表合法, 含两个 PT_LOAD 段, 段内容为 0。
-fn image_with_two_load_segments(first: LoadSegment, second: LoadSegment) -> &'static [u8] {
+fn image_with_two_load_segments(
+	first: LoadSegment,
+	second: LoadSegment,
+) -> &'static [u8] {
 	let mut image = Vec::new();
 	// e_ident: 魔数、ELFCLASS64、小端、EV_CURRENT, 其余字节为 0。
 	image.extend_from_slice(b"\x7fELF\x02\x01\x01");
 	image.resize(16, 0);
 	image.extend_from_slice(&constants::ET_EXEC.to_le_bytes());
 	image.extend_from_slice(&constants::EM_RISCV.to_le_bytes());
-	image.extend_from_slice(&1u32.to_le_bytes()); // e_version
+	image.extend_from_slice(&(1u32).to_le_bytes()); // e_version
 	image.extend_from_slice(&first.vaddr.to_le_bytes()); // e_entry
-	image.extend_from_slice(&64u64.to_le_bytes()); // e_phoff, 紧随文件头
-	image.extend_from_slice(&0u64.to_le_bytes()); // e_shoff, 无段头表
-	image.extend_from_slice(&0u32.to_le_bytes()); // e_flags
-	image.extend_from_slice(&64u16.to_le_bytes()); // e_ehsize
-	image.extend_from_slice(&56u16.to_le_bytes()); // e_phentsize
-	image.extend_from_slice(&2u16.to_le_bytes()); // e_phnum
+	image.extend_from_slice(&(64u64).to_le_bytes()); // e_phoff, 紧随文件头
+	image.extend_from_slice(&(0u64).to_le_bytes()); // e_shoff, 无段头表
+	image.extend_from_slice(&(0u32).to_le_bytes()); // e_flags
+	image.extend_from_slice(&(64u16).to_le_bytes()); // e_ehsize
+	image.extend_from_slice(&(56u16).to_le_bytes()); // e_phentsize
+	image.extend_from_slice(&(2u16).to_le_bytes()); // e_phnum
 	image.extend_from_slice(&[0u8; 6]); // e_shentsize, e_shnum, e_shstrndx
 	for segment in [first, second] {
-		image.extend_from_slice(&1u32.to_le_bytes()); // p_type = PT_LOAD
-		image.extend_from_slice(&5u32.to_le_bytes()); // p_flags = PF_R | PF_X
+		image.extend_from_slice(&(1u32).to_le_bytes()); // p_type = PT_LOAD
+		image.extend_from_slice(&(5u32).to_le_bytes()); // p_flags = PF_R | PF_X
 		image.extend_from_slice(&segment.offset.to_le_bytes());
 		image.extend_from_slice(&segment.vaddr.to_le_bytes());
-		image.extend_from_slice(&0u64.to_le_bytes()); // p_paddr
+		image.extend_from_slice(&(0u64).to_le_bytes()); // p_paddr
 		image.extend_from_slice(&segment.filesz.to_le_bytes());
 		image.extend_from_slice(&segment.memsz.to_le_bytes());
-		image.extend_from_slice(&0x1000u64.to_le_bytes()); // p_align
+		image.extend_from_slice(&(0x1000u64).to_le_bytes()); // p_align
 	}
 	assert_eq!(image.len(), 64 + 2 * 56);
 	image.resize(0x1000, 0);

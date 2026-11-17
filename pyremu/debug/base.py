@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 from pathlib import Path
 import select
@@ -80,15 +81,14 @@ def trim_history(max_entries: int = 10000) -> None:
     hist_path = history_file_path()
     if not hist_path.is_file():
         return
-    try:
+    # 文件被锁或权限不足时静默跳过
+    with suppress(OSError):
         text = hist_path.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         if len(lines) <= max_entries:
             return
         keep = max_entries // 2
         hist_path.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
-    except OSError:
-        pass  # 文件被锁或权限不足时静默跳过
 
 
 class DebuggerBase(SharedAttrs):
@@ -199,8 +199,7 @@ class DebuggerBase(SharedAttrs):
         self._disasm_next_addr: int | None = None
         self._vdisasm_next_addr: int | None = None
         self._disasm_ref_pc: int | None = None
-        self._disasm_base_step: int = 0
-        self._disasm_past_terminator: bool = False
+        self._disasm_base_step: int | None = None
 
     def _init_breakpoint_state(self) -> None:
         """断点表的初始状态."""
@@ -226,10 +225,8 @@ class DebuggerBase(SharedAttrs):
 
     def _sigint_run(self, _signum: int, _frame) -> None:
         self._console.print("\n暂停请求 — 当前指令完成后回到 REPL")
-        try:
+        with suppress(Exception):
             self._emu.notify_processor()
-        except Exception:
-            pass
 
     def _enter_repl_mode(self) -> None:
         """恢复到 REPL 的终端设置 (prompt_toolkit 自行管理 raw 模式)."""
@@ -310,14 +307,12 @@ class DebuggerBase(SharedAttrs):
 
     def _restore_term(self) -> None:
         """恢复 _enter_run_mode 保存的终端属性."""
-        try:
+        with suppress(OSError, termios.error):
             if self._saved_term_attrs:
                 termios.tcsetattr(
                     self._stdin_fd, termios.TCSANOW, self._saved_term_attrs
                 )
                 self._saved_term_attrs = None
-        except OSError, termios.error:
-            pass
 
     @staticmethod
     def _uart_tx(text: str) -> None:
@@ -359,10 +354,8 @@ class DebuggerBase(SharedAttrs):
                 self._stdin_daemon_running = False
                 data = data[:i]  # 仅交付 Ctrl+Q 之前的部分
             if data:
-                try:
+                with suppress(Exception):
                     uart.preload(data)
-                except Exception:
-                    pass
             self._emu._wake_event.set()
 
     def _start_stdin_daemon(self) -> None:
@@ -605,7 +598,7 @@ class DebuggerBase(SharedAttrs):
         """主交互循环."""
         self._enter_repl_mode()
         banner = (
-            f"[bold]pyremu rvdb[/] — "
+            f"[bold]pyremu rvdbg[/] — "
             f"{self._emu.num_harts} hart(s), "
             f"RAM {hex_addr(self._emu.bus._ram_base)}-"
             f"{hex_addr(self._emu.bus._ram_end)}, "
@@ -620,7 +613,7 @@ class DebuggerBase(SharedAttrs):
         while True:
             try:
                 prompt = (
-                    f"[bold red]rvdb:{self._hart_id}[/]"
+                    f"[bold red]rvdbg:{self._hart_id}[/]"
                     + f" ([cyan]{self.hart.mode.name}[/]) > "
                 )
                 user_input = self._session.prompt(prompt).strip()

@@ -68,8 +68,8 @@ class NativeOps:
     def _native_exec_outside_ram_fetch(self, hart: Hart) -> int:
         """取指的目标不属于主存时, 由 Python 取指并执行一条指令.
 
-        加速执行引擎只从主存读取指令字节, 遇到设备窗口与空洞时以
-        EXIT_NOT_MAINRAM 退出本轮. 设备窗口的指令字节经总线读取, 读取不到时由
+        加速执行引擎只从主存读取指令字节, 遇到设备内存范围与未定义物理内存范围时
+        以EXIT_NOT_MAINRAM 退出本轮. 设备的指令字节经总线读取, 读取不到时由
         取指校验投递访问故障. 返回执行的指令数, 取值为 0 或 1.
         """
         if self._bp_addrs and hart.pc in self._bp_addrs:
@@ -100,6 +100,12 @@ class NativeOps:
         # 将 L2 缓存的脏行写回 bytearray, 使加速执行引擎直接读取 bytearray 中的
         # 指令与数据时, 能看到 Python 侧的全部写入.
         self.bus.flush_l2()
+        # 引擎在批次内直接改写 bytearray, 不更新 L2; 残留的行会在本轮之后的
+        # Python 侧读取 (设备处理队列、调试器查看内存) 中返回旧值. 回写之后清空
+        # 全部行, 使两侧都从 bytearray 取值.
+        l2 = self.bus.l2
+        if l2 is not None:
+            l2.invalidate_all()
 
         # 全部 hart 的状态都要复制, 包括已停机的: Rust 侧统计 total_instrs 与
         # active_hart_num 时用得到每个 hart 的状态.
@@ -165,7 +171,7 @@ class NativeOps:
         # _rx_notify 的唯一作用是让引擎尽快退出本轮, 退出后 Python 才能把环形
         # 缓冲区的字节写入 UART FIFO. 本轮既已结束, 通知即已兑现, 无条件清零:
         # 若等环形缓冲区与 UART FIFO 皆空才清零, 在 UART FIFO 满或受调试程序
-        # 关闭中断的窗口内, 下一轮会在第一条指令之前立即退出, 受调试程序得不到
+        # 关中断时, 下一轮会在第一条指令之前立即退出, 受调试程序得不到
         # 任何执行机会而活锁, 每轮指令数恒为 0.
         # 尚未写入 UART FIFO 的字节仍留在环形缓冲区, 由每轮 _feed_uart_stdin 与
         # 接收守护线程继续写入, 不丢失; termio 线程写入新字节时会重新置位.

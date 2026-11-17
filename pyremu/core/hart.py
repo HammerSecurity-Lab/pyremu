@@ -868,6 +868,9 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         # 但 TLB 中 VPN 到 PPN 的旧映射已失效.
         self.itlb.flush_all()
         self.dtlb.flush_all()
+        # 本次刷新发生在 Python 侧时, 加速执行引擎不会自行得知页表已更换;
+        # 计入刷新计数, 使引擎在下一轮开始处把既有条目标为陈旧.
+        self.note_tlb_flush()
         self._mmu_mode = (v >> 60) & 0xF
 
     # ----------------------------------------------------------

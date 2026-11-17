@@ -27,7 +27,7 @@ from pyremu.core.hart import HartWithRegs
 from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.registers import CsrAccessError
 from pyremu.core.trap_def import TrapType
-from pyremu.utils.disassem import (
+from pyremu.disasm import (
     AMOF5_MAP,
     AmoFunct5,
     AMOW_MAP,

@@ -14,14 +14,13 @@ import unicodedata
 from pyremu.core import trap_def
 from pyremu.core.hart import RiscvMode
 from pyremu.debug.exception import UsageError
-from pyremu.utils.disassem import Opc
+from pyremu.disasm import Opc
 from pyremu.utils.mask import mask64
 
 if TYPE_CHECKING:
     from pyremu.core.hart import HartWithRegs
     from pyremu.memory.bus import Bus
 
-MAX_INSTR_COUNT = 100_000  # 指令条数上限
 _TRI_SPLIT = ["", "K", "M", "B", "T", "P", "E"]
 
 SIZE_UNITS: tuple[tuple[str, int], ...] = (

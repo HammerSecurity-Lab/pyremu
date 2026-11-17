@@ -1,6 +1,8 @@
 //! 终端输入与输出的后台线程.
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{
+	AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU8, Ordering,
+};
 use std::sync::Mutex;
 
 //  FFI 上下文: 由 Python ctypes 传入的 C 布局结构体
@@ -208,7 +210,7 @@ fn drain_tx(h: &TermIoHandle, chunk: &mut [u8]) {
 
 //  stdin 输入解析器: Ctrl+Q 停机检测与转义序列重组
 //
-//  所有输入先保留在接收缓冲区; 解析器每次在至多 6 字节的窗口内逐字节判定具体的输入
+//  所有输入先保留在接收缓冲区; 解析器每次在至多 6 字节内逐字节判定具体的输入
 //  当无法判定时, 例如半个 ESC 序列, 保留在接收缓冲区中作为下一轮解析的开头
 
 /// 直接设置 CPU 引擎的停止标志, 而不经过 Python.
@@ -226,11 +228,13 @@ fn notify_emu_stop(h: &TermIoHandle) {
 		unsafe { (*stop).store(1, Ordering::Release) };
 	}
 	if h.rx_notify_fd >= 0 {
-		let _ = unsafe { libc::write(h.rx_notify_fd, &1u8 as *const u8 as *const libc::c_void, 1) };
+		let _ = unsafe {
+			libc::write(h.rx_notify_fd, &1u8 as *const u8 as *const libc::c_void, 1)
+		};
 	}
 }
 
-/// 判定以 ESC 开头的序列是否完整, 窗口至多 6 字节.
+/// 判定以 ESC 开头的序列是否完整, 暂留用缓冲区至多 6 字节.
 /// 返回 ``Some(n)`` 表示序列完整, 共 n 字节; 返回 ``None`` 表示数据不足以判定.
 fn esc_seq_len(buf: &[u8]) -> Option<usize> {
 	debug_assert!(!buf.is_empty() && buf[0] == 0x1b);
@@ -244,7 +248,7 @@ fn esc_seq_len(buf: &[u8]) -> Option<usize> {
 	if b1 == b'O' {
 		return Some(3); // SS3: ESC O X, 共 3 字节
 	}
-	// CSI: ESC [ ... final, final 位于 0x40..=0x7e, 在 6 字节窗口内查找.
+	// CSI: ESC [ ... final, final 位于 0x40..=0x7e, 在 6 字节以内查找.
 	for (idx, &b) in buf[2..].iter().take(4).enumerate() {
 		if (0x40..=0x7e).contains(&b) {
 			return Some(2 + idx + 1);
@@ -322,7 +326,9 @@ fn drain_fd(fd: RawFd) {
 	}
 	let mut buf = [0u8; 256];
 	loop {
-		let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+		let n = unsafe {
+			libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+		};
 		if n > 0 {
 			continue;
 		}
@@ -338,7 +344,9 @@ fn drain_fd(fd: RawFd) {
 fn read_stdin_into(h: &TermIoHandle, recv: &mut Vec<u8>) -> bool {
 	let mut tmp = [0u8; 1024];
 	loop {
-		let n = unsafe { libc::read(h.stdin_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len()) };
+		let n = unsafe {
+			libc::read(h.stdin_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len())
+		};
 		if n > 0 {
 			recv.extend_from_slice(&tmp[..n as usize]);
 			continue;
@@ -384,8 +392,13 @@ fn deliver_rx(h: &TermIoHandle, recv: &mut Vec<u8>, deliverable: usize) -> usize
 		// 该 fd 由 Python 用 os.pipe() 创建并设为非阻塞; 管道满时写操作返回
 		// EAGAIN, 丢失通知可以接受, 守护线程仍会经 drain_rx 追上.
 		if h.rx_notify_fd >= 0 {
-			let _ =
-				unsafe { libc::write(h.rx_notify_fd, &1u8 as *const u8 as *const libc::c_void, 1) };
+			let _ = unsafe {
+				libc::write(
+					h.rx_notify_fd,
+					&1u8 as *const u8 as *const libc::c_void,
+					1,
+				)
+			};
 		}
 		recv.drain(0..delivered);
 	}
@@ -426,7 +439,9 @@ fn termio_thread(h: TermIoHandle, saved: SavedTerm) {
 		drain_fd(drain_rd);
 		if nfds == 2 && (pfds[1].revents & libc::POLLIN) != 0 {
 			stdin_eof = !read_stdin_into(&h, &mut recv);
-		} else if nfds == 2 && (pfds[1].revents & (libc::POLLHUP | libc::POLLERR)) != 0 {
+		} else if nfds == 2
+			&& (pfds[1].revents & (libc::POLLHUP | libc::POLLERR)) != 0
+		{
 			stdin_eof = true;
 		}
 		let (deliverable, stop_req) = scan_rx(&mut recv);
@@ -488,7 +503,9 @@ fn termio_thread_simple(h: TermIoHandle, old_stdin_fl: libc::c_int) {
 		drain_fd(drain_rd);
 		if nfds == 2 && (pfds[1].revents & libc::POLLIN) != 0 {
 			stdin_eof = !read_stdin_into(&h, &mut recv);
-		} else if nfds == 2 && (pfds[1].revents & (libc::POLLHUP | libc::POLLERR)) != 0 {
+		} else if nfds == 2
+			&& (pfds[1].revents & (libc::POLLHUP | libc::POLLERR)) != 0
+		{
 			stdin_eof = true;
 		}
 		let (deliverable, stop_req) = scan_rx(&mut recv);
@@ -586,7 +603,8 @@ pub extern "C" fn terminal_io_start(handle: *const TermIoHandle) -> i32 {
         // 保留 ICRNL: 宿主终端把 \r 转换为 \n, 受调试程序收到 \n 即可结束一行
         | libc::IXON);
 	raw.c_oflag |= libc::OPOST; // 保留输出后处理, 把 '\n' 转换为 CRLF
-	raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::IEXTEN | libc::ISIG);
+	raw.c_lflag &=
+		!(libc::ECHO | libc::ECHONL | libc::ICANON | libc::IEXTEN | libc::ISIG);
 	raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
 	raw.c_cflag |= libc::CS8;
 	raw.c_cc[libc::VMIN] = 1; // 每个按键即时可读
@@ -648,13 +666,17 @@ pub extern "C" fn terminal_io_attach(handle: *const TermIoHandle) -> i32 {
 	};
 	let old_fl = unsafe { libc::fcntl(hc.stdin_fd, libc::F_GETFL) };
 	if old_fl >= 0 {
-		unsafe { libc::fcntl(hc.stdin_fd, libc::F_SETFL, old_fl | libc::O_NONBLOCK) };
+		unsafe {
+			libc::fcntl(hc.stdin_fd, libc::F_SETFL, old_fl | libc::O_NONBLOCK)
+		};
 	}
 	// 把排空管道的读端设为非阻塞: drain_fd 循环读到 EAGAIN 即停止.
 	if hc.rx_drain_fd >= 0 {
 		let df = unsafe { libc::fcntl(hc.rx_drain_fd, libc::F_GETFL) };
 		if df >= 0 {
-			unsafe { libc::fcntl(hc.rx_drain_fd, libc::F_SETFL, df | libc::O_NONBLOCK) };
+			unsafe {
+				libc::fcntl(hc.rx_drain_fd, libc::F_SETFL, df | libc::O_NONBLOCK)
+			};
 		}
 	}
 	STOP_PTR.store(hc.stop_flag, Ordering::Release);
@@ -844,7 +866,9 @@ mod tests {
 		notify_emu_stop(&stop_notify_handle(notify_w));
 
 		let mut buf = [0u8; 4];
-		let n = unsafe { libc::read(notify_r, buf.as_mut_ptr() as *mut libc::c_void, 4) };
+		let n = unsafe {
+			libc::read(notify_r, buf.as_mut_ptr() as *mut libc::c_void, 4)
+		};
 		assert_eq!(n, 1, "Ctrl+Q 应向接收通知管道写 1 字节");
 		assert_eq!(buf[0], 1);
 		assert_eq!(flag.load(Ordering::Acquire), 1);
@@ -863,7 +887,7 @@ mod tests {
 		notify_emu_stop(&stop_notify_handle(-1)); // 不应发生 panic
 	}
 
-	/// 覆盖 ``esc_seq_len`` 在 6 字节窗口内对 ESC 序列完整性的判定.
+	/// 覆盖 ``esc_seq_len`` 在 6 字节内对 ESC 序列完整性的判定.
 	#[test]
 	fn test_esc_seq_len_variants() {
 		assert_eq!(esc_seq_len(&[0x1b]), None); // 孤立 ESC — 等下一字节

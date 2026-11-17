@@ -44,11 +44,6 @@ def _mod(**changes) -> model.SymMod:
     return replace(_BASE_MOD, **changes)
 
 
-# ============================================================
-#  基本属性
-# ============================================================
-
-
 def test_span_is_cover_range_length():
     assert _mod(cover_start=0x1000, cover_end=0x1800).span == 0x800
 

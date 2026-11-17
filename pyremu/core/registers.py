@@ -18,7 +18,7 @@ from enum import Enum
 from functools import partial
 
 from pyremu.configs_gen import PMP_ENTRIES, PYREMU_AIA, PYREMU_H_EXT
-from pyremu.utils.regname import init_csr_map, init_gpr_map
+from pyremu.disasm.regname import init_csr_map, init_gpr_map
 
 #  通用寄存器基类
 
@@ -630,6 +630,6 @@ def register_csr():
     return deepcopy(ret)
 
 
-# 向 regname 注入名称映射 — 断开 core.decoder 与 utils.disassem 的循环导入
+# 向 regname 注入名称映射 — 断开 core.decoder 与 disasm 的循环导入
 init_gpr_map([r.name for r in _gpr], [r.alias for r in _gpr])
 init_csr_map({addr: csr.name for addr, csr in csr_bank.items()})

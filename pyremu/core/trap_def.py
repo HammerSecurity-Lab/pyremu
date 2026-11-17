@@ -11,6 +11,7 @@ RISC-V 特权架构定义的 trap 类型及对应的 mcause/scause 编码。
 另收录中断优先级、硬件中断源占用的 mip 位与 semihosting 序列常数。
 """
 
+from contextlib import suppress
 from enum import Enum
 import os
 
@@ -154,8 +155,8 @@ MODE_S_VALUE: int = RiscvMode.S.value
 #  RISC-V semihosting 序列
 
 # 调用序列为 ``slli x0,x0,0x1f; ebreak; srai x0,x0,7``, a0 存放操作码, a1 存放
-# 参数块指针; marker 指令编码与加速执行引擎 handlers.rs 的 SEMIHOSTING_PRE/POST
-# 一致.
+# 参数块指针; marker 指令编码与加速执行引擎 handlers/semihosting.rs 的
+# SEMIHOSTING_PRE/POST 一致.
 # 带 marker 的 ebreak 内联服务 SYS_WRITE / SYS_WRITEC / SYS_OPEN / SYS_ISTTY,
 # SYS_EXIT 置停机标记供 run() 返回; 两者都不投递断点 trap.
 
@@ -176,10 +177,8 @@ def semihosting_write_stderr(data: bytes) -> None:
     写到 stderr 可避免污染 stdout 上的调试器界面与 UART 转发行; os.write 绕过
     Python 的 stdio 缓冲, 与 Rust 侧 write(2, ...) 等价.
     """
-    try:
+    with suppress(OSError, ValueError):
         os.write(2, data)
-    except OSError, ValueError:
-        pass
 
 
 # mcause/scause 编码到 TrapType 名称的逆向映射

@@ -1,71 +1,52 @@
 # bsp/eval-suites/basic-test/Makefile
-# TEE 飞地生命周期批处理测试 - 批量创建/执行/销毁飞地 (源目录, 部署为 /eval/basic-test)
+# TEE 飞地生命周期批处理测试 — 源目录, 部署为 /eval/basic-test
 #
-# 两套编译链:
-#   Linux glibc (riscv64-linux-gnu-gcc) - tee_stress (测试控制程序)
-#   Enclave musl (clang + musl libc.a)   - stress_payload (飞地内载荷)
+# 目录划分:
+#   host/     宿主侧控制程序, 采用 Linux glibc 交叉编译
+#   payload/  飞地内载荷, 采用 musl 静态编译
+# 公共定义: ../common/enclave_abi.h (设备与 ioctl 定义), ../common/stress_common.h
+#           (载荷侧压力操作), ../common/toolchain.mk
 #
 # 目标:
-#   make all              全部编译
+#   make all              编译全部宿主程序与载荷
 #   make clean            清理
+
+include ../common/toolchain.mk
 
 phony =
 
 # 取消 GNU Make 内置的 %: %.c 隐式模式规则
 %: %.c
 
-# 交叉编译器
-CROSS_CC  ?= $(shell command -v riscv64-linux-gnu-gcc 2>/dev/null || echo riscv64-unknown-linux-gnu-gcc)
-CFLAGS     = -static -O2 -Wall
+OUT_DIR  = bin
+PROGRAMS = tee_stress tee_max_online tee_concurrent_enter
+PAYLOADS = stress_payload hello_payload
 
-# musl 飞地编译链
-# musl 源码树由 vendor/musl 子模块提供。
-MUSL_DIR    = $(abspath ../../../vendor/musl)
-MUSL_CC     = clang
-MUSL_TARGET = riscv64-linux-musl
-# 必须硬浮点 lp64d: musl sysroot 以 rv64imafdc/lp64d 构建, 软浮点 lp64 会
-# 与 crt1.o 的硬浮点 ABI 冲突。
-MUSL_ARCH   = rv64gc
-MUSL_ABI    = lp64d
-LIBGCC      = /usr/lib/gcc/riscv64-unknown-elf/14.2.0/rv64iafd/lp64d/libgcc.a
-
-MUSL_CFLAGS = --target=$(MUSL_TARGET) -march=$(MUSL_ARCH) -mabi=$(MUSL_ABI) \
-              -static -nostdlib -nostdinc -O2 -Wall \
-              -isystem $(MUSL_DIR)/arch/riscv64 \
-              -isystem $(MUSL_DIR)/arch/generic \
-              -isystem $(MUSL_DIR)/obj/include \
-              -isystem $(MUSL_DIR)/include
-
-MUSL_LDLIBS = $(MUSL_DIR)/lib/crt1.o \
-              $(MUSL_DIR)/lib/crti.o \
-              $(MUSL_DIR)/lib/crtn.o \
-              $(MUSL_DIR)/lib/libc.a \
-              $(LIBGCC)
-
-OUT_DIR    = bin
-PROGRAMS   = tee_stress tee_max_online tee_concurrent_enter
-PAYLOADS   = stress_payload hello_payload
-
-BINS       = $(addprefix $(OUT_DIR)/, $(PROGRAMS))
-PAY_BINS   = $(addprefix $(OUT_DIR)/, $(PAYLOADS))
+BINS     = $(addprefix $(OUT_DIR)/, $(PROGRAMS))
+PAY_BINS = $(addprefix $(OUT_DIR)/, $(PAYLOADS))
 
 all: $(BINS) $(PAY_BINS)
 phony += all
 
-# ---- Linux glibc 编译 ----
-$(OUT_DIR)/%: %.c tee_enclave.h
-	@mkdir -p $(@D)
-	$(CROSS_CC) $(CFLAGS) $< -o $@
+# ---- 宿主程序 (glibc) ----
+# 宿主程序共用 common/host_util.c 中的辅助函数
+HOST_COMMON = $(EVAL_INCLUDE)/host_util.c $(EVAL_INCLUDE)/enclave_abi.h
 
-# ---- musl enclave payload 编译 ----
-$(OUT_DIR)/stress_payload: stress_payload.c stress_common.h
+$(OUT_DIR)/%: host/%.c $(HOST_COMMON)
 	@mkdir -p $(@D)
-	$(MUSL_CC) $(MUSL_CFLAGS) -fuse-ld=lld $(MUSL_LDLIBS) $< -o $@
+	$(CROSS_CC) $(HOST_CFLAGS) -I$(EVAL_INCLUDE) \
+		$< $(EVAL_INCLUDE)/host_util.c -o $@
 
-$(OUT_DIR)/hello_payload: hello_payload.c
+# ---- 飞地载荷 (musl) ----
+$(OUT_DIR)/stress_payload: payload/stress_payload.c $(EVAL_INCLUDE)/stress_common.h
 	@mkdir -p $(@D)
-	$(MUSL_CC) $(MUSL_CFLAGS) -fuse-ld=lld $(MUSL_LDLIBS) $< -o $@
+	$(MUSL_CC) $(MUSL_CFLAGS) -I$(EVAL_INCLUDE) -fuse-ld=lld $(MUSL_LDLIBS) \
+		$< -o $@
 
+$(OUT_DIR)/hello_payload: payload/hello_payload.c
+	@mkdir -p $(@D)
+	$(MUSL_CC) $(MUSL_CFLAGS) -I$(EVAL_INCLUDE) -fuse-ld=lld $(MUSL_LDLIBS) \
+		$< -o $@
 
 clean:
 	rm -rf $(OUT_DIR)

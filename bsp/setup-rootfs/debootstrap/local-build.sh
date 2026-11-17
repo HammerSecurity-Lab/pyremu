@@ -75,16 +75,15 @@ cleanup_mount() {
 
 usage() {
 	cat <<EOF
-用法: $0
+usage: $0
 
-构建 Debian trixie riscv64 的根文件系统归档与块设备镜像, 需以 root 执行.
-无参数, 无选项.
+Use debootstrap to build rootfs and its corresponding ext4-img,
+require root privilege. No extra arguments or any options for execution.
 
-产物, 相对当前工作目录:
-    debian-riscv-initrd.cpio.gz   根文件系统归档
-    riscv-sd.ext4                 块设备镜像
+files to be generated:
+    debian-riscv-initrd.cpio.gz   rootfs in cpio
+    riscv-sd.ext4                 virtual block device
 
-先删除 tmp-rootfs 并覆盖上述两个产物; 测试程序与驱动按可用的工具链选择性构建.
 EOF
 }
 

@@ -4,12 +4,22 @@
 
 """测试 pyremu.debug.exec — 快照、回滚、写监控."""
 
+import ctypes
+
+import pytest
+
+from pyremu.configs_aux import cfg_bool
 from pyremu.core.hart import RiscvMode
 from pyremu.debug.exec import ExecutionOps
 from pyremu.debug.types import MemoryChange
 from pyremu.emulator import Emulator
 from pyremu.peripheral.power_ctrl import PowerRequest
-from tests.conftest import DbgTestBase
+from tests.conftest import (
+    DbgTestBase,
+    make_test_dbg,
+    make_test_emu,
+    TEST_PROG_PA,
+)
 
 POWER_BASE = 0x0010_0000
 
@@ -233,6 +243,41 @@ class TestStepOne:
         # hart 应进入 trap 状态 (mcause 非零)
         assert edbg.hart.mcause_val != 0
 
+    def test_step_advances_pc(self):
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA)
+        # load_code 已在 TEST_PROG_PA 放了 NOP
+        h = dbg.hart
+        assert h.pc == TEST_PROG_PA
+
+        dbg.step_one()
+        # ADDI x0,x0,0 推进 4 字节
+        assert h.pc == TEST_PROG_PA + 4
+
+    def test_step_increments_count(self):
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA)
+        assert dbg._instr_count == 0
+        dbg.step_one()
+        assert dbg._instr_count == 1
+        dbg.step_one()
+        assert dbg._instr_count == 2
+
+    def test_halted_hart_skipped(self):
+        dbg = make_test_dbg()
+        dbg.hart._halted = True
+        count_before = dbg._instr_count
+        dbg.step_one()
+        assert dbg._instr_count == count_before  # 未执行
+
+    def test_ebreak_sets_mcause(self):
+        """EBREAK 指令应触发陷态, 但不应导致 halted."""
+        dbg = make_test_dbg(prog_cnt=TEST_PROG_PA)
+        dbg._emu.load_code(TEST_PROG_PA, b"\x73\x00\x10\x00")
+        h = dbg.hart
+        h.pc = TEST_PROG_PA
+        dbg.step_one()
+        # EBREAK trap -> mcause = 3 (Breakpoint)
+        assert (h.mcause_val & ~(1 << 63)) == 3
+
 
 # ============================================================
 #  写监控
@@ -267,7 +312,7 @@ class TestCmdWatch:
 
 
 class TestCmdRestart:
-    """cmd_restart — 设备树按装载时的内容重写."""
+    """cmd_restart — 设备树按装载时的内容重写, 内部状态与 hart 接线复位."""
 
     def test_restart_rewrites_loaded_dtb_blob(self):
         """重启重写装载时的 blob, 不重新生成默认设备树."""
@@ -308,3 +353,204 @@ class TestCmdRestart:
         edbg.cmd_restart()
         assert emu.dtb_addr is None
         assert emu.dtb_blob is None
+
+    def test_restart_rebinds_pmp_buffers(self):
+        """重启后的 hart 与引擎共用同一份 PMP 缓冲区.
+
+        不重新绑定时, 固件在引擎内写入的 PMP 条目落在旧 hart 的数组上, Python
+        侧 ``show pmp`` 读到的始终为空, 设备 MMIO 的 S 模式写会被拒.
+        """
+        edbg = _make_edbg()
+        emu = edbg._emu
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        entries = emu.harts[0].pmp.num_entries
+        edbg.cmd_restart()
+        h = emu.harts[0]
+        assert len(h.pmp.flat_cfg) == entries
+        assert ctypes.addressof(h.pmp.flat_cfg) == ctypes.addressof(
+            emu._pmp_cfg_buf
+        )
+        assert ctypes.addressof(h.pmp.flat_addr) == ctypes.addressof(
+            emu._pmp_addr_buf
+        )
+
+    def test_restart_restores_uart_write_wrapper(self):
+        """重启后的物理写入口仍是 UART 包装, 而非裸的 bus.write."""
+        edbg = _make_edbg()
+        emu = edbg._emu
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        before = edbg.hart.mem_write_phy
+        edbg.cmd_restart()
+        after = emu.harts[0].mem_write_phy
+        assert after != emu.bus.read
+        assert after != emu.bus.write
+        assert type(after).__name__ == type(before).__name__
+
+    def test_restart_restores_imsic_reference(self, make_aia_emu):
+        """AIA 模式下重启后的 hart 仍持有 IMSIC 引用."""
+        emu = make_aia_emu(1)
+        edbg = _TestExecDbg(emu)
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        assert emu.harts[0].imsic is emu.imsic
+        edbg.cmd_restart()
+        assert emu.harts[0].imsic is emu.imsic
+
+    @pytest.mark.skipif(
+        cfg_bool("PYREMU_NO_L2"), reason="构建时关闭 L2 缓存, 该用例不适用"
+    )
+    def test_restart_invalidates_l2(self):
+        """重启清空 L2 缓存, 上一轮的有效行不保留."""
+        edbg = _make_edbg()
+        emu = edbg._emu
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        l2 = emu.bus.l2
+        if l2 is None:
+            return
+        emu.bus.write(emu.bus.ram_base, b"\xaa" * 4)
+        assert len(l2) > 0
+        edbg.cmd_restart()
+        assert len(l2) == 0
+
+    def test_restart_clears_plic_pending(self):
+        """重启清空 PLIC 的挂起位与使能位."""
+        emu = make_test_emu()
+        edbg = _TestExecDbg(emu)
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        plic = emu.plic
+        assert plic is not None
+        plic.set_irq(10, True)
+        assert plic.pending[10] == 1
+        edbg.cmd_restart()
+        assert plic.pending[10] == 0
+        assert plic.level[10] == 0
+
+    def test_restart_clears_imsic_pending(self, make_aia_emu):
+        """重启清空 IMSIC 各 hart 的挂起位."""
+        emu = make_aia_emu(1)
+        edbg = _TestExecDbg(emu)
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        assert emu.imsic.peek_topei(0, "M") == 0
+        # 软件中断号为 1, 不受 eie 与 eidelivery 门控, 置位后即可观察到.
+        emu.imsic.set_ip_number(0, "M", 1)
+        assert emu.imsic.peek_topei(0, "M") != 0
+        edbg.cmd_restart()
+        assert emu.imsic.peek_topei(0, "M") == 0
+
+    def test_restart_resets_virtio_queue(self):
+        """重启重置 virtqueue 索引与设备状态字."""
+        emu = make_test_emu(virtio_net_s_base=0x1000_7000)
+        edbg = _TestExecDbg(emu)
+        edbg._image = None
+        edbg._load_offset = 0
+        edbg._bins_images = {}
+        net = emu.virtio_net_s
+        assert net is not None
+        queue = net.mmio.queues[0]
+        queue.last_avail_idx = 5
+        net.mmio.status = 0xF
+        edbg.cmd_restart()
+        assert net.mmio.queues[0].last_avail_idx == 0
+        assert net.mmio.status == 0
+
+
+class TestSnapshotRollback:
+    """快照与回滚."""
+
+    def test_save_snapshot_captures_state(self):
+        dbg = make_test_dbg()
+        h = dbg.hart
+        h.pc = 0x80000000
+        h.gprs[10] = 0xDEAD
+        h.mode = RiscvMode.M
+
+        snap = dbg._save_snapshot()
+        assert snap.pc == 0x80000000
+        assert snap.gpr_vals[10] == 0xDEAD
+        assert snap.mode == RiscvMode.M.value
+
+    def test_restore_snapshot_restores_all_state(self):
+        dbg = make_test_dbg()
+        h = dbg.hart
+
+        # 设置初始状态
+        h.pc = 0x80000000
+        h.gprs[5] = 0xABCD
+        h.gprs[10] = 0x1234
+        h.csrs["mstatus"].val = 0x1800
+        h.mode = RiscvMode.S
+
+        snap = dbg._save_snapshot()
+
+        # 修改状态
+        h.pc = 0x90000000
+        h.gprs[5] = 0xFFFF
+        h.gprs[10] = 0xDEAD
+        h.csrs["mstatus"].val = 0x0
+        h.mode = RiscvMode.M
+
+        dbg._restore_snapshot(snap)
+        assert h.pc == 0x80000000
+        assert h.gprs[5] == 0xABCD
+        assert h.gprs[10] == 0x1234
+        assert h.csrs["mstatus"].val == 0x1800
+        assert h.mode == RiscvMode.S
+
+    def test_restore_clears_reservation(self):
+        dbg = make_test_dbg()
+        h = dbg.hart
+        h.set_reservation(0x8000)
+
+        snap_with_res = dbg._save_snapshot()
+
+        h.clear_reservation()
+        assert not h.reservation_valid
+
+        dbg._restore_snapshot(snap_with_res)
+        assert h.reservation_valid
+        assert h.reservation_addr == 0x8000
+
+    def test_rollback_reverts_memory(self):
+        dbg = make_test_dbg()
+        h = dbg.hart
+
+        # 在 RAM 中预写数据
+        dbg._emu.bus.write(0x80000000, b"\xca\xfe\xba\xbe\x00\x00\x00\x00")
+
+        # 执行一条 SW 指令: sw x10, 0(x2)
+        h.pc = 0x1000
+        h.gprs[2] = 0x80000000  # sp
+        h.gprs[10] = 0x12345678  # a0 = value to store
+        # SD x10, 0(x2): funct3=011, opcode=0100011
+        instr = (0 << 25) | (10 << 20) | (2 << 15) | (3 << 12) | (2 << 7) | 0x23
+        # 需要将指令写入 PC 处
+        dbg._emu.load_code(0x1000, instr.to_bytes(4, "little"))
+
+        dbg.step_one()
+        # 验证数据确实写入
+        dbg._emu.bus.read(0x80000000, 4)
+        # 回滚
+        dbg.rollback()
+        # 验证内存恢复
+        data_restored = dbg._emu.bus.read(0x80000000, 4)
+        assert data_restored == b"\xca\xfe\xba\xbe", (
+            f"回滚应恢复旧数据, 实际: {data_restored.hex()}"
+        )
+
+    def test_rollback_without_snapshot_warns(self):
+        dbg = make_test_dbg()
+        dbg._snapshot = None
+        # 应该只是打印警告, 不抛异常
+        dbg.rollback()
+        assert dbg._snapshot is None

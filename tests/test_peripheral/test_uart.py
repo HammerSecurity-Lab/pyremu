@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import select
 import time
 
@@ -358,6 +359,24 @@ class TestTxArchiveDaemonPollFallback:
         uart.set_hart_log_dir(str(tmp_path))
         return emu
 
+    @staticmethod
+    def _archived(
+        termio,
+        log_path: Path,
+        expected: str = "hi\n",
+    ) -> bool:
+        """日志内容与读索引都已追平时返回 True.
+
+        守护线程先写日志 (行缓冲在换行处落盘), 再推进 ``tx_log_rd``. 只读文件
+        内容会在两步之间提前返回, 故以读索引追平写索引作为同一条件判断.
+        """
+        if termio.tx_log_rd != termio.tx_wr.value:
+            return False
+        try:
+            return log_path.read_text() == expected
+        except FileNotFoundError:
+            return False
+
     def _push_pair(self, emu: Emulator, hid: int, byte: int) -> None:
         termio = emu._termio
         if termio is None:
@@ -386,11 +405,8 @@ class TestTxArchiveDaemonPollFallback:
             log_path = tmp_path / "hart0.log"
             deadline = time.monotonic() + 3.0
             while time.monotonic() < deadline:
-                try:
-                    if log_path.read_text() == "hi\n":
-                        break
-                except FileNotFoundError:
-                    pass
+                if self._archived(termio, log_path):
+                    break
                 time.sleep(0.05)
             else:
                 thr = termio._tx_archive_thread
@@ -442,11 +458,8 @@ class TestTxArchiveDaemonPollFallback:
             log_path = tmp_path / "hart0.log"
             deadline = time.monotonic() + 3.0
             while time.monotonic() < deadline:
-                try:
-                    if log_path.read_text() == "hi\n":
-                        break
-                except FileNotFoundError:
-                    pass
+                if self._archived(termio, log_path):
+                    break
                 time.sleep(0.05)
             else:
                 thr = termio._tx_archive_thread

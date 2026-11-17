@@ -60,9 +60,8 @@ DIST_DIR := dist
 # src/lib.rs 中声明恰一处 `const MODULE_ID: u32 = <十进制数>;`。
 MODULES := attest net fs
 
-# 宿主侧模块表。宿主工具的 C 源以引号包含直接取用, 故生成物落在该工具的源码目录, 见
-# bsp/eval-suites/mod-loader/mod-loader.c。
-MOD_TBL_INC := ../../eval-suites/mod-loader/ext_mod_table.inc
+# 宿主侧模块表。宿主工具的 C 源以引号包含直接取用, 故生成物落在该工具的源码目录
+MOD_TBL_INC := ../../eval-suites/common/ext_mod_table.inc
 
 # 签名用私钥。公钥由签名者从私钥推出并打印, 其取值与 sittim 的 config.mk 中
 # ATTEST_PUB_KEY 相同。
@@ -140,7 +139,7 @@ mod_row = { $(call mod_id,$1), "$1.signed.bin" },
 
 # 模块表的首注释。
 define MOD_TBL_HDR
-/* ext_mod_table.inc - 扩展模块表, 由 mod-loader.c 在编译期包含.
+/* ext_mod_table.inc - 扩展模块表, 由 mod_loader.c 在编译期包含.
  *
  * 本文件由 bsp/sittim/modules/Makefile 的 mod-tbl 目标生成, 不手工编辑: 各项取部署目录 dist
  * 中的映像文件, 按模块名排序, 模块编号取自该模块源码中 MODULE_ID 的声明.

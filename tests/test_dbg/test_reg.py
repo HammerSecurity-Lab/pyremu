@@ -6,12 +6,21 @@
 
 import io
 
+import pytest
 from rich.console import Console
 
 from pyremu.core.registers import csr_bank, gpr_alias
 from pyremu.debug.reg import RegisterOps
+from pyremu.debugger import (
+    Debugger,
+    HartSnapshot,
+)
 from pyremu.emulator import Emulator
-from tests.conftest import DbgTestBase
+from tests.conftest import (
+    DbgTestBase,
+    make_test_dbg,
+    make_test_emu,
+)
 
 # ============================================================
 #  Mini 测试类: RegisterOps + 必要属性
@@ -120,6 +129,60 @@ class TestCmdRegs:
     def test_cmd_regs_does_not_raise(self):
         dbg = _make_tdbg()
         dbg.cmd_regs()  # 应不抛异常
+
+    def test_regs_shows_all_gprs(self):
+        dbg = make_test_dbg()
+        dbg.hart.gprs[10] = 0xCAFE
+        dbg.cmd_regs()  # 应不抛异常
+
+    def test_reg_shows_one(self):
+        dbg = make_test_dbg()
+        dbg.hart.gprs[10] = 0xDEADBEEF
+        dbg.cmd_reg("a0")
+
+    def test_reg_unknown(self):
+        dbg = make_test_dbg()
+        dbg.cmd_reg("nonexistent")
+
+    def test_reg_by_xn(self):
+        dbg = make_test_dbg()
+        dbg.hart.gprs[5] = 0x5555
+        dbg.cmd_reg("x5")
+
+    def test_set_writes_gpr(self):
+        dbg = make_test_dbg()
+        dbg.cmd_set("a0", "0xCAFE")
+        assert dbg.hart.gprs[10] == 0xCAFE
+
+    def test_set_by_xn(self):
+        dbg = make_test_dbg()
+        dbg.cmd_set("x5", "42")
+        assert dbg.hart.gprs[5] == 42
+
+    def test_set_unknown_reg(self):
+        dbg = make_test_dbg()
+        dbg.cmd_set("nonexistent", "0")
+
+    def test_set_invalid_value(self):
+        dbg = make_test_dbg()
+        dbg.cmd_set("a0", "not_a_number")
+
+    def test_find_gpr_alias(self):
+        dbg = make_test_dbg()
+        idx = dbg._find_gpr("sp")
+        assert idx is not None
+        assert gpr_alias(idx) == "sp"
+
+    def test_find_gpr_xn(self):
+        dbg = make_test_dbg()
+        idx = dbg._find_gpr("x2")
+        assert idx is not None
+        assert gpr_alias(idx) == "sp"
+
+    def test_find_gpr_unknown(self):
+        dbg = make_test_dbg()
+        idx = dbg._find_gpr("nonexistent")
+        assert idx is None
 
 
 class TestCmdReg:
@@ -263,3 +326,94 @@ class TestCmdCsr:
     def test_csrw_invalid_value(self):
         dbg = _make_tdbg()
         dbg.cmd_csrw("mstatus", "BAD")
+
+
+class TestCmdHart:
+    """Hart 切换."""
+
+    def test_switch(self):
+        emu = make_test_emu(num_harts=4, prog_cnt=0x1000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00")
+        dbg = Debugger(emulator=emu, hart_id=0)
+        dbg.cmd_hart(2)
+        assert dbg._hart_id == 2
+
+    def test_switch_out_of_range(self):
+        emu = make_test_emu(num_harts=2, prog_cnt=0x1000)
+        dbg = Debugger(emulator=emu)
+        dbg.cmd_hart(5)  # 超出范围
+        assert dbg._hart_id == 0  # 未改变
+
+    def test_switch_clears_snapshot(self):
+        emu = make_test_emu(num_harts=4, prog_cnt=0x1000)
+        emu.load_code(0x1000, b"\x13\x00\x00\x00")
+        dbg = Debugger(emulator=emu, hart_id=0)
+        dbg._snapshot = HartSnapshot(
+            pc=0x1000,
+            gpr_vals=[0] * 32,
+            csr_vals={},
+            mode=3,
+            reservation_valid=False,
+            reservation_addr=0,
+        )
+        dbg.cmd_hart(1)
+        assert dbg._snapshot is None
+        assert dbg._mem_changes == []
+
+
+class TestCsrDetailCommands:
+    """CSR 详情显示命令."""
+
+    @pytest.fixture
+    def dbg(self):
+        return make_test_dbg()
+
+    def test_cmd_mcause_runs(self, dbg):
+        """cmd_mcause 不抛异常."""
+        dbg.hart.csrs["mcause"].val = 0x8000_0000_0000_0003  # MSI
+        dbg.cmd_mcause()  # 不应抛异常
+
+    def test_cmd_scause_runs(self, dbg):
+        """cmd_scause 不抛异常."""
+        dbg.hart.csrs["scause"].val = 8  # ECALL from U
+        dbg.cmd_scause()
+
+    def test_cmd_mtvec_runs(self, dbg):
+        """cmd_mtvec 不抛异常."""
+        dbg.hart.csrs["mtvec"].val = 0x80000000  # direct mode
+        dbg.cmd_mtvec()
+
+    def test_cmd_stvec_runs(self, dbg):
+        """cmd_stvec 不抛异常."""
+        dbg.hart.csrs["stvec"].val = 0x80000001  # vectored mode
+        dbg.cmd_stvec()
+
+    def test_cmd_mip_runs(self, dbg):
+        """cmd_mip 不抛异常."""
+        dbg.hart.csrs["mip"].val = 1 << 7  # MTIP
+        dbg.cmd_mip()
+
+    def test_cmd_mie_runs(self, dbg):
+        """cmd_mie 不抛异常."""
+        dbg.hart.csrs["mie"].val = 1 << 3  # MSIE
+        dbg.cmd_mie()
+
+    def test_cmd_sip_runs(self, dbg):
+        """cmd_sip 不抛异常."""
+        dbg.hart.csrs["sip"].val = 1 << 5  # STIP
+        dbg.cmd_sip()
+
+    def test_cmd_sie_runs(self, dbg):
+        """cmd_sie 不抛异常."""
+        dbg.hart.csrs["sie"].val = 1 << 5  # STIE
+        dbg.cmd_sie()
+
+    def test_cmd_medeleg_runs(self, dbg):
+        """cmd_medeleg 不抛异常."""
+        dbg.hart.csrs["medeleg"].val = 1 << 8  # delegate ECALL-U
+        dbg.cmd_medeleg()
+
+    def test_cmd_mideleg_runs(self, dbg):
+        """cmd_mideleg 不抛异常."""
+        dbg.hart.csrs["mideleg"].val = 1 << 5  # delegate STI
+        dbg.cmd_mideleg()

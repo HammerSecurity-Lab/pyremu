@@ -2,11 +2,11 @@
 //!
 //! 依据 ``medeleg`` 与 ``mideleg`` 把陷态委派到 S 模式
 
-use crate::concurrent::{ConcurrentClintCtx, ModuleState};
 use crate::csr::MSTATUS_MPRV;
 use crate::ffi::FfiDevCtx;
-use crate::hart_sched::read_gpr;
 use crate::interrupt::clint::write_mtimecmp;
+use crate::shared::{ConcurrentClintCtx, ModuleState};
+use crate::state::read_gpr;
 use crate::state::{riscv_mode, HartState};
 use std::sync::atomic::Ordering;
 
@@ -261,7 +261,8 @@ pub(crate) fn priv_ecall_concurrent(
 		let stime_val = read_gpr(state, 10);
 		let hid = state.mhartid as usize;
 		if hid < (clint.num_harts as usize) {
-			(unsafe { &*clint.mtimecmp.add(hid) }).store(stime_val, Ordering::Release);
+			(unsafe { &*clint.mtimecmp.add(hid) })
+				.store(stime_val, Ordering::Release);
 			// 与 CLINT 的 MMIO 写路径 write_mtimecmp_for_target 一致, 设定一次性的
 			// mtip_deadline。否则 mtip_deadline 保持 0, sync_mtip 落入共享 mtime 的
 			// 比较分支, 其他活跃 hart 经 fetch_max 推高的共享 mtime 使 MTIP 提前置位,
@@ -316,7 +317,7 @@ pub(crate) fn priv_mret_concurrent(state: &mut HartState, instr: u32) -> u64 {
 pub(crate) fn priv_sret_concurrent(
 	state: &mut HartState,
 	instr: u32,
-	_ctx: &crate::translate::WalkCtx,
+	_ctx: &crate::mem::translate::WalkCtx,
 ) -> u64 {
 	// mstatus.TSR=1 时 S 模式执行 SRET 触发 IllInstr
 	if state.mode < riscv_mode::S
@@ -678,7 +679,15 @@ mod tests {
 			hart_states: Cell::new(std::ptr::null()),
 			timebase_hz: 10_000_000,
 		};
-		let module = ModuleState::new(1, 1, 0, vec![0].into_boxed_slice(), false, 0, Box::new([]));
+		let module = ModuleState::new(
+			1,
+			1,
+			0,
+			vec![0].into_boxed_slice(),
+			false,
+			0,
+			Box::new([]),
+		);
 		let uart: FfiUartCtx = unsafe { std::mem::zeroed() };
 
 		let advance = priv_ecall_concurrent(&mut state, 0, &clint, &module, &uart);
@@ -723,11 +732,20 @@ mod tests {
 		let mtimecmp = AtomicU64::new(0);
 		let msip = AtomicU8::new(0);
 		let clint = single_hart_clint(&mtime, &mtimecmp, &msip);
-		let module = ModuleState::new(1, 1, 0, vec![0].into_boxed_slice(), false, 0, Box::new([]));
+		let module = ModuleState::new(
+			1,
+			1,
+			0,
+			vec![0].into_boxed_slice(),
+			false,
+			0,
+			Box::new([]),
+		);
 
 		let mut tx_buf = [0u8; 8];
 		let mut tx_wr: u32 = 0;
-		let uart = uart_ctx_with_tx_buffer(tx_buf.as_mut_ptr(), &mut tx_wr as *mut u32);
+		let uart =
+			uart_ctx_with_tx_buffer(tx_buf.as_mut_ptr(), &mut tx_wr as *mut u32);
 
 		priv_ecall_concurrent(&mut state, 0, &clint, &module, &uart);
 
@@ -754,14 +772,23 @@ mod tests {
 		let mtimecmp = AtomicU64::new(0);
 		let msip = AtomicU8::new(0);
 		let clint = single_hart_clint(&mtime, &mtimecmp, &msip);
-		let module = ModuleState::new(1, 1, 0, vec![0].into_boxed_slice(), false, 0, Box::new([]));
+		let module = ModuleState::new(
+			1,
+			1,
+			0,
+			vec![0].into_boxed_slice(),
+			false,
+			0,
+			Box::new([]),
+		);
 
 		// 归档侧按两个字节的条目解码, 第一个字节为 hart 标识, 第二个字节为字符,
 		// 故该快速路径写入的条目必须带发出该字符的 hart 标识。
 		state.mhartid = 2;
 		let mut tx_buf = [0u8; 8];
 		let mut tx_wr: u32 = 0;
-		let uart = uart_ctx_with_tx_buffer(tx_buf.as_mut_ptr(), &mut tx_wr as *mut u32);
+		let uart =
+			uart_ctx_with_tx_buffer(tx_buf.as_mut_ptr(), &mut tx_wr as *mut u32);
 
 		let advance = priv_ecall_concurrent(&mut state, 0, &clint, &module, &uart);
 

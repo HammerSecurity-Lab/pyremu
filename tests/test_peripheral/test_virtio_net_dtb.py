@@ -9,7 +9,7 @@
 (``virtio_net_m``) 的节点不得出现. 树中出现的中断源会被受调试程序内核在
 自己的 S context 上使能, 该中断源一置位即产生 SEIP, 而 SEIP 由宿主 S 模式支配.
 
-注意: 必须通过 Emulator 导入链以规避 core.decoder ⟷ utils.disassem 循环导入.
+注意: 必须通过 Emulator 导入链以规避 core.decoder ⟷ disasm 循环导入.
 """
 
 import struct

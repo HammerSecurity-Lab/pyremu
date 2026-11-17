@@ -1,4 +1,4 @@
-max_width = 100
+max_width = 85
 tab_spaces = 4
 hard_tabs = true
 reorder_imports = true

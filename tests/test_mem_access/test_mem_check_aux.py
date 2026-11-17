@@ -249,11 +249,14 @@ class TestPageWalkDenied:
     def test_accessed_write_denied_reports_load_access_fault(self, bus):
         """页表读取获准而 A 位置位写入被拒绝时, 按原访问类型投递访问故障.
 
-        只读 PMP 条目放行页表页的读取, 拒绝遍历期间对页表页的写入; 根页表项
+        只读 PMP 条目放行页表页的读取, 拒绝遍历期间对页表页的写入; 叶子页表项
         尚未置位 A 位, 置位动作被拒绝后读取访问按 LdAccessFault 终止.
         """
         hart = _make_hart(bus, pmpcfg=PMP_READ_ONLY)
         _install_tables(hart, _identity_leaves(1))
+        leaf_pa = RAM_BASE + 0x3000 + DATA_VPN0 * 8
+        raw = int.from_bytes(hart.mem_read_phy(leaf_pa, 8), "little")
+        hart.mem_write_phy(leaf_pa, (raw & ~PTE_A).to_bytes(8, "little"))
         with pytest.raises(AccessFaultError):
             hart.mem_read(DATA_VA, 8)
         assert hart.mcause_val == 5
@@ -263,17 +266,33 @@ class TestPageWalkDenied:
 class TestAccessedDirtyBits:
     """hart 级访存后页表项的 A 位与 D 位."""
 
-    def test_load_sets_accessed_on_pointer_levels(self, bus, hart):
-        """一次读取访问使根页表与二级页表项带上 A 位."""
+    def test_load_sets_accessed_on_leaf_only(self, bus, hart):
+        """一次读取访问只在叶子页表项上置位 A 位, 指针级页表项保持不变.
+
+        非叶页表项的 D、A 与 U 位是保留位, 必须为 0; 置位后该页表项按规范
+        即为无效.
+        """
         _install_tables(hart, _identity_leaves(1))
         root_pte = RAM_BASE + 0x1000 + ((DATA_VA >> 30) & 0x1FF) * 8
-        before = int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
-        assert not before & PTE_A
+        l2_pte = RAM_BASE + 0x2000 + ((DATA_VA >> 21) & 0x1FF) * 8
+        leaf_pa = RAM_BASE + 0x3000 + DATA_VPN0 * 8
+        before_root = int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
+        before_l2 = int.from_bytes(hart.mem_read_phy(l2_pte, 8), "little")
+        # 清掉叶子的 A 位, 使遍历必须置位它.
+        raw = int.from_bytes(hart.mem_read_phy(leaf_pa, 8), "little")
+        hart.mem_write_phy(leaf_pa, (raw & ~PTE_A).to_bytes(8, "little"))
 
         hart.mem_read(DATA_VA, 8)
 
-        after = int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
-        assert after & PTE_A, "页表遍历后根页表项应置位 A 位"
+        assert (
+            int.from_bytes(hart.mem_read_phy(root_pte, 8), "little")
+            == before_root
+        ), "根页表项为指针项, 不得置位保留位"
+        assert (
+            int.from_bytes(hart.mem_read_phy(l2_pte, 8), "little") == before_l2
+        ), "二级页表项为指针项, 不得置位保留位"
+        after = int.from_bytes(hart.mem_read_phy(leaf_pa, 8), "little")
+        assert after & PTE_A, "叶子页表项应置位 A 位"
 
     def test_store_sets_dirty_on_leaf(self, bus, hart):
         """写访问在叶子页表项上置位 D 位."""

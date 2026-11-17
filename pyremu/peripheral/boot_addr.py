@@ -6,7 +6,7 @@
 """启动地址寄存器 — 每个 hart 一个 64 位寄存器, 偏移 ``8 * hartid``.
 
 hart 复位后在引导只读存储器内取指, 其中的代码读取本寄存器取得下一级程序的入口
-地址. 寄存器可读可写; 窗口内不属于任何 hart 的字节读回零, 写入丢弃.
+地址. 寄存器可读可写
 
 设备树中该节点不带 compatible, 按节点名称 ``boot-address-reg`` 识别.
 """
@@ -31,7 +31,7 @@ class BootAddrReg(Device):
     ) -> None:
         assert num_harts > 0, f"num_harts={num_harts} 须大于 0"
         assert size >= ENTRY_BYTES * num_harts, (
-            f"窗口大小 0x{size:x} 不足以容纳 {num_harts} 个 hart 的寄存器"
+            f"容量(0x{size:x})不足以容纳 {num_harts} 个 hart 的寄存器"
         )
         self.base_addr = base
         self.size = size

@@ -16,7 +16,17 @@ import pytest
 from pyremu.debug import base, Debugger
 from pyremu.debug.utils import trap_cause_name
 from pyremu.peripheral.uart import RX_FIFO_SIZE
-from tests.conftest import make_test_dbg_buffered
+from pyremu.utils.parse_bin import FirmwareSegment
+from tests.conftest import (
+    make_test_dbg,
+    make_test_dbg_buffered,
+    make_test_emu,
+    make_test_image,
+    TEST_PROG_PA,
+)
+
+# 关机与复位请求设备的 MMIO 基址.
+POWER_BASE = 0x0010_0000
 
 # ============================================================
 #  测试装置
@@ -831,3 +841,194 @@ class TestHistoryFilePath:
     def test_absolute_path_is_used_as_given(self, monkeypatch):
         monkeypatch.setenv("PYREMU_HISTORY_FILE", "/var/tmp/pyremu_history")
         assert base.history_file_path() == Path("/var/tmp/pyremu_history")
+
+
+class TestDebuggerInit:
+    """调试器初始化."""
+
+    def test_default_hart_id(self):
+        emu = make_test_emu(num_harts=2, prog_cnt=0x1000)
+        dbg = Debugger(emulator=emu)
+        assert dbg._hart_id == 0
+
+    def test_explicit_hart_id(self):
+        emu = make_test_emu(num_harts=4, prog_cnt=0x1000)
+        dbg = Debugger(emulator=emu, hart_id=2)
+        assert dbg._hart_id == 2
+
+    def test_hart_property(self):
+        emu = make_test_emu(num_harts=3, prog_cnt=0x1000)
+        dbg = Debugger(emulator=emu, hart_id=1)
+        assert dbg.hart is emu.harts[1]
+
+    def test_with_image(self):
+        emu = make_test_emu(prog_cnt=0x1000)
+        img = make_test_image()
+        dbg = Debugger(emulator=emu, hart_id=0, image=img)
+        assert dbg._image is img
+
+    def test_build_completer_includes_commands_and_regs(self):
+        dbg = make_test_dbg()
+        c = dbg._build_completer()
+        # WordCompleter.words 是 Sequence[str] | (() -> Sequence[str]) 联合类型
+        words = c.words() if callable(c.words) else c.words
+        # 包含命令
+        for cmd in ["step", "continue", "regs", "pc", "quit", "help"]:
+            assert cmd in words, f"缺少命令: {cmd}"
+        # 包含 GPR ABI 名称
+        for abi in ["zero", "ra", "sp", "t0", "a0", "s0"]:
+            assert abi in words, f"缺少 GPR: {abi}"
+        # 包含 CSR 名称
+        for csr in ["mstatus", "mtvec", "mepc", "mcause"]:
+            assert csr in words, f"缺少 CSR: {csr}"
+
+
+class TestDebuggerHelpers:
+    """辅助方法."""
+
+    @pytest.mark.parametrize(
+        "v, expected",
+        [
+            (0, "0x0000000000000000"),
+            (0xDEADBEEF, "0x00000000deadbeef"),
+            (0xFFFFFFFFFFFFFFFF, "0xffffffffffffffff"),
+            (-1, "0xffffffffffffffff"),  # 负值被掩码为 64-bit
+        ],
+    )
+    def test_hex(self, v, expected):
+        assert Debugger._hex(v) == expected
+
+    @pytest.mark.parametrize(
+        "n, expected",
+        [
+            (0, "0 B"),
+            (512, "512.000 B"),
+            (1024, "1.000 KB"),
+            (1536, "1.500 KB"),
+            (1048576, "1.000 MB"),
+            (1073741824, "1.000 GB"),
+            (1099511627776, "1.000 TB"),
+            (1125899906842624, "1.000 PB"),
+            # 超出最大单位: 落到 EB, 不退回 B
+            (2**70 * 12, "12288.000 EB"),  # 12 ZB -> 最远单位 EB
+        ],
+    )
+    def test_fmt_size(self, n, expected):
+        assert Debugger._fmt_size(n) == expected
+
+    def test_trap_cause_name(self):
+        dbg = make_test_dbg()
+        # mcause=3 应为断点异常
+        name = dbg._trap_cause_name(3)
+        assert "breakpoint" in name.lower() or "Breakpoint" in name
+
+    def test_trap_cause_name_interrupt(self):
+        dbg = make_test_dbg()
+        # MSI: bit63=1, code=3
+        irq_mcause = (1 << 63) | 3
+        name = dbg._trap_cause_name(irq_mcause)
+        assert name == "MmodeSoftInterrupt"
+
+    def test_warn_prints(self, capsys):
+        dbg = make_test_dbg()
+        dbg._warn("test warning")
+        # Rich 输出到 stderr, 我们只验证不抛异常
+
+    def test_err_prints(self, capsys):
+        dbg = make_test_dbg()
+        dbg._err("test error")
+
+
+class TestPostPowerRequest:
+    """关机与复位请求置位后的命令行为."""
+
+    def test_cmd_step_reports_and_skips(self):
+        """单步不执行指令, 并报告关机请求."""
+        dbg, emu, buf = make_test_dbg_buffered(
+            prog_cnt=TEST_PROG_PA, is_code_loaded=False
+        )
+        emu.load_code(TEST_PROG_PA, b"\x13\x00\x00\x00" * 2)
+        emu.bus.write(POWER_BASE, (0x5555).to_bytes(4, "little"))
+        dbg.cmd_step(1)
+        assert dbg.hart.pc == TEST_PROG_PA
+        assert "关机" in buf.getvalue()
+
+    def test_cmd_run_reports_and_skips(self):
+        """按周期执行不推进 PC, 并报告关机请求."""
+        dbg, emu, buf = make_test_dbg_buffered(
+            prog_cnt=TEST_PROG_PA, is_code_loaded=False
+        )
+        emu.load_code(TEST_PROG_PA, b"\x13\x00\x00\x00" * 2)
+        emu.bus.write(POWER_BASE, (0x5555).to_bytes(4, "little"))
+        dbg.cmd_run(2)
+        assert dbg.hart.pc == TEST_PROG_PA
+        assert "关机" in buf.getvalue()
+
+    def test_status_overview_shows_off(self):
+        """概览的 State 列为 off."""
+        dbg, emu, buf = make_test_dbg_buffered(num_harts=2)
+        emu.bus.write(POWER_BASE, (0x7777).to_bytes(4, "little"))
+        dbg.cmd_status()
+        assert "off" in buf.getvalue()
+
+    def test_status_detail_reports_request(self):
+        """详情标题给出复位请求."""
+        dbg, emu, buf = make_test_dbg_buffered()
+        emu.bus.write(POWER_BASE, (0x7777).to_bytes(4, "little"))
+        dbg.cmd_status("0")
+        assert "复位" in buf.getvalue()
+
+
+class TestPrivilegeBoundary:
+    """特权级边界帧解析."""
+
+    def test_resolve_mmode_frame(self):
+        """_resolve_boundary_frame 对 M 模式返回 M."""
+        dbg = make_test_dbg()
+        boundary = dbg._resolve_boundary_frame(0x80000000, "M")
+        assert boundary is not None
+        assert boundary[0] == "M"  # (label, boundary_mode)
+
+    def test_is_valid_mmode_code_true(self):
+        """M 模式代码段判断 (需要 _image 中 .text 段名)."""
+        dbg = make_test_dbg()
+        # 注入 image 使 _is_valid_mmode_code 能检查段名
+        img = make_test_image()
+        img.segments = [
+            FirmwareSegment(
+                vaddr=0x80000000,
+                memsz=0x10000,
+                data=b"\x00" * 0x10000,
+                name=".text",
+            )
+        ]
+        dbg._image = img
+        assert dbg._is_valid_mmode_code(0x80000000) is True
+
+    def test_is_valid_mmode_code_false(self):
+        """非 M 模式代码段判断."""
+        dbg = make_test_dbg()
+        # 任意地址不在 RAM 内
+        assert dbg._is_valid_mmode_code(0x1000) is False
+
+
+@pytest.mark.parametrize(
+    "val, expected_str",
+    [
+        (0, "0.000"),
+        (99, "99.000"),
+        (999, "999.000"),
+        (1000, "1.000K"),
+        (500000, "500.000K"),
+        (999999, "999.999K"),
+        (1_000_000, "1.000M"),
+        (1_999_000, "1.999M"),
+        (1_999_400, "1.999M"),
+        (1_999_500, "2.000M"),
+        (1_999_999, "2.000M"),
+        (500_000_000, "500.000M"),
+        (1_000_000_000, "1.000B"),
+    ],
+)
+def test_fmt_instr_cnt(val: int, expected_str: str):
+    assert Debugger._fmt_instr_count(val) == expected_str

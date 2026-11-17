@@ -234,6 +234,10 @@ class CompressedInstrOps:
         rd_rs1 = cf.rd  # C.JR/C.JALR 的 rs1, C.MV/C.ADD 的 rd
         rs2 = cf.rs2
         if rd_rs1 == 0 and rs2 == 0:
+            # 只有 bit12 置位时该编码是 C.EBREAK; bit12 清零的同一编码是
+            # 保留的 C.JR x0, 按非法指令处理.
+            if not cf.bit12:
+                raise NotImplementedError("C.JR x0 (reserved)")
             self.trap_ebreak()
             return 0
         if rs2 == 0:

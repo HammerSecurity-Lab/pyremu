@@ -15,8 +15,8 @@ Bus 管理:
 
 RAM 与其访问路径由两个独立的类承担, Bus 只保留设备表与地址路由:
 
-- DirectRam  — bytearray 与地址窗口, 提供绕过 L2 缓存的读写。L2 缓存把它作为 RAM
-               后端, Bus 把它作为与设备无关的直接访问入口。
+- DirectRam  — bytearray 与地址内存范围, 提供绕过 L2 缓存的读写。
+               L2 缓存把它作为 RAM后端, Bus 把它作为与设备无关的直接访问入口。
 - MainMem    — RAM 与 L2 缓存组成的访问路径, 不含设备。设备持有本对象的读写方法
                而不持有 Bus 的, 以免 Bus 与设备之间形成环形引用。
 
@@ -154,10 +154,10 @@ class BootRom(Device):
 
 
 class DirectRam:
-    """RAM 缓冲区及其地址窗口, 提供绕过 L2 缓存的读写.
+    """RAM 缓冲区及其内存范围, 提供绕过 L2 缓存的读写.
 
     L2 缓存以本对象的方法作为 RAM 后端, Bus 以本对象的方法作为与设备无关的直接
-    访问入口. 本对象只持有 bytearray 与地址窗口, 不持有 Bus 与任何设备, 故上述
+    访问入口. 本对象只持有 bytearray 与内存范围, 不持有 Bus 与任何设备, 故上述
     两处持有本对象的方法时不会与 Bus 之间形成环形引用.
     """
 
@@ -180,16 +180,13 @@ class DirectRam:
         # RAM 偏移. 由 apply_pie_ofs 在装载固件时写入一次; 此后每一次 RAM 访问
         # 与加速执行引擎的每一轮都要读取它, 故不能留作装载函数内的局部量.
         # 字节数为 0 表示未施加装载偏移, 此时基址取值无意义
-        # (固件的链接基址可以取 0).
         self._pie_ofs_base: int = 0
         self._pie_ofs_size: int = 0
 
         self._use_native: bool = native_available()
         self._ram_native_ptr: int = 0
         self._read_out_ptr: int = 0
-        # RAM 直读窗口, 供 bus_read_ram / bus_write_ram 一次性传入:
-        # (缓冲区首地址, 字节数, 基址, 影子窗口基址, 影子窗口字节数).
-        # 影子窗口由 apply_pie_ofs 登记, 故该元组在彼处重建.
+        # 直读RAM, 供 bus_read_ram / bus_write_ram 一次性传入
         self._ram_win: tuple[int, int, int, int, int] = (
             0,
             self._ram_size,
@@ -550,11 +547,11 @@ class Bus:
         return self._ram_direct.is_ram_addr(addr)
 
     def is_ram_range(self, addr: int, size: int) -> bool:
-        """判断区间 [addr, addr + size) 是否完整落在 RAM 窗口内."""
+        """判断区间 [addr, addr + size) 是否完整落在 RAM 内."""
         return self._ram_direct.is_ram_range(addr, size)
 
     def is_rom_range(self, addr: int, size: int) -> bool:
-        """判断区间 [addr, addr + size) 是否完整落在引导只读存储器的窗口内."""
+        """判断区间 [addr, addr + size) 是否完整落在引导只读存储器内."""
         return self._boot_rom is not None and self._boot_rom.contains_range(
             addr, size
         )
@@ -569,7 +566,7 @@ class Bus:
         return dev is not None
 
     def is_device_range(self, addr: int, size: int) -> bool:
-        """判断区间 [addr, addr + size) 是否完整落在某个设备窗口内."""
+        """判断区间 [addr, addr + size) 是否完整落在某个设备物理内存范围."""
         dev, _ = self._find_device(addr)
         return dev is not None and addr + size <= dev.base_addr + dev.size
 
@@ -587,11 +584,12 @@ class Bus:
         return self.is_ram_addr(addr) or self.is_device_addr(addr)
 
     def pma_check(self, addr: int, size: int) -> bool:
-        """PMA 检查: 区间 [addr, addr + size) 是否完整落在主存或某个设备窗口内.
+        """PMA 检查: 区间 [addr, addr + size) 是否完整落在主存或某个设备范围内.
 
         Returns:
             True 若整个区间属于主存或同一个已注册的 I/O 设备.
-            区间越过窗口边界或落在空洞中返回 False, 上层应触发 AccessFault.
+            区间越过边界或落在未定义物理地址区域中返回 False,
+            上层应触发 AccessFault.
         """
         return self.is_ram_range(addr, size) or self.is_device_range(addr, size)
 
@@ -599,6 +597,13 @@ class Bus:
     def storage_intervals(self) -> tuple[tuple[str, int, int], ...]:
         """返回存放映像的存储区间, 每项为 (名称, 起址, 字节数)."""
         return tuple(self._storage_intervals)
+
+    def device_entries(self) -> tuple[tuple[int, Device], ...]:
+        """按基址升序返回已注册设备的 (基址, 设备).
+
+        返回的是副本, 调用方不得据此修改设备表; 未注册任何设备时返回空元组.
+        """
+        return tuple(sorted(self._devices.items()))
 
     def is_storage_range(self, addr: int, size: int) -> bool:
         """判断区间 [addr, addr + size) 是否完整落在某个存储区间内."""
@@ -709,8 +714,9 @@ class Bus:
     def try_read(self, addr: int, size: int) -> bytes:
         """安全读取物理内存 — 读取不产生异常.
 
-        本函数与 read() 是同一入口, 自身不捕获异常. 未落入任何设备与 RAM 窗口的
-        地址由 _ram_read_direct 返回 size 个零字节;
+        本函数与 read() 是同一入口, 自身不捕获异常.
+        未落入任何设备与 RAM 的地址由 _ram_read_direct
+        返回 size 个零字节;
         设备读实现抛出的异常沿 read() 向上传播.
         适用于调试器、内存 dump 等尽力而为的场景.
 

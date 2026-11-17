@@ -36,7 +36,7 @@ pub mod thread;
 #[path = "../src/trap_frame.rs"]
 mod trap_frame;
 
-/// 时钟源与 S 模式 CSR 的替身。本层只用到时钟源与 sepc/sstatus 四项, 前者可被用例设定,
+/// 时钟源与 S 模式 CSR。本层只用到时钟源与 sepc/sstatus 四项, 前者可被用例设定,
 /// 后者只作记录。
 mod csr {
 	use core::sync::atomic::{AtomicU64, Ordering};
@@ -200,7 +200,13 @@ pub mod syscall {
 
 		/// futex 替身。本入口不覆盖 futex 语义, 故一律报告无等待者。
 		pub mod futex {
-			pub fn futex(_uaddr: u64, _op: u64, _val: u64, _arg3: u64, _uaddr2: u64) -> u64 {
+			pub fn futex(
+				_uaddr: u64,
+				_op: u64,
+				_val: u64,
+				_arg3: u64,
+				_uaddr2: u64,
+			) -> u64 {
 				0
 			}
 		}
@@ -225,7 +231,9 @@ mod tests {
 		ecall_aux::SUSPEND_COUNT.store(0, Ordering::SeqCst);
 		ecall_aux::set_wake_on_suspend(0);
 		mem::reset_kstacks();
-		thread::tests::reset_scheduler(mem::try_alloc_thread_kstack(thread::THREAD_KSTACK_SIZE));
+		thread::tests::reset_scheduler(mem::try_alloc_thread_kstack(
+			thread::THREAD_KSTACK_SIZE,
+		));
 		guard
 	}
 
@@ -235,7 +243,8 @@ mod tests {
 			regs: [0; 32],
 			sp_before_trap: 0,
 		};
-		let external = thread::clone_thread(&gprs, CLONE_VM | CLONE_THREAD, 0, 0, 0, 0);
+		let external =
+			thread::clone_thread(&gprs, CLONE_VM | CLONE_THREAD, 0, 0, 0, 0);
 		thread::tests::clear_switch();
 		(external - 1) as usize
 	}

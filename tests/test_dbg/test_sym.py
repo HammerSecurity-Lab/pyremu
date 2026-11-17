@@ -15,7 +15,11 @@ from pyremu.debug import sym
 from pyremu.debug.sym import model
 from pyremu.debug.sym.model import SymAvailItem
 from pyremu.utils.parse_bin import FirmwareImage, FirmwareSegment
-from tests.conftest import make_test_dbg_buffered
+from tests.conftest import (
+    make_test_dbg,
+    make_test_dbg_buffered,
+    make_test_image,
+)
 
 RAM_BASE = 0x8000_0000
 RAM_SIZE = 0x0004_0000
@@ -676,6 +680,251 @@ class TestCmdSymbols:
         )
         dbg.cmd_symbols("zz")
         assert "sym zzz, sym zzz" in buf.getvalue()
+
+    def test_list_all(self):
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        dbg.cmd_symbols()
+
+    def test_filter(self):
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        dbg.cmd_symbols("main")
+
+    def test_no_match(self):
+        dbg = make_test_dbg()
+        dbg._image = make_test_image()
+        dbg.cmd_symbols("nonexistent")
+
+    def test_no_image(self):
+        dbg = make_test_dbg()
+        dbg._image = None
+        dbg.cmd_symbols()
+
+    def test_resolve_symbol(self):
+        dbg = make_test_dbg()
+        syms = {"main": 0x2000, "_start": 0x1000}
+        name = dbg._resolve_symbol(syms, 0x2000)
+        assert name == "main"
+
+    def test_resolve_symbol_not_found(self):
+        dbg = make_test_dbg()
+        name = dbg._resolve_symbol({}, 0x9999)
+        assert name is None
+
+    def test_resolve_symbol_closest_predecessor(self):
+        """最近前驱符号匹配: PC 在函数中间时返回所在函数名."""
+        dbg = make_test_dbg()
+        syms = {"_start": 0x1000, "main": 0x2000, "init_warmboot": 0xE000}
+        assert dbg._resolve_symbol(syms, 0x2004) == "main"  # 中间
+        assert dbg._resolve_symbol(syms, 0x2000) == "main"  # 精确
+        assert dbg._resolve_symbol(syms, 0x100C) == "_start"  # 中间
+        assert dbg._resolve_symbol(syms, 0xE670) == "init_warmboot"  # 中间
+
+    def test_resolve_symbol_far_away_returns_none(self):
+        """距离 > 64 KiB 视为不在任何函数内."""
+        dbg = make_test_dbg()
+        syms = {"main": 0x2000}
+        # 0x12000 - 0x2000 = 0x10000 (64 KiB) 仍在范围内
+        # 0x12001 - 0x2000 = 0x10001 > 64 KiB -> None
+        assert dbg._resolve_symbol(syms, 0x12001) is None
+
+    def test_resolve_symbol_with_pie_offset_applied(self):
+        """调用方已减去 _load_offset, 传入链接时地址能正确匹配."""
+        dbg = make_test_dbg()
+        dbg._load_offset = 0x80000000
+        syms = {"fdt_next_tag": 0x21D58}
+        # _fn_name 传运行时 PC, 内部减去 _load_offset
+        runtime_pc = 0x80021EC4  # fdt_next_tag 内部
+        name = dbg._resolve_symbol(syms, runtime_pc - dbg._load_offset)
+        assert name == "fdt_next_tag"
+
+    def test_resolve_symbol_range_exact_match(self):
+        """范围匹配: start <= addr < end -> 返回正确的包含符号."""
+        dbg = make_test_dbg()
+        # 模拟 vmlinux 中的场景: aio_complete_rw 和 vfs_coredump 距离 60KB+
+        syms = {"aio_complete_rw": 0x1000, "vfs_coredump": 0x11000}
+        ranges = [
+            (0x1000, 0x1080, "aio_complete_rw"),
+            (0x11000, 0x12000, "vfs_coredump"),
+        ]
+        # 0x1060 在 aio_complete_rw 范围内 — 旧算法会错误返回 vfs_coredump
+        assert dbg._resolve_symbol(syms, 0x1060, ranges) == "aio_complete_rw"
+        # 0x1000 精确起始
+        assert dbg._resolve_symbol(syms, 0x1000, ranges) == "aio_complete_rw"
+        # 0x107F 刚好在边界内
+        assert dbg._resolve_symbol(syms, 0x107F, ranges) == "aio_complete_rw"
+        # 0x1080 = end — 不在任何范围内, ranges 存在时返回 None
+        # (不回退到最近前驱: 错误的函数名比无符号名更有害)
+        assert dbg._resolve_symbol(syms, 0x1080, ranges) is None
+
+    def test_resolve_symbol_range_no_match_returns_none(self):
+        """ranges 存在但地址不在任何范围内 -> 返回 None (不回退猜测)."""
+        dbg = make_test_dbg()
+        syms = {"func_a": 0x1000, "func_b": 0x1200}
+        ranges = [(0x1000, 0x1080, "func_a"), (0x1200, 0x1280, "func_b")]
+        # 0x1100 不在任何范围内, ranges 存在 -> 返回 None
+        # (旧行为: 返回 "func_a" 作为最近前驱. 这在 kernel 中会错误将
+        #  静态函数内的 PC 挂到前一个 GLOBAL 符号名下)
+        assert dbg._resolve_symbol(syms, 0x1100, ranges) is None
+
+    def test_resolve_symbol_no_ranges_still_works(self):
+        """无 ranges 参数时回退到旧的前驱算法 (向后兼容)."""
+        dbg = make_test_dbg()
+        syms = {"main": 0x2000}
+        assert dbg._resolve_symbol(syms, 0x2004) == "main"  # 中间
+        assert dbg._resolve_symbol(syms, 0x2000) == "main"  # 精确
+
+    def test_resolve_symbol_local_func_correctly_resolved(self):
+        """LOCAL 静态函数内的 PC 正确解析, 不挂到前驱 GLOBAL 符号上.
+
+        真实回追溯源 (2026-07-04, Linux vmlinux bt):
+          workqueue_sysfs_register (GLOBAL): 0x80045664, size=254
+          process_scheduled_works (LOCAL): 0x8004604c, size=912 ← PC=0x800461c6
+          worker_thread (LOCAL): 0x80047a94, size=638 ← PC=0x80047c38
+          kthread_blkcg           (GLOBAL): 0x8004d770, size=34
+          kthread (LOCAL): 0x8004d794, size=256 ← PC=0x8004d870
+
+        旧行为: LOCAL 符号被 skip_local 过滤, ranges 中缺失, PC 经二分查找
+        未命中后回退到最近前驱 GLOBAL, 导致 #03~#05 帧函数名全错.
+        """
+        dbg = make_test_dbg()
+        syms = {
+            "workqueue_sysfs_register": 0x80045664,
+            "process_scheduled_works": 0x8004604C,
+            "worker_thread": 0x80047A94,
+            "kthread_blkcg": 0x8004D770,
+            "kthread": 0x8004D794,
+        }
+        ranges = [
+            (0x80045664, 0x80045762, "workqueue_sysfs_register"),
+            (0x8004604C, 0x800463DC, "process_scheduled_works"),
+            (0x80047A94, 0x80047D12, "worker_thread"),
+            (0x8004D770, 0x8004D792, "kthread_blkcg"),
+            (0x8004D794, 0x8004D894, "kthread"),
+        ]
+        # 旧行为 (无 ranges): 前驱匹配 -> workqueue_sysfs_register (错误!)
+        # 新行为 (有 ranges): 精确包含 -> process_scheduled_works
+        assert (
+            dbg._resolve_symbol(syms, 0x800461C6, ranges)
+            == "process_scheduled_works"
+        )
+        assert dbg._resolve_symbol(syms, 0x80047C38, ranges) == "worker_thread"
+        assert dbg._resolve_symbol(syms, 0x8004D870, ranges) == "kthread"
+        # GLOBAL 函数仍正常匹配
+        assert (
+            dbg._resolve_symbol(syms, 0x80045664, ranges)
+            == "workqueue_sysfs_register"
+        )
+
+    def test_resolve_symbol_gap_between_funcs_returns_none(self):
+        """两函数间空隙地址: ranges 存在 -> 返回 None, 不猜测.
+
+        kthread_blkcg 结束于 0x8004D792, kthread 始于 0x8004D794.
+        间隙 [0x8004D792, 0x8004D794) 2 字节 — 既不属于前者也不属于后者.
+        """
+        dbg = make_test_dbg()
+        syms = {"kthread_blkcg": 0x8004D770, "kthread": 0x8004D794}
+        ranges = [
+            (0x8004D770, 0x8004D792, "kthread_blkcg"),
+            (0x8004D794, 0x8004D894, "kthread"),
+        ]
+        assert dbg._resolve_symbol(syms, 0x8004D792, ranges) is None  # end 排除
+        assert dbg._resolve_symbol(syms, 0x8004D793, ranges) is None  # 间隙中
+        # 边界内
+        assert dbg._resolve_symbol(syms, 0x8004D794, ranges) == "kthread"
+
+    def test_find_segment_with_pie_offset(self):
+        """_find_segment 传入链接时地址 (已减 _load_offset) 匹配段."""
+        image = FirmwareImage(
+            entry_point=0x0,
+            format="elf",
+            segments=[
+                FirmwareSegment(
+                    vaddr=0x0, data=b"", memsz=0x3EBB0, name=".text"
+                ),
+            ],
+            symbols={},
+        )
+        dbg = make_test_dbg()
+        dbg._image = image
+        dbg._load_offset = 0x80000000
+        # 运行时地址 0x80021ec4, 减 _load_offset 后 = 0x21ec4 在 .text 范围内
+        seg = dbg._find_segment(0x21EC4)
+        assert seg is not None
+        assert seg.name == ".text"
+
+    def test_find_segment_miss_far_address(self):
+        """不落在任何段内返回 None (远地址)."""
+        dbg = make_test_dbg()
+        seg = dbg._find_segment(0xFFFF_FFFF)
+        assert seg is None
+
+    def test_find_segment_gap_between_segments_returns_none(self):
+        """段间空隙中的地址返回 None — 不做最近前驱猜测.
+
+        模拟真实固件布局: .text 在 VA 0x0, .sittim 在 VA 0x180000.
+        内核 Image 加载在 VA 0x200000 (fw_jump 模式), 无对应固件段.
+        VA 0x201048 在 .sittim 之后 0x72e23 字节 — 距离足够近
+        (在旧实现的 1 MiB 阈值内) 会触发错误猜测, 返回 .sittim.
+        修复后应返回 None.
+        """
+        image = FirmwareImage(
+            entry_point=0x0,
+            format="elf",
+            segments=[
+                FirmwareSegment(
+                    vaddr=0x0, data=b"", memsz=0x3F260, name=".text"
+                ),
+                FirmwareSegment(
+                    vaddr=0x180000, data=b"", memsz=0xE225, name=".sittim"
+                ),
+            ],
+            symbols={},
+        )
+        dbg = make_test_dbg()
+        dbg._image = image
+        dbg._load_offset = 0x80000000
+        # 内核 Image 区域 (fw_jump): VA 0x200000 起, 无对应段
+        seg = dbg._find_segment(0x201048)
+        assert seg is None, (
+            f"段间空隙地址不应匹配任何段, 但返回了 {seg.name if seg else None}"
+        )
+
+    def test_find_segment_gap_just_after_segment_returns_none(self):
+        """紧接段末尾之后的地址返回 None.
+
+        旧实现会在距离 <= 1 MiB 时返回最近前驱段,
+        这对栈回溯是有害的 — 返回错误的段名比无段名更误导.
+        """
+        image = FirmwareImage(
+            entry_point=0x0,
+            format="elf",
+            segments=[
+                FirmwareSegment(
+                    vaddr=0x1000, data=b"", memsz=0x100, name=".text"
+                ),
+                FirmwareSegment(
+                    vaddr=0x2000, data=b"", memsz=0x80, name=".rodata"
+                ),
+            ],
+            symbols={},
+        )
+        dbg = make_test_dbg()
+        dbg._image = image
+        # .text 结束于 0x1100, .rodata 开始于 0x2000
+        # 0x1100 在 1 MiB 内且紧接 .text — 旧实现会返回 .text
+        seg = dbg._find_segment(0x1100)
+        assert seg is None, (
+            f"段间空隙 0x1100 不应匹配 .text, "
+            f"但返回了 {seg.name if seg else None}"
+        )
+        # 0x1FFF 紧接 .rodata 之前 — 同样不应匹配
+        seg = dbg._find_segment(0x1FFF)
+        assert seg is None, (
+            f"段间空隙 0x1FFF 不应匹配 .rodata, "
+            f"但返回了 {seg.name if seg else None}"
+        )
 
 
 # ============================================================

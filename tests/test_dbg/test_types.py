@@ -13,6 +13,7 @@ from pyremu.debug.types import (
     MemWriteTracker,
     StackFrame,
 )
+from pyremu.memory.bus import Bus
 
 
 class TestHartSnapshot:
@@ -107,6 +108,42 @@ class TestMemWriteTracker:
         tracker(0x1000, b"\x01" * 8)
         tracker(0x2000, b"\x02" * 8)
         assert len(tracker.changes) == 2
+
+    def test_tracks_write_and_records_old_with_real_bus(self):
+        bus = Bus(ram_size=0x10000, ram_base=0x80000000)
+        # 预先写入已知数据
+        bus.write(0x80000000, b"\xaa\xbb\xcc\xdd\xee\xff\x00\x11")
+
+        calls = []
+
+        def orig_write(addr, data):
+            calls.append((addr, data))
+
+        tracker = MemWriteTracker(bus, orig_write)
+        tracker(0x80000000, b"\x11\x22\x33\x44")
+
+        # 原始写入被调用
+        assert len(calls) == 1
+        assert calls[0] == (0x80000000, b"\x11\x22\x33\x44")
+
+        # 记录了旧值
+        assert len(tracker.changes) == 1
+        assert tracker.changes[0].addr == 0x80000000
+        assert tracker.changes[0].old == b"\xaa\xbb\xcc\xdd"
+
+    def test_multiple_writes_accumulate_with_real_bus(self):
+        bus = Bus(ram_size=0x10000, ram_base=0x80000000)
+        bus.write(0x80000100, b"\x00" * 16)
+        tracker = MemWriteTracker(bus, lambda a, d: None)
+
+        tracker(0x80000100, b"\x01" * 4)
+        tracker(0x80000104, b"\x02" * 4)
+        tracker(0x80000108, b"\x03" * 8)
+
+        assert len(tracker.changes) == 3
+        assert tracker.changes[0].addr == 0x80000100
+        assert tracker.changes[1].addr == 0x80000104
+        assert tracker.changes[2].addr == 0x80000108
 
 
 class TestBreakpoint:

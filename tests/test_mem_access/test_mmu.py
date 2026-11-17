@@ -173,13 +173,23 @@ class TestPTELeafDetection:
         assert pte.is_leaf()
         assert not pte.is_ptr()
 
-    def test_w_only_is_not_leaf(self):
-        """仅 W 置位 (无 R 也无 X): 按规范 W 单独不应是叶
-        (RISC-V 不允许 write-only)."""
+    def test_w_only_is_leaf_with_reserved_encoding(self):
+        """仅 W 置位 (R 与 X 均为 0): 属保留编码, 仍按叶页表项处理.
+
+        若按指针项处理, 遍历会进入该页继续读取"页表项", 并在其内容上置位
+        A 位; 按叶子项处理后由权限检查拒绝该次访问.
+        """
         pte = PTE()
         pte.v = True
         pte.w = True
-        assert not pte.is_leaf(), "仅有 W 无 R/X -> 不是合法叶 PTE"
+        assert pte.is_leaf(), "W 置位而 R 清零仍按叶页表项处理"
+        assert not pte.is_ptr()
+        assert not pte.check_perm(
+            want_r=True, want_w=False, want_x=False, is_user=False
+        )
+        assert not pte.check_perm(
+            want_r=False, want_w=True, want_x=False, is_user=False
+        )
 
 
 class TestPTECheckPerm:
@@ -372,14 +382,12 @@ class TestSv39Walk:
         expected_pa = (0x41AB << 12) | 0xABC
         assert pa == expected_pa, f"PA=0x{pa:x}, expected=0x{expected_pa:x}"
 
-    def test_megapage_ppn_mask_regression(self, ram_ctx):
-        """回归: Python ~0x1FF 产生负无穷精度整数, 导致 PPN 掩码异常.
+    def test_megapage_ppn_misaligned_is_invalid(self, ram_ctx):
+        """2 MiB 超级页要求 PPN[0] 为 0, 低 9 位非 0 时该页表项无效.
 
-        2026-06-30: ``ppn & ∼0x3FF`` ->
-        ``ppn & 0xFFFF_FFFF_FFFF_FC00`` (显式截断 64-bit).
-        2026-07-02: 掩码从 10-bit (∼0x3FF) 修正为 9-bit (∼0x1FF):
-          2 MiB 大页 offset 为 VA[20:0] (21 bits), vpn[0]=VA[20:12] (9 bits)
-          仅替换 PPN[8:0]; PPN[9] 为物理地址有效位, 不应清零.
+        RISC-V 特权规范 §4.3.1: 超级页的页表项中 PPN 的低位必须为 0, 否则该
+        页表项无效. 旧实现接受 PPN=0xABCD0 这类取值并与 vpn[0] 拼接, 得到规范
+        之外的物理地址.
         """
         ram, read_fn, write_fn = ram_ctx
 
@@ -389,22 +397,17 @@ class TestSv39Walk:
         l1_pte.ppn = 2
         self._write_pte(ram, write_fn, (1 << PAGE_SHIFT), l1_pte)
 
-        # 2 MiB 大页: PPN=0xABCD0 (bit 9=0, 此用例确保低 9 位正确替换)
-        mega_ppn = 0xABCD0
         l2_pte = PTE()
         l2_pte.v = True
         l2_pte.r = True
-        l2_pte.ppn = mega_ppn
+        l2_pte.ppn = 0xABCD0  # 低 9 位非 0
         self._write_pte(ram, write_fn, (2 << PAGE_SHIFT), l2_pte)
 
         satp = (SATP_MODE_SV39 << 60) | root_ppn
         # VA: vpn[0]=0xAB, offset=0xCDE
         va = (0xAB << 12) | 0xCDE
-        ok, pa, _perm = translate_va(va, satp, read_fn)
-        assert ok, "大页翻译应成功"
-        # PPN: 高位保留, PPN[8:0] 映射到 vpn[0], offset 不变
-        expected_pa = ((mega_ppn & 0xFFFFFFFFFFFE00) | 0xAB) << 12 | 0xCDE
-        assert pa == expected_pa, f"PA=0x{pa:x}, expected=0x{expected_pa:x}"
+        ok, _pa, _perm = translate_va(va, satp, read_fn)
+        assert not ok, "PPN 低 9 位非 0 的 2 MiB 超级页必须按缺页处理"
 
     def test_megapage_ppn_bit9_preserved(self, ram_ctx):
         """2 MiB 大页 PPN bit 9 必须保留 — 它是物理地址的有效位.
@@ -566,29 +569,63 @@ class TestSv39AccessedDirty:
     def _raw(self, read_fn, pa: int) -> int:
         return int.from_bytes(read_fn(pa, 8), "little")
 
-    def test_read_sets_accessed_on_every_level(self, ram_ctx):
-        """读取访问在指针级与叶子级都置位 A 位, 不置位 D 位."""
+    def test_read_sets_accessed_on_leaf_only(self, ram_ctx):
+        """读取访问只在叶子级置位 A 位, 指针级页表项保持不变.
+
+        非叶页表项的 D、A 与 U 位是保留位, 必须为 0; 置位后该页表项按
+        规范即为无效, 下一次遍历会把它当作缺页.
+        """
         satp, read_fn, write_fn = ram_ctx
+        pointer_ptes = (self.ROOT_PTE, self.L1_PTE)
+        roots = {pa: self._raw(read_fn, pa) for pa in pointer_ptes}
         ok, _pa, _perm = translate_va(self.VA, satp, read_fn, write_fn)
         assert ok
-        for pa in (self.ROOT_PTE, self.L1_PTE, self.L2_PTE):
-            raw = self._raw(read_fn, pa)
-            assert raw & PTE_A, f"{pa:#x} 的页表项应置位 A 位"
-            assert not raw & PTE_D, f"读取访问不应置位 {pa:#x} 的 D 位"
+        for pa, before in roots.items():
+            now = self._raw(read_fn, pa)
+            assert now == before, f"{pa:#x} 为指针级页表项, 不得置位保留位"
+        leaf = self._raw(read_fn, self.L2_PTE)
+        assert leaf & PTE_A, "叶子页表项应置位 A 位"
+        assert not leaf & PTE_D, "读取访问不应置位叶子页表项的 D 位"
 
     def test_write_sets_dirty_on_leaf_only(self, ram_ctx):
-        """写访问在叶子级置位 A 位与 D 位, 指针级只置位 A 位."""
+        """写访问只在叶子级置位 A 位与 D 位."""
         satp, read_fn, write_fn = ram_ctx
+        pointer_ptes = (self.ROOT_PTE, self.L1_PTE)
+        roots = {pa: self._raw(read_fn, pa) for pa in pointer_ptes}
         ok, _pa, _perm = translate_va(
             self.VA, satp, read_fn, write_fn, is_write=True
         )
         assert ok
-        for pa in (self.ROOT_PTE, self.L1_PTE):
-            raw = self._raw(read_fn, pa)
-            assert raw & PTE_A
-            assert not raw & PTE_D, "指针级页表项不应置位 D 位"
+        for pa, before in roots.items():
+            now = self._raw(read_fn, pa)
+            assert now == before, f"{pa:#x} 为指针级页表项, 不得置位保留位"
         leaf = self._raw(read_fn, self.L2_PTE)
         assert leaf & PTE_A and leaf & PTE_D, "叶子页表项应同时置位 A 位与 D 位"
+
+    def test_nonleaf_accessed_bit_makes_entry_invalid(self, ram_ctx):
+        """非叶页表项置位 A 位后按缺页处理."""
+        satp, read_fn, write_fn = ram_ctx
+        raw = self._raw(read_fn, self.ROOT_PTE) | PTE_A
+        write_fn(self.ROOT_PTE, raw.to_bytes(8, "little"))
+        ok, _pa, _perm = translate_va(self.VA, satp, read_fn, write_fn)
+        assert not ok, "非叶页表项的保留位被置位时必须按缺页处理"
+
+    def test_reserved_high_bits_make_entry_invalid(self, ram_ctx):
+        """页表项位 [63:54] 为保留位, 置位后按缺页处理."""
+        satp, read_fn, write_fn = ram_ctx
+        raw = self._raw(read_fn, self.L2_PTE) | (1 << 63)
+        write_fn(self.L2_PTE, raw.to_bytes(8, "little"))
+        ok, _pa, _perm = translate_va(self.VA, satp, read_fn, write_fn)
+        assert not ok, "保留位被置位的页表项必须按缺页处理"
+
+    def test_misaligned_megapage_ppn_makes_entry_invalid(self, ram_ctx):
+        """2 MiB 超级页的 PPN[0] 非 0 时该页表项无效."""
+        _satp, read_fn, write_fn = ram_ctx
+        megapage = (0x4001 << 10) | PTE_V | PTE_R | PTE_W
+        write_fn(self.L1_PTE, megapage.to_bytes(8, "little"))
+        satp = (SATP_MODE_SV39 << 60) | self.ROOT_PPN
+        ok, _pa, _perm = translate_va(self.VA, satp, read_fn, write_fn)
+        assert not ok, "PPN 低 9 位非 0 的 2 MiB 超级页必须按缺页处理"
 
     def test_without_writer_leaves_ad_clear(self, ram_ctx):
         """不提供写回调时不置位 A 位与 D 位 (调试器的只读查询路径)."""
@@ -600,11 +637,10 @@ class TestSv39AccessedDirty:
             assert not raw & (PTE_A | PTE_D)
 
     def test_existing_a_bit_not_rewritten(self, ram_ctx):
-        """A 位已置位的页表项不产生写入."""
+        """A 位已置位的叶子页表项不产生写入."""
         satp, read_fn, write_fn = ram_ctx
-        for pa in (self.ROOT_PTE, self.L1_PTE, self.L2_PTE):
-            raw = self._raw(read_fn, pa) | PTE_A
-            write_fn(pa, raw.to_bytes(8, "little"))
+        raw = self._raw(read_fn, self.L2_PTE) | PTE_A
+        write_fn(self.L2_PTE, raw.to_bytes(8, "little"))
 
         written: list[tuple[int, bytes]] = []
         ok, _pa, _perm = translate_va(
@@ -820,19 +856,20 @@ class TestHartMMUIntegration:
 
         # root[0] 指向二级页表, 覆盖 VA 低 1 GiB
         self._write_pte(hart, root_pa + 0 * 8, self._make_pointer_pte(l2_ppn))
-        # 二级页表大页把 VA[0, 2MiB) 映射到 PA[0x10000, 0x30000)
+        # 二级页表大页把 VA[0, 2MiB) 映射到 PA[0x200_0000, 0x220_0000).
+        # 超级页的 PPN 低 9 位必须为 0, 故起始页号为 0x2000.
         self._write_pte(
             hart,
             l2_pa + 0 * 8,
-            self._make_2mib_megapage_pte(PTE_R | PTE_W, 0x10),
+            self._make_2mib_megapage_pte(PTE_R | PTE_W, 0x2000),
         )
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
 
-        # VA=0x1A000 -> offset 0xA000, PA 应 = 0x10000 + 0xA000 = 0x1A000
+        # VA=0x1A000 -> offset 0xA000, PA 应 = 0x200_0000 + 0x1A000
         ok, pa = hart.translate_addr(0x1A000)
         assert ok
-        assert pa == 0x1A000, f"PA=0x{pa:x} (大页内偏移应保留)"
+        assert pa == 0x201_A000, f"PA=0x{pa:x} (大页内偏移应保留)"
 
     # ---- TLB 行为 ----
 
@@ -847,7 +884,7 @@ class TestHartMMUIntegration:
         self._write_pte(
             hart,
             l2_pa + 0 * 8,
-            self._make_2mib_megapage_pte(PTE_R | PTE_W, 0x10),
+            self._make_2mib_megapage_pte(PTE_R | PTE_W, 0x2000),
         )
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn
@@ -874,7 +911,7 @@ class TestHartMMUIntegration:
         self._write_pte(
             hart,
             l2_pa + 0 * 8,
-            self._make_2mib_megapage_pte(PTE_R | PTE_W | PTE_X, 0x10),
+            self._make_2mib_megapage_pte(PTE_R | PTE_W | PTE_X, 0x2000),
         )
 
         hart.satp_val = (SATP_MODE_SV39 << 60) | root_ppn

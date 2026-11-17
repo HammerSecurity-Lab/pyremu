@@ -15,10 +15,10 @@ from pyremu.debug.utils import (
     hex_addr,
     ip_bits,
     IRQ_NAMES,
-    MAX_INSTR_COUNT,
     parse_size,
     trap_cause_name,
 )
+from pyremu.debugger import Debugger
 
 
 class TestHexAddr:
@@ -39,18 +39,18 @@ class TestHexAddr:
 
 
 class TestFmtSize:
-    def test_bytes(self):
-        assert fmt_size(0) == "0 B"
-        assert fmt_size(512) == "512.000 B"
-
-    def test_kb(self):
-        assert fmt_size(2048) == "2.000 KB"
-
-    def test_mb(self):
-        assert fmt_size(2 * 1024 * 1024) == "2.000 MB"
-
-    def test_gb(self):
-        assert fmt_size(3 * 1024**3) == "3.000 GB"
+    @pytest.mark.parametrize(
+        "val, fmt_str",
+        [
+            (0, "0 B"),
+            (512, "512.000 B"),
+            (2048, "2.000 KB"),
+            (2 << 20, "2.000 MB"),
+            (3 << 30, "3.000 GB"),
+        ],
+    )
+    def test_fmt_size(self, val: int, fmt_str: str) -> None:
+        assert fmt_size(val) == fmt_str
 
 
 class TestParseSize:
@@ -78,19 +78,19 @@ class TestParseSize:
 
 
 class TestFmtInstrCount:
-    def test_small(self):
-        assert fmt_instr_count(0) == "0.000"
-        assert fmt_instr_count(999) == "999.000"
-
-    def test_k(self):
-        assert fmt_instr_count(1000) == "1.000K"
-        assert fmt_instr_count(999999) == "999.999K"
-
-    def test_m(self):
-        assert fmt_instr_count(1_000_000) == "1.000M"
-
-    def test_b(self):
-        assert fmt_instr_count(1_000_000_000) == "1.000B"
+    @pytest.mark.parametrize(
+        "val, fmt_str",
+        [
+            (0, "0.000"),
+            (999, "999.000"),
+            (1000, "1.000K"),
+            (999999, "999.999K"),
+            (1_000_000, "1.000M"),
+            (1_000_000_000, "1.000B"),
+        ],
+    )
+    def test_fmt_inst_cnt(self, val: int, fmt_str: str):
+        assert fmt_instr_count(val) == fmt_str
 
 
 class TestTrapCauseName:
@@ -126,6 +126,20 @@ class TestIpBits:
         assert bits[0] == ("USIP", 0, "U 模式软件中断挂起")
         assert bits[-1] == ("MEIP", 11, "M 模式外部中断挂起")
 
+    def test_returns_correct_count(self):
+        bits = Debugger._ip_bits()
+        assert len(bits) == 9
+
+    def test_all_bit_numbers_unique(self):
+        bits = Debugger._ip_bits()
+        bit_nums = {b[1] for b in bits}
+        assert len(bit_nums) == 9
+
+    def test_msip_at_bit3(self):
+        bits = Debugger._ip_bits()
+        msip = next(b for b in bits if b[0] == "MSIP")
+        assert msip[1] == 3
+
 
 class TestExcIrqNames:
     def test_exc_names_coverage(self):
@@ -137,17 +151,11 @@ class TestExcIrqNames:
 
 
 class TestGroupOrder:
-    def test_alpha_first(self):
+    def test_orders(self):
         assert group_order("a") < group_order("1")
-        assert group_order("z") < group_order("0")
-
-    def test_digit_before_underscore(self):
-        assert group_order("0") < group_order("_")
-
-    def test_underscore_before_dot(self):
-        assert group_order("_") < group_order(".")
-
-
-class TestMaxInstrCount:
-    def test_value(self):
-        assert MAX_INSTR_COUNT == 100_000
+        assert (
+            group_order("z")
+            < group_order("0")
+            < group_order("_")
+            < group_order(".")
+        )

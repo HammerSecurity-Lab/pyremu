@@ -65,7 +65,7 @@ EXIT_ECALL = 3
 EXIT_EBREAK = 4
 EXIT_WFI_WAIT = 5
 # 取指的目标物理地址不属于主存: 引擎只从主存读取指令字节, 本轮退出后由 Python
-# 取指; 目标属于设备窗口时读取设备的存储, 属于空洞时投递访问故障
+# 取指; 目标属于设备内存范围时读取设备的存储, 属于空洞时投递访问故障
 EXIT_NOT_MAINRAM = 6
 EXIT_BREAKPOINT = 7
 EXIT_TIMEOUT = 8

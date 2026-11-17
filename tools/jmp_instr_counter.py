@@ -35,7 +35,7 @@
   - 其余情况: 按裸二进制处理, 从 --raw-offset 起扫描到文件末尾。
 
 指令流按 RISC-V 压缩指令的判定规则顺序推进 (低两位不等于 0b11 视为 16 位指令,
-否则视为 32 位指令), 逐条交给项目自身的反汇编器 pyremu.utils.disassem.disasm
+否则视为 32 位指令), 逐条交给项目自身的反汇编器 pyremu.disasm.disasm
 解释, 再按上述五类归类 —— 不另写解码表, 反汇编口径与调试器一致。
 
 用法::
@@ -61,7 +61,7 @@ import lief
 # 反汇编器的 GPR/CSR 名称由 core.registers 在模块初始化时注入, 不导入该模块
 # 则反汇编结果的寄存器一律退化为裸编号 (x0 显示成 ?x0). 此处仅为触发注入.
 import pyremu.core.registers  # noqa: F401
-from pyremu.utils.disassem import disasm, parse_compressed
+from pyremu.disasm import disasm, parse_compressed
 
 # ELF 节头属性: 含该属性的节才承载指令.
 SHF_EXECINSTR = 0x4

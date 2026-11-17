@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Generator
 import os
 from pathlib import Path
+import random
 import struct
 import tempfile
 
@@ -512,6 +513,40 @@ class TestVirtqueueProcessing:
         result = bytes(guest_ram[off : off + SECTOR_SIZE])
         assert result == b"\x00" * SECTOR_SIZE
 
+    def test_read_fills_all_data_descriptors(self, vblk, guest_ram):
+        """数据段跨多个描述符时, 每个数据段都写入, 状态字节落在末描述符."""
+        desc_pa, driver_pa, device_pa = _setup_virtqueue(guest_ram)
+        _configure_queue(vblk, 8, desc_pa, driver_pa, device_pa)
+
+        hdr_pa = _make_gpa(0x6000)
+        data_pa = _make_gpa(0x4000)
+        data2_pa = _make_gpa(0x4400)
+        status_pa = _make_gpa(0x5000)
+        for pa in (data_pa, data2_pa):
+            off = _to_offset(pa)
+            guest_ram[off : off + SECTOR_SIZE] = b"\xff" * SECTOR_SIZE
+        struct.pack_into(
+            "<IIQ", guest_ram, _to_offset(hdr_pa), VIRTIO_BLK_T_IN, 0, 0
+        )
+        next_flag = 1
+        write_flag = 2
+        _write_descriptor(guest_ram, 0, (hdr_pa, 16, next_flag, 1))
+        _write_descriptor(
+            guest_ram, 1, (data_pa, SECTOR_SIZE, next_flag | write_flag, 2)
+        )
+        _write_descriptor(
+            guest_ram, 2, (data2_pa, SECTOR_SIZE, next_flag | write_flag, 3)
+        )
+        _write_descriptor(guest_ram, 3, (status_pa, 1, write_flag, 0))
+        _submit_avail(vblk, guest_ram)
+
+        for pa in (data_pa, data2_pa):
+            off = _to_offset(pa)
+            assert bytes(guest_ram[off : off + SECTOR_SIZE]) == (
+                b"\x00" * SECTOR_SIZE
+            )
+        assert guest_ram[_to_offset(status_pa)] == VIRTIO_BLK_S_OK
+
     def test_write_then_read(self, vblk, guest_ram):
         """写入数据后读取应得到相同数据."""
         desc_pa, driver_pa, device_pa = _setup_virtqueue(guest_ram)
@@ -865,6 +900,88 @@ class TestDiskPersistence:
         assert file_size >= 101 * SECTOR_SIZE
 
 
+class TestAvailIdxWrap:
+    """available ring 的 idx 为 16 位, 设备侧的消费位置必须按同一取模对象比较.
+
+    两者直接比较时, ``avail.idx`` 越过 65535 之后与设备侧不受位宽限制的消费位置
+    永远不相等: 设备会继续消费其后并不存在的条目, 重复处理驱动已经回收的描述符,
+    并把旧数据写入受调试程序已改作他用的缓冲区.
+    """
+
+    @pytest.mark.parametrize(
+        "last_avail_idx, avail_idx, expect",
+        [
+            (10, 13, 3),
+            (0, 0, 0),
+            (65534, 65535, 1),
+            (65534, 0, 2),
+            (65536, 0, 0),
+            (65536, 2, 2),
+        ],
+        ids=[
+            "no_wrap",
+            "equal",
+            "before_wrap",
+            "first_wrap",
+            "wrapped_equal",
+            "wrapped_pending",
+        ],
+    )
+    def test_pending_avail_uses_16_bit_modulus(
+        self,
+        vblk,
+        last_avail_idx: int,
+        avail_idx: int,
+        expect: int,
+    ) -> None:
+        queue = vblk.mmio.queues[0]
+        queue.last_avail_idx = last_avail_idx
+        assert queue.pending_avail(avail_idx) == expect
+
+    def test_avail_idx_wrap_consumes_only_submitted_entries(
+        self, vblk, guest_ram
+    ) -> None:
+        """avail.idx 由 65535 回到 0 时只消费两个已提交的条目.
+
+        设备侧消费位置为 65534, 驱动提交第 65534 与第 65535 项后把
+        avail.idx 写为 0, 即越过 65535. 设备必须恰好处理两项: 多处理会重放
+        驱动已回收的描述符.
+        """
+        desc_pa, driver_pa, device_pa = _setup_virtqueue(guest_ram)
+        _configure_queue(vblk, 8, desc_pa, driver_pa, device_pa)
+        queue = vblk.mmio.queues[0]
+        queue.last_avail_idx = 65534
+
+        # 两个条目的环槽位分别对应 65534 与 65535, 均指向描述符 0.
+        _write_avail_entry(guest_ram, 65534 % 8, 0, driver_pa)
+        _write_avail_entry(guest_ram, 65535 % 8, 0, driver_pa)
+        _set_avail_idx(guest_ram, 0, driver_pa)
+
+        handled: list[int] = []
+
+        def handle(
+            _queue,
+            chain: list,
+        ) -> tuple[bool, int]:
+            handled.append(chain[0].addr)
+            return True, 0
+
+        # 上限取 4, 使修复前的实现只多消费两项而不是不终止.
+        still_pending = vblk.mmio.process_queue(0, handle, max_descriptors=4)
+
+        assert len(handled) == 2, "只应处理已提交的两项"
+        assert not still_pending, "两项处理完毕, 队列已清空"
+        assert queue.last_avail_idx == 65536
+        used_idx = struct.unpack_from(
+            "<H", guest_ram, _to_offset(device_pa) + 2
+        )[0]
+        assert used_idx == 0, "used.idx 以 2 的 16 次幂为取模对象回写"
+
+        # 再一次处理不得消费任何条目.
+        assert not vblk.mmio.process_queue(0, handle, max_descriptors=4)
+        assert len(handled) == 2
+
+
 class TestPlicInterrupt:
     """virtio 完成中断经 PLIC 投递 (set_irq 拉高 / ACK 拉低)."""
 
@@ -1162,3 +1279,66 @@ class TestIrqReportPath:
 
         assert emu.plic.pending[VIRTIO_BLK_IRQ] == 0, "确认后中断源应被拉低"
         assert emu._native_ext_irq.pending == 1, "拉低同样经 irq_sink 通知引擎"
+
+
+class TestRandomizedReadScatter:
+    """随机扇区、长度与描述符切分下, 读回的数据与镜像逐字节一致.
+
+    真实驱动会把一次请求拆成多个数据描述符; 逐个编码的用例覆盖不到随机
+    切分与环回绕的组合, 故用固定种子随机化.
+    """
+
+    SECTORS = 64
+
+    def test_randomized_reads(self, disk_image, guest_ram, mem_read, mem_write):
+        rng = random.Random(0xC0FFEE)
+        pattern = bytes(
+            (i * 37) & 0xFF for i in range(self.SECTORS * SECTOR_SIZE)
+        )
+        with open(disk_image, "wb") as f:
+            f.write(pattern)
+
+        vblk = VirtIOBlock(disk_image, mem_read, mem_write)
+        desc_pa, driver_pa, device_pa = _setup_virtqueue(guest_ram)
+        _configure_queue(vblk, 8, desc_pa, driver_pa, device_pa)
+        hdr_pa = _make_gpa(0x6000)
+        data_base = _make_gpa(0x1_0000)
+        status_pa = _make_gpa(0x2_0000)
+        data_off = _to_offset(data_base)
+
+        for it in range(120):
+            sector = rng.randrange(0, self.SECTORS - 16)
+            total = rng.randint(1, 16) * SECTOR_SIZE
+            parts = []
+            left = total
+            while left:
+                chunk = min(left, rng.choice((512, 1024, 2048)))
+                parts.append(chunk)
+                left -= chunk
+            struct.pack_into(
+                "<IIQ", guest_ram, _to_offset(hdr_pa), 0, 0, sector
+            )
+            _write_descriptor(guest_ram, 0, (hdr_pa, 16, 1, 1), desc_pa)
+            pos = 0
+            for k, chunk in enumerate(parts, start=1):
+                # 每个数据描述符都带 NEXT: 末段之后是状态字节描述符.
+                _write_descriptor(
+                    guest_ram,
+                    k,
+                    (data_base + pos, chunk, 3, k + 1),
+                    desc_pa,
+                )
+                pos += chunk
+            _write_descriptor(
+                guest_ram,
+                len(parts) + 1,
+                (status_pa, 1, 2, 0),
+                desc_pa,
+            )
+            _write_avail_entry(guest_ram, it % 8, 0, driver_pa)
+            _set_avail_idx(guest_ram, it + 1, driver_pa)
+            vblk.process_queue()
+
+            got = bytes(guest_ram[data_off : data_off + total])
+            want = pattern[sector * SECTOR_SIZE : sector * SECTOR_SIZE + total]
+            assert got == want, f"第 {it} 次: 扇区 {sector}, 长度 {total}"

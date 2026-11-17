@@ -2,9 +2,8 @@
  *
  * 把一个载荷创建并转入飞地, 在载荷让出期间应答它的模块请求, 直到载荷终止.
  * 用法: ./app-loader <payload> <modules_dir>
- * 编译: riscv64-linux-gnu-gcc -static -O2 -I../cache-sidechannel \
- *           -I../mod-loader app-loader.c \
- *           ../mod-loader/mod-loader.c -o bin/app-loader
+ * 编译: riscv64-linux-gnu-gcc -static -O2 -I../common app-loader.c \
+ *           ../common/mod_loader.c -o bin/app-loader
  *
  * 退出码: 0 载荷自行退出且退出码为 0; 1 载荷以其它形态结束或执行期出错; 2 用法错误.
  *
@@ -21,8 +20,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#include "mod-loader.h"
-#include "tee_enclave.h"
+#include "enclave_abi.h"
+#include "mod_loader.h"
 
 static long loader_ioctl(
 	int fd,

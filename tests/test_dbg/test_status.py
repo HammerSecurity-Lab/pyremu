@@ -10,7 +10,10 @@ from rich.console import Console
 
 from pyremu.debug.status import StatusOps
 from pyremu.emulator import Emulator
-from tests.conftest import DbgTestBase
+from tests.conftest import (
+    DbgTestBase,
+    make_test_dbg,
+)
 
 # ============================================================
 #  Mini 测试类
@@ -176,3 +179,32 @@ class TestCmdStatus:
     def test_detail_invalid_id(self):
         dbg = _make_sdbg()
         dbg.cmd_status("abc")
+
+    def test_mode(self):
+        dbg = make_test_dbg()
+        dbg.cmd_mode()
+
+    def test_mstatus(self):
+        dbg = make_test_dbg()
+        dbg.hart.csrs["mstatus"].val = 0x1800
+        dbg.cmd_mstatus()
+
+    def test_status(self):
+        dbg = make_test_dbg()
+        dbg.cmd_status()
+
+    def test_status_multi_hart_overview(self):
+        """多 hart 时 info 无参数显示全部 hart 概览."""
+        dbg = make_test_dbg(num_harts=4)
+        dbg.cmd_status()  # 不抛异常即通过
+
+    def test_status_detail(self):
+        """info <hart_id> 显示指定 hart 详情."""
+        dbg = make_test_dbg(num_harts=2)
+        dbg.cmd_status("1")  # 查看 hart 1
+
+    def test_status_invalid_hart_id(self):
+        """info 非法 hart ID."""
+        dbg = make_test_dbg()
+        dbg.cmd_status("999")  # 不抛异常
+        dbg.cmd_status("bad")  # 非整数
