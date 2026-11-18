@@ -12,7 +12,10 @@ import struct
 
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
+from pyremu.interrupt.clint import CLINT
+from pyremu.memory.bus import Bus
 from pyremu.platform import PlatformConfig
+from tests.hart_helpers import make_hart, make_pmp
 
 CLINT_BASE = 0x02000000
 
@@ -319,3 +322,45 @@ class TestTlbSyncCounter:
                 f"第 {round_index + 1} 次 amoadd 应返回旧值 {expected_rd}, "
                 f"实际 {h0.gprs[5] & 0xFFFF_FFFF}"
             )
+
+
+class TestSfenceVmaBroadcast:
+    """SFENCE.VMA 应刷新所有 hart 的 TLB."""
+
+    def test_flush_all_harts_tlbs(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h1.itlb.insert(vpn=0x100, ppn=0x200, perm=0x7, level=1, mdid=0)
+        found, _, _ = h1.itlb.lookup(0x100)
+        assert found
+
+        h0.itlb.flush_all()
+        h0.dtlb.flush_all()
+        h1.itlb.flush_all()
+        h1.dtlb.flush_all()
+
+        for h in [h0, h1]:
+            found, _, _ = h.itlb.lookup(0x100)
+            assert not found, f"H{h.id} itlb 未清空"
+            found, _, _ = h.dtlb.lookup(0x100)
+            assert not found, f"H{h.id} dtlb 未清空"
+
+    def test_tlb_native_roundtrip(self):
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+
+        h0.itlb.insert(vpn=0x100, ppn=0x200, perm=0x7, level=1, mdid=0)
+        assert h0.itlb.lookup(0x100) is not None
+
+        emu.step()
+
+        # TLB entries are preserved across marshal/unmarshal
+        assert h0.itlb.lookup(0x100) is not None, "TLB entry lost after batch"

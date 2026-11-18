@@ -10,11 +10,6 @@ import pytest
 from pyremu.core.decoder import Hart
 from tests.conftest import make_test_ram
 
-# ============================================================
-#  编码辅助: C1/C2 共用 bits[11:7] 为 rd 或 rs1 字段
-#  C0 使用 3-bit 压缩寄存器号 (rd'/rs1'/rs2' ∈ [0,7] -> x8–x15)
-# ============================================================
-
 
 def _c0(funct3: int, rd_creg: int, rs1_creg: int, scatter: int) -> int:
     """构造 C0 象限指令 (低 2 位 = 00)."""

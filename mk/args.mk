@@ -7,6 +7,7 @@ zsbl_args = --preload=$(kei-sav) --preload-addr=$(ROM_BASE)
 # make emu 传给 pyremu.debugger 的参数: 内存基址、零阶段引导程序与固件映像.
 # hart 数量取自 NUM_HARTS, 见 mk/processor.mk.
 pyargs = --ram-base=$(RAM_BASE) \
+	--ram=$(EMU_RAM_MB)M \
 	$(zsbl_args) \
 	--harts=$(NUM_HARTS) \
 	$(fw_payload)

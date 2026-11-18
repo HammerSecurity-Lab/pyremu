@@ -18,7 +18,7 @@ _G_EXPANSION = ("i", "m", "a", "f", "d", "zicsr", "zifencei")
 _MULTI_LETTER_START = frozenset("zxs")
 
 # 加速执行引擎侧 IsaExts 结构登记的全部扩展开关: 扩展名到结构字段名.
-# 字段名与顺序必须与 Rust ``state::IsaExts`` 和 ctypes ``IsaExtsC`` 一致.
+# 字段名与顺序必须与 Rust ``state::IsaExts`` 和 ctypes ``IsaExts`` 一致.
 # 只登记引擎可能据以判定行为的扩展; 模拟器不解析的其余名称在编码时忽略.
 ISA_EXT_FIELDS: dict[str, str] = {
     "i": "is_i",

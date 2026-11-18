@@ -2,11 +2,9 @@
 
 from collections.abc import Callable
 
-from pyremu.disasm.common import (
-    fmt_addr,
-)
 from pyremu.disasm.regname import gpr_name
 from pyremu.utils.mask import mask64
+from pyremu.utils.str_aux import fmt_addr
 
 #  压缩指令 (C extension) 反汇编
 

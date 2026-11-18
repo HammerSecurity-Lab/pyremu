@@ -12,7 +12,7 @@ Usage::
     from pyremu.utils.mask import mask64, mask32
 
     result = mask64(v1 + v2)   # 等价于 (v1 + v2) & 0xFFFF_FFFF_FFFF_FFFF
-    lo = mask32(value)         # 等价于 value & 0xFFFF_FFFF
+    lo = mask32(value)         # 等价于 mask32(value)
 """
 
 MASK04: int = 0xF
@@ -50,43 +50,6 @@ def mask08(val: int) -> int:
 
 def mask04(val: int) -> int:
     return val & MASK04
-
-
-def is_power_of_two_in(value: int, minimum: int, maximum: int) -> bool:
-    """判定 *value* 是 2 的幂且落在 [minimum, maximum] 内."""
-    return minimum <= value <= maximum and (value & (value - 1)) == 0
-
-
-# ---------------------------------------------------------------
-#  64 位寄存器 — 按小端字节序读出与写入
-# ---------------------------------------------------------------
-
-
-def read_u64_bytes(val: int, byte_off: int, size: int) -> bytes:
-    """从 64 位寄存器的第 byte_off 个字节起取出 size 个字节.
-
-    取值先经 mask64 截断; 越过寄存器末尾的部分读为 0.
-    """
-    raw = mask64(val).to_bytes(8, "little", signed=False)
-    chunk = raw[byte_off : byte_off + size]
-    return chunk + b"\x00" * (size - len(chunk))
-
-
-def write_u64_bytes(cur: int, byte_off: int, data: bytes) -> int | None:
-    """把 data 自 64 位寄存器的第 byte_off 个字节起写入, 返回合并后的值.
-
-    写入越过寄存器末尾时返回 None, 调用方据此丢弃该次写入.
-    """
-    if byte_off + len(data) > 8:
-        return None
-    raw = bytearray(mask64(cur).to_bytes(8, "little", signed=False))
-    raw[byte_off : byte_off + len(data)] = data
-    return int.from_bytes(raw, "little", signed=False)
-
-
-# ---------------------------------------------------------------
-#  循环移位 — 移位量取以位宽为模的余数
-# ---------------------------------------------------------------
 
 
 def rol64(val: int, shamt: int) -> int:
@@ -166,3 +129,8 @@ def sint64(val: int) -> int:
     """
     v = val & MASK64
     return v - (1 << 64) if v >> 63 else v
+
+
+def creg(raw: int) -> int:
+    """压缩指令的 3 位寄存器编号映射到完整寄存器号 (x8 至 x15)."""
+    return (raw & 0x7) + 8

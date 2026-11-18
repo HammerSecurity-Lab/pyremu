@@ -9,9 +9,9 @@ import struct
 
 import pytest
 
-from pyremu._native import decode_fields
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
+from pyremu.generic_ops import decode_fields
 from pyremu.platform import PlatformConfig
 
 # 执行路径上被递增或递减的内存初值

@@ -4,21 +4,24 @@
 
 """测试 pyremu.utils.str_aux 的地址与 hexdump 文本格式."""
 
+import pytest
+
 from pyremu.utils.str_aux import fmt_addr, fmt_hexdump
 
 
 class TestFmtAddr:
-    def test_zero_fills_sixteen_digits(self):
-        assert fmt_addr(0) == "0x0000000000000000"
-
-    def test_high_bit_of_low_word(self):
-        assert fmt_addr(0x8000_0000) == "0x0000000080000000"
-
-    def test_all_sixty_four_bits_set(self):
-        assert fmt_addr((1 << 64) - 1) == "0xffffffffffffffff"
-
-    def test_lowercase_digits(self):
-        assert fmt_addr(0xABCDEF) == "0x0000000000abcdef"
+    @pytest.mark.parametrize(
+        "digit, val",
+        [
+            (0, "0x0000000000000000"),
+            (0x8000_0000, "0x0000000080000000"),
+            ((1 << 64) - 1, "0xffffffffffffffff"),
+            (0xABCDEF, "0x0000000000abcdef"),
+            (1 << 64, "0x10000000000000000"),
+        ],
+    )
+    def test_fmt_addr(self, digit: int, val: str):
+        assert fmt_addr(digit) == val
 
 
 class TestFmtHexdump:

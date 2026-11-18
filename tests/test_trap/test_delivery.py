@@ -14,8 +14,11 @@ from pyremu.core.priv_defs import (
     MSTATUS_SIE,
 )
 from pyremu.core.trap_def import TrapType
+from pyremu.emulator import Emulator
 from pyremu.interrupt.clint import CLINT
 from pyremu.memory.bus import Bus
+from pyremu.platform import PlatformConfig
+from tests.hart_helpers import make_hart, make_pmp, set_mie
 from tests.test_trap.support import (
     MTVEC,
     STVEC,
@@ -540,3 +543,61 @@ class TestMsipSurvivesTrapDelivery:
         assert h.mepc_val == ret_addr, (
             f"再次投递的 mepc 应为 ret_addr, 实际={h.mepc_val:#x}"
         )
+
+
+class TestTrapStateIsolation:
+    """Hart 0 上投递 trap 不应改变 Hart 1 的任何寄存器."""
+
+    def test_trap_delivery_isolated_python(self):
+        """deliver_trap(H0) 不改变 H1 的任何寄存器."""
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h1_init_pc = 0x80200000
+        h1.pc = h1_init_pc
+        h1.mode = RiscvMode.S
+        h1.satp_val = 0
+        h1_init_mstatus = h1.mstatus_val
+
+        # Hart 0: 投递 IllInstr (不依赖 CLINT 状态)
+        h0.pc = 0x80001000
+        h0.mode = RiscvMode.S
+        h0.csrs["mtvec"].val = 0x80000000
+        h0.csrs["medeleg"].val = 0
+
+        h0.deliver_trap(TrapType.IllInstr, tval=0xDEAD, is_interrupt=False)
+
+        # Hart 1 状态应完全不变
+        assert h1.pc == h1_init_pc, f"H1 PC={h1.pc:#x} ≠ {h1_init_pc:#x}"
+        assert h1.mode == RiscvMode.S, f"H1 mode={h1.mode}"
+        assert h1.satp_val == 0, f"H1 satp={h1.satp_val:#x}"
+        assert h1.mstatus_val == h1_init_mstatus, "H1 mstatus changed"
+
+    def test_trap_delivery_isolated_native(self):
+        """Rust batch 中 H0 有中断时 H1 (WFI 等待) 状态不漂移."""
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+
+        h1_init_pc = 0x80200000
+        h1.pc = h1_init_pc
+        h1.mode = RiscvMode.S
+        h1.satp_val = 0
+        h1._waiting = True  # WFI 等待, 不执行
+
+        h0.pc = 0x80001000
+        h0.mode = RiscvMode.M
+        set_mie(h0, 1 << 3)
+        h0._csr_write_raw("mip", 1 << 3)
+        h0.csrs["mtvec"].val = 0x80000000
+
+        emu.step()
+
+        assert h1.satp_val == 0, f"native H1 satp={h1.satp_val:#x}"
+        assert h1.pc == h1_init_pc, f"native H1 pc={h1.pc:#x}"

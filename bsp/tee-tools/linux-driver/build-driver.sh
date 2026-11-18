@@ -14,9 +14,9 @@ case "${1:-}" in
 于 bsp/linux 内核树上编译本目录的 tee_enclave_drv.ko.
 需要已配置的 bsp/linux 源码树与对应工具链，无额外参数
 
-    TOOLCHAIN=gcc           标准 gcc (与内核树 .config 一致时的默认值)
-    TOOLCHAIN=clang         标准 clang + lld (LLVM=1)
-    TOOLCHAIN=custom-llvm   厂商定制 clang (LLVM=1 + LLVM_PREFIX)
+    TOOLCHAIN=gcc           标准 gcc
+    TOOLCHAIN=clang         标准 clang + lld
+    TOOLCHAIN=custom-llvm   厂商定制 clang
 
 未指定 TOOLCHAIN 时按内核树 .config 的 CONFIG_CC_IS_GCC / CONFIG_CC_IS_CLANG
 选择 gcc 或 clang; 厂商定制工具链位于 /opt/custom-llvm/bin, 须显式指定.
@@ -30,7 +30,7 @@ KDIR=$(cd "$HERE/../../linux" && pwd)
 CONFIG="$KDIR/.config"
 
 if [ ! -f "$CONFIG" ]; then
-	echo "缺少 $CONFIG, 请先按 bsp/build-linux.sh 配置并构建内核" >&2
+	echo "缺少 $CONFIG, 请先配置并构建内核" >&2
 	exit 1
 fi
 
@@ -57,17 +57,17 @@ case "$TOOLCHAIN" in
 			CROSS_COMPILE=riscv64-unknown-linux-gnu-)
 		;;
 	*)
-		echo "错误: 缺乏已知的编译工具链. 当前选择: $TOOLCHAIN" >&2
+		echo "缺乏已知的编译工具链. 当前选择: $TOOLCHAIN" >&2
 		exit 1
 		;;
 esac
 
 if grep -qx 'CONFIG_CC_IS_CLANG=y' "$CONFIG" && [ "$TOOLCHAIN" = "gcc" ]; then
-	echo "错误:模块须以 TOOLCHAIN=clang 构建" >&2
+	echo "模块模块应通过TOOLCHAIN=clang构建" >&2
 	exit 1
 fi
 if grep -qx 'CONFIG_CC_IS_GCC=y' "$CONFIG" && [ "$TOOLCHAIN" != "gcc" ]; then
-	echo "错误: 模块须以 TOOLCHAIN=gcc编译工具链构建" >&2
+	echo "模块应通过TOOLCHAIN=gcc编译工具链构建" >&2
 	exit 1
 fi
 

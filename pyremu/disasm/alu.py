@@ -1,7 +1,6 @@
 """整数运算指令: R 型、I 型、移位、RV64 32 位运算与 U 型立即数."""
 
 from pyremu.disasm.common import (
-    fmt_addr,
     fmt_imm,
     parse_func3,
     parse_func6,
@@ -13,6 +12,7 @@ from pyremu.disasm.common import (
     rs2_name,
     UNKNOWN,
 )
+from pyremu.utils.str_aux import fmt_addr
 
 #  R-type 编码表 — funct3 -> (func7 -> mnemonic)
 
@@ -165,18 +165,16 @@ def _dis_shift_imm_srl(
     return f"{mnemonic:<12} {rd}, {rs1}, {shamt}"
 
 
-#  RV64 32-bit ops (op32)
-
-
+# funct3 为 010 与 011 的编码未定义; funct3 为 100 / 110 / 111 时只有
+# funct7=1 的除法与取余形式.
 _OP32_FUNCT3_MAP: dict[int, dict[int, str]] = {
     0b000: {0x00: "addw", 0x01: "mulw", 0x04: "add.uw", 0x20: "subw"},
-    0b001: {0x00: "sllw", 0x01: "mulhw", 0x30: "rolw"},
-    0b010: {0x00: "sltw", 0x01: "mulhsuw", 0x10: "sh1add.uw"},
-    0b011: {0x00: "sltuw", 0x01: "mulhuw"},
-    0b100: {0x00: "xorw", 0x01: "divw", 0x10: "sh2add.uw"},
+    0b001: {0x00: "sllw", 0x30: "rolw"},
+    0b010: {0x10: "sh1add.uw"},
+    0b100: {0x01: "divw", 0x10: "sh2add.uw"},
     0b101: {0x00: "srlw", 0x01: "divuw", 0x20: "sraw", 0x30: "rorw"},
-    0b110: {0x00: "orw", 0x01: "remw", 0x10: "sh3add.uw"},
-    0b111: {0x00: "andw", 0x01: "remuw"},
+    0b110: {0x01: "remw", 0x10: "sh3add.uw"},
+    0b111: {0x01: "remuw"},
 }
 
 

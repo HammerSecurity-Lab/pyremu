@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import copy
 import io
 import sys
 
@@ -41,6 +42,20 @@ TEST_PT_L1_BASE = 0x8000_0000
 TEST_PT_L2_BASE = 0x8000_1000
 TEST_PT_L3_BASE = 0x8000_2000
 
+# 用例使用固定的外设基址, 不随 mk/ 下的编译选项变化; 基址取 0 表示该设备在
+# 本次用例中不注册, 需要关闭某个设备的用例显式传入 0 覆盖本表.
+TEST_PERIPH_BASES: dict[str, int] = {
+    "uart_base": 0x1000_0000,
+    "spi_base": 0x1000_1000,
+    "i2c_base": 0x1000_2000,
+    "gpio_base": 0x1000_3000,
+    "watchdog_base": 0x1000_4000,
+    "crng_base": 0x1000_6000,
+    "power_base": 0x0010_0000,
+    "clint_base": 0x0200_0000,
+    "plic_base": 0x0C00_0000,
+}
+
 
 def make_test_config(
     *,
@@ -55,14 +70,19 @@ def make_test_config(
 
     RAM 基址与程序装载地址固定为 0x8000_0000, 不随 mk/ 下的编译选项变化.
     prog_cnt 缺省时与 ram_base 相同, ram_size 缺省时取 PlatformConfig 的默认值.
-    其余字段取默认值, periph_fields 按 PeripheralConfig 的字段名传入.
+    外设基址取 TEST_PERIPH_BASES 的固定值, periph_fields 按 PeripheralConfig 的
+    字段名覆盖, 使用例不随 mk/ 下的编译选项变化.
     """
+    periph = dict(TEST_PERIPH_BASES)
+    periph.update(periph_fields)
     config = PlatformConfig(
         num_harts=num_harts,
         ram_base=ram_base,
         prog_cnt=ram_base if prog_cnt is None else prog_cnt,
-        periph=PeripheralConfig(**periph_fields),
+        periph=PeripheralConfig(**periph),
     )
+    # 测试平台不声明保留内存区间; 涉及保留区间的用例自行给出
+    config.reserved_memory_ranges = []
     if ram_size is not None:
         config.ram_size = ram_size
     if pmp_entries is not None:
@@ -229,6 +249,7 @@ def make_aia_config():
     def _make(num_harts: int = 1) -> PlatformConfig:
         cfg = PlatformConfig.basic_aia_machine()
         cfg.num_harts = num_harts
+        cfg.reserved_memory_ranges = []
         cfg.periph.imsic_m_base = AIA_IMSIC_M_BASE
         cfg.periph.imsic_s_base = AIA_IMSIC_S_BASE
         cfg.periph.aplic_s_base = AIA_APLIC_S_BASE
@@ -244,5 +265,28 @@ def make_aia_emu(make_aia_config):
 
     def _make(num_harts: int = 1) -> Emulator:
         return Emulator(make_aia_config(num_harts))
+
+    return _make
+
+
+@pytest.fixture(scope="session")
+def stable_platform() -> PlatformConfig:
+    """与 mk/ 编译选项无关的平台配置.
+
+    外设基址由 make_test_config 固定; 需要不同 RAM 大小或 hart 数的用例通过
+    make_emu 覆盖, 不直接构造 Emulator(**kwargs).
+    """
+    return make_test_config()
+
+
+@pytest.fixture
+def make_emu(stable_platform):
+    """按需覆盖字段后装配 Emulator."""
+
+    def _make(**overrides: int) -> Emulator:
+        config = copy.deepcopy(stable_platform)
+        for name, value in overrides.items():
+            setattr(config, name, value)
+        return Emulator(config)
 
     return _make

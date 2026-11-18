@@ -13,7 +13,6 @@ import re
 
 from rich.table import Table
 
-from pyremu._native import decode_fields
 from pyremu.core.hart import RiscvMode
 from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.debug.attrs import SharedAttrs
@@ -24,6 +23,7 @@ from pyremu.debug.utils import (
     INSTR_BP_NAMES,
     KNOWN_OPCODES,
 )
+from pyremu.generic_ops import decode_fields
 from pyremu.utils.wrapper import seize_val_err
 
 # 条件断点的比较符到比较函数

@@ -7,22 +7,14 @@ exec_instr 解码字段并按 opcode 查表分发到各处理器. 压缩指令�
 访存取值委托给同包的 alu / mem_ops 模块.
 """
 
-from pyremu._native import decode_fields, fp_exec_fma, fp_exec_op
-from pyremu.core.decoder.alu import (
-    exec_alu,
-    exec_op32,
-    exec_op_imm,
-    exec_op_imm32,
-)
-from pyremu.core.decoder.check_ext_isa import check_ext_isa
 from pyremu.core.decoder.compressed import CompressedInstrOps
-from pyremu.core.decoder.mem_ops import (
+from pyremu.core.decoder.mem_instr import (
     amo_result,
     amo_width,
     LD_READ_SIZE,
     load_value,
 )
-from pyremu.core.decoder.sys_ops import SysInstrOps
+from pyremu.core.decoder.sys_instr import SysInstrOps
 from pyremu.core.hart import HartWithRegs
 from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.registers import CsrAccessError
@@ -37,6 +29,16 @@ from pyremu.disasm import (
     LdFn3_MAP,
     StFn3,
     StFn3_MAP,
+)
+from pyremu.generic_ops import (
+    check_ext_isa,
+    decode_fields,
+    exec_alu,
+    exec_op32,
+    exec_op_imm,
+    exec_op_imm32,
+    fp_exec_fma,
+    fp_exec_op,
 )
 from pyremu.utils.mask import mask16, mask64, sext, sext32, sint64
 

@@ -5,8 +5,8 @@
 
 """hart 与加速执行引擎之间的状态编组.
 
-结构体定义在 ``pyremu._native._ctypes`` 中. 本模块的方法以 hart 自身为接收者,
-由 ``HartWithRegs`` 组合进来.
+结构体布局由 ``pyremu/_native/defs_aux.py`` 从 Rust 侧 DI 元数据生成.
+本模块的方法以 hart 自身为接收者, 由 ``HartWithRegs`` 组合进来.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from __future__ import annotations
 import ctypes
 import struct
 
-from pyremu._native import HartState
 from pyremu.core.priv_defs import RiscvMode
+from pyremu.generic_ops import HartState
 
 # 线格式中的 u8 特权级取值到 RiscvMode 的映射.
 _MODE_FROM_U8: dict[int, RiscvMode] = {
@@ -30,6 +30,20 @@ _IMSIC_PACK_FORMAT = "<64I"
 _IMSIC_PACK_BYTES = 64 * 4
 # 第 0 个字中对应 S 模式与 M 模式软件中断的位, 不属于外部中断.
 _IMSIC_IPI_WORD0_MASK = (1 << 1) | (1 << 3)
+
+# 加速执行的退出原因, 取值必须与 Rust 侧一致
+EXIT_NORMAL = 0
+EXIT_TRAP = 1
+EXIT_MMIO = 2
+EXIT_ECALL = 3
+EXIT_EBREAK = 4
+EXIT_WFI_WAIT = 5
+# 取指的目标物理地址不属于主存: 引擎只从主存读取指令字节, 本轮退出后由 Python
+# 取指; 目标属于设备内存范围时读取设备的存储, 属于空洞时投递访问故障
+EXIT_NOT_MAINRAM = 6
+EXIT_BREAKPOINT = 7
+EXIT_TIMEOUT = 8
+EXIT_RX_WAIT = 9
 
 
 def _has_ext_interrupt(eip: list[int]) -> int:
@@ -55,21 +69,6 @@ def _merge_eip(
     return [
         e | (c & ~p) for e, c, p in zip(engine_words, current, before_words)
     ]
-
-
-# 加速执行的退出原因, 取值必须与 Rust 侧一致
-EXIT_NORMAL = 0
-EXIT_TRAP = 1
-EXIT_MMIO = 2
-EXIT_ECALL = 3
-EXIT_EBREAK = 4
-EXIT_WFI_WAIT = 5
-# 取指的目标物理地址不属于主存: 引擎只从主存读取指令字节, 本轮退出后由 Python
-# 取指; 目标属于设备内存范围时读取设备的存储, 属于空洞时投递访问故障
-EXIT_NOT_MAINRAM = 6
-EXIT_BREAKPOINT = 7
-EXIT_TIMEOUT = 8
-EXIT_RX_WAIT = 9
 
 
 def mode_from_u8(raw: int) -> RiscvMode:
@@ -207,7 +206,7 @@ class HartFfiOps:
         # state.isa_exts 不写回: 扩展开关取自平台声明, 引擎只读, 不产生新取值.
 
     def marshal_isa_exts(self, state: HartState) -> None:
-        """把本 hart 的扩展开关写入 ``HartState`` 的 ``IsaExtsC``.
+        """把本 hart 的扩展开关写入 ``HartState`` 的 ``IsaExts``.
 
         扩展开关是平台的静态属性, 只在状态数组分配时写入一次; 逐轮编组不重复
         写入.

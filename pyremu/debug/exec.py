@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     )
 
 
-from pyremu._native import decode_fields
 from pyremu.configs_aux import cfg_float
 from pyremu.core.hart import RiscvMode
 from pyremu.core.trap_def import TrapType
@@ -34,6 +33,7 @@ from pyremu.debug.types import HartSnapshot, ImageKind, MemWriteTracker
 from pyremu.debug.utils import hex_addr, read_va_bytes
 from pyremu.emulator import Emulator, RunStopReason, TimeoutError
 from pyremu.env_inject import Preloader
+from pyremu.generic_ops import decode_fields
 from pyremu.peripheral.power_ctrl import PowerRequest
 from pyremu.utils.mask import mask64
 from pyremu.utils.parse_bin import FirmwareImage

@@ -82,6 +82,7 @@ from pyremu.peripheral.virtio_net import (
     VIRTIO_NET_TX_QUEUE,
     VirtIONet,
 )
+from pyremu.utils.mask import mask32
 
 # ============================================================
 #  辅助: 受调试程序 RAM 模拟 — 用 bytearray 承载 virtqueue 与帧
@@ -175,7 +176,7 @@ def _mmio_write(net: VirtIONet, offset: int, val: int) -> None:
 
 def _mmio_write64(net: VirtIONet, lo_off: int, hi_off: int, val: int) -> None:
     """把一个 64 位值写入一对 32 位 MMIO 寄存器."""
-    _mmio_write(net, lo_off, val & 0xFFFF_FFFF)
+    _mmio_write(net, lo_off, mask32(val))
     _mmio_write(net, hi_off, (val >> 32) & 0xFFFF_FFFF)
 
 

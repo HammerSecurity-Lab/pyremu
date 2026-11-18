@@ -32,12 +32,12 @@ import threading
 import time
 from typing import Any
 
-from pyremu._native import FfiExtIrqCtx
 from pyremu.core.decoder import Hart
 from pyremu.emu.load import LoadOps
 from pyremu.emu.native import NativeOps
 from pyremu.emu.run import RunOps, RunStopReason, TimeoutError
 from pyremu.emu.setup import SetupOps
+from pyremu.generic_ops import FfiExtIrqCtx
 from pyremu.interrupt.aplic import APLIC
 from pyremu.interrupt.clint import CLINT
 from pyremu.interrupt.imsic import IMSIC
@@ -84,6 +84,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         """
         if config is None:
             config = self._build_default_config(**kwargs)
+        # 装配前再检查一次: 调用方可能在构造配置之后修改了外设基址.
+        config.validate()
         self._cfg = config
         self._dtb_addr: int | None = None  # 最近一次写入设备树的物理地址
         self._dtb_size: int = 0  # 最近一次写入的设备树字节数

@@ -12,9 +12,6 @@ from pyremu.disasm.common import (
     UNKNOWN,
 )
 
-#  Load / Store
-
-
 _LD_MNEMONIC: dict[int, str] = {
     0b000: "lb",
     0b001: "lh",

@@ -37,10 +37,19 @@ from typing import Any
 import yaml
 
 from pyremu import configs_gen
+from pyremu.check_configs import check_limits, DevRange, parse_dev_range
+from pyremu.interrupt.clint import CLINT_SIZE
+from pyremu.interrupt.plic import PLIC_CONTEXT_BASE, PLIC_CONTEXT_STRIDE
 from pyremu.peripheral.uart import UART_IRQ
 from pyremu.peripheral.virtio_blk import VIRTIO_BLK_IRQ
+from pyremu.peripheral.virtio_mmio import VIRTIO_MMIO_SIZE
 from pyremu.peripheral.virtio_net import VIRTIO_NET_M_IRQ, VIRTIO_NET_S_IRQ
 from pyremu.peripheral.watchdog import WATCHDOG_IRQ
+
+# 各设备窗口的字节数. 与设备构造时的 size 保持一致,
+# 由 tests/test_utils/test_configs_check.py 对照实际注册的设备校验.
+_PAGE_SIZE = 0x1000
+_APLIC_RANGE_SIZE = 0x6000
 
 
 class InterruptMode(Enum):
@@ -148,7 +157,135 @@ class PlatformConfig:
         # 引导只读存储器与 RAM 的范围不允许重叠，同一物理地址只能有一条访问路径.
         if self.rom_base:
             assert self.rom_size > 0, f"rom_size={self.rom_size} 须大于 0"
+        self.validate()
+
+    def validate(self) -> None:
+        """检查配置取值与设备区间, 冲突的设备区间就地重新分配.
+
+        构造时调用一次; 调用方在修改 ``periph`` 的基址之后可再次调用, 使
+        ``Emulator`` 装配前拿到一致的布局. 重新分配过的基址写回本配置.
+        """
+        self._check_limits()
+        self._apply_dev_ranges()
         self._check_overlap()
+
+    def _check_limits(self) -> None:
+        """检查 RAM 大小、PMP 条目数与 hart 数是否在允许范围内."""
+        check_limits(
+            ram_size=self.ram_size,
+            pmp_entries=self.pmp_entries,
+            num_harts=self.num_harts,
+        )
+
+    def _dev_ranges(self) -> list[DevRange]:
+        """按当前配置给出 RAM、引导只读存储器与各设备的地址区间.
+
+        区间名与其基址字段同名去掉 ``_base`` 后缀, 重新分配时据此写回.
+        基址取 0 的设备不参与, 与注册规则一致.
+        """
+        ranges = [DevRange("ram", self.ram_base, self.ram_size, is_fixed=True)]
+        if self.rom_base:
+            ranges.append(
+                DevRange("rom", self.rom_base, self.rom_size, is_fixed=True)
+            )
+        periph = self.periph
+        imsic_size = self._imsic_range_size()
+        candidates: list[tuple[str, int, int, int]] = [
+            ("uart", periph.uart_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("spi", periph.spi_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("i2c", periph.i2c_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("gpio", periph.gpio_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("crng", periph.crng_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("power", periph.power_base, _PAGE_SIZE, _PAGE_SIZE),
+            ("clint", periph.clint_base, CLINT_SIZE, _PAGE_SIZE),
+            (
+                "boot_addr",
+                periph.boot_addr_base,
+                periph.boot_addr_size,
+                _PAGE_SIZE,
+            ),
+            (
+                "watchdog",
+                periph.watchdog_base,
+                self.num_harts * 0x10,
+                _PAGE_SIZE,
+            ),
+            (
+                "virtio_net_s",
+                periph.virtio_net_s_base,
+                VIRTIO_MMIO_SIZE,
+                _PAGE_SIZE,
+            ),
+            (
+                "virtio_net_m",
+                periph.virtio_net_m_base,
+                VIRTIO_MMIO_SIZE,
+                _PAGE_SIZE,
+            ),
+        ]
+        if self.disk_image is not None:
+            candidates.append(
+                (
+                    "virtio_blk",
+                    periph.virtio_blk_base,
+                    VIRTIO_MMIO_SIZE,
+                    _PAGE_SIZE,
+                )
+            )
+        if self.interrupt_mode == InterruptMode.AIA:
+            candidates.extend(
+                [
+                    ("imsic_m", periph.imsic_m_base, imsic_size, imsic_size),
+                    (
+                        "aplic_s",
+                        periph.aplic_s_base,
+                        _APLIC_RANGE_SIZE,
+                        _PAGE_SIZE,
+                    ),
+                    (
+                        "aplic_m",
+                        periph.aplic_m_base,
+                        _APLIC_RANGE_SIZE,
+                        _PAGE_SIZE,
+                    ),
+                ]
+            )
+        else:
+            candidates.append(
+                (
+                    "plic",
+                    periph.plic_base,
+                    self._plic_range_size(),
+                    _PAGE_SIZE,
+                )
+            )
+        for name, base, size, align in candidates:
+            if base:
+                ranges.append(DevRange(name, base, size, align=align))
+        return ranges
+
+    def _plic_range_size(self) -> int:
+        """PLIC 的窗口字节数: 到最后一个 context 末尾再加一页."""
+        contexts = 2 * self.num_harts
+        return (
+            PLIC_CONTEXT_BASE
+            + (contexts - 1) * PLIC_CONTEXT_STRIDE
+            + _PAGE_SIZE
+        )
+
+    def _imsic_range_size(self) -> int:
+        """IMSIC 的窗口字节数: M 区与 S 区各按 2 的幂对齐."""
+        power = (self.num_harts - 1).bit_length() if self.num_harts > 1 else 0
+        return 2 * (1 << power) * _PAGE_SIZE
+
+    def _apply_dev_ranges(self) -> None:
+        """检查设备区间是否冲突; 冲突者重新分配并把新基址写回配置."""
+        ranges = self._dev_ranges()
+        resolved = parse_dev_range(ranges)
+        for wanted, got in zip(ranges, resolved, strict=True):
+            if wanted.base == got.base:
+                continue
+            setattr(self.periph, f"{wanted.name}_base", got.base)
 
     def _check_overlap(self) -> None:
         """断言 RAM、引导只读存储器与启动地址寄存器的地址范围两两不重叠.

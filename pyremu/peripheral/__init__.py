@@ -25,13 +25,11 @@ from pyremu.peripheral.gpio import GPIO
 from pyremu.peripheral.i2c import I2C
 from pyremu.peripheral.power_ctrl import PowerCtrl, PowerRequest
 from pyremu.peripheral.spi import SPI
-from pyremu.peripheral.termio import TerminalIO
 from pyremu.peripheral.uart import UART
 from pyremu.peripheral.virtio_blk import VirtIOBlock
 from pyremu.peripheral.virtio_net import VirtIONet
 
 __all__ = [
-    "TerminalIO",
     "UART",
     "SPI",
     "I2C",

@@ -10,7 +10,7 @@
 引擎的 ``check_ext_isa.rs`` 中另有一份实现, 两侧必须逐一对应.
 """
 
-from pyremu._native import DecodedFields
+from pyremu.generic_ops import DecodedFields
 
 # OP (0x33): funct7 取 1 的 8 条指令都属于 M 扩展; 其余按 (funct3, funct7) 判定.
 _OP_ISA: dict[tuple[int, int], str] = {

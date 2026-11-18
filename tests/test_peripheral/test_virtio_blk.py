@@ -70,6 +70,7 @@ from pyremu.peripheral.virtio_blk import (
 )
 from pyremu.peripheral.virtio_mmio import VirtQueue, VRING_DESC_SIZE
 from pyremu.platform import PeripheralConfig, PlatformConfig
+from pyremu.utils.mask import mask32
 
 # ============================================================
 #  辅助: Guest RAM 模拟 — 用 bytearray 作为 virtqueue 描述符的存储
@@ -157,7 +158,7 @@ def _mmio_write64(
     vblk: VirtIOBlock, lo_off: int, hi_off: int, val: int
 ) -> None:
     """写入 64-bit 值到一对 32-bit MMIO 寄存器."""
-    _mmio_write(vblk, lo_off, val & 0xFFFF_FFFF)
+    _mmio_write(vblk, lo_off, mask32(val))
     _mmio_write(vblk, hi_off, (val >> 32) & 0xFFFF_FFFF)
 
 

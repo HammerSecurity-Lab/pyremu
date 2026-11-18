@@ -2,13 +2,11 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 """纯 Python 的算术指令实现.
 
-op / op_imm / op32 / op_imm32 四类指令各有一张以 funct3 为索引的函数表, 加速执行
-引擎不可用时由本模块计算. 对外只暴露 exec_alu / exec_op_imm / exec_op32 /
-exec_op_imm32 四个入口, 是否调用加速执行引擎的判断也在本模块内完成.
+op / op_imm / op32 / op_imm32 四类指令各有一张以 funct3 为索引的函数表, 对外只
+暴露 exec_alu / exec_op_imm / exec_op32 / exec_op_imm32 四个入口. 后端选择在
+``pyremu.generic_ops`` 内完成, 本模块只给出纯 Python 的计算.
 """
 
-from pyremu import _native
-from pyremu._native import native_available
 from pyremu.utils.mask import (
     mask32,
     mask64,
@@ -21,6 +19,7 @@ from pyremu.utils.mask import (
     sext32,
     sint64,
 )
+from pyremu.utils.math import trunc_div, trunc_rem
 
 """
 mul      有符号 x 有符号    取 低 64 位
@@ -28,24 +27,6 @@ mulh     有符号 x 有符号    取 高 64 位
 mulhsu   有符号 x 无符号    取 高 64 位
 mulhu    无符号 x 无符号    取 高 64 位
 """
-
-
-def _trunc_div(a: int, b: int) -> int:
-    """Integer division truncating toward zero (C99 / RISC-V semantics)."""
-    if b == 0:
-        return -1  # RISC-V: all-bits-1 on division by zero
-    q = abs(a) // abs(b)
-    return -q if (a < 0) ^ (b < 0) else q
-
-
-def _trunc_rem(a: int, b: int) -> int:
-    """Integer remainder with same sign as dividend (RISC-V semantics)."""
-    if b == 0:
-        return a  # RISC-V: dividend on division by zero
-    return a - _trunc_div(a, b) * b
-
-
-#  Zba / Zbb / Zbs 位操作辅助函数
 
 
 def _zbb_unary(
@@ -189,7 +170,7 @@ def _alu_py_100(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return v1 ^ v2
     if funct7 == 1:
-        return mask64(_trunc_div(sint64(v1), sint64(v2)))
+        return mask64(trunc_div(sint64(v1), sint64(v2)))
     if funct7 == 0x05:  # min
         return mask64(min(sint64(v1), sint64(v2)))
     if funct7 == 0x10:  # sh2add
@@ -205,7 +186,7 @@ def _alu_py_101(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return mask64(mask64(v1) >> shamt)
     if funct7 == 1:
-        return mask64(_trunc_div(mask64(v1), mask64(v2)))
+        return mask64(trunc_div(mask64(v1), mask64(v2)))
     if funct7 == 0x05:  # minu
         return min(mask64(v1), mask64(v2))
     if funct7 == 0x20:
@@ -222,7 +203,7 @@ def _alu_py_110(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return v1 | v2
     if funct7 == 1:
-        return mask64(_trunc_rem(sint64(v1), sint64(v2)))
+        return mask64(trunc_rem(sint64(v1), sint64(v2)))
     if funct7 == 0x05:  # max
         return mask64(max(sint64(v1), sint64(v2)))
     if funct7 == 0x10:  # sh3add
@@ -237,7 +218,7 @@ def _alu_py_111(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return v1 & v2
     if funct7 == 1:
-        return mask64(_trunc_rem(mask64(v1), mask64(v2)))
+        return mask64(trunc_rem(mask64(v1), mask64(v2)))
     if funct7 == 0x05:  # maxu
         return max(mask64(v1), mask64(v2))
     if funct7 == 0x20:  # andn
@@ -255,16 +236,6 @@ _ALU_PY_OPS = {
     0b110: _alu_py_110,
     0b111: _alu_py_111,
 }
-
-
-def _exec_alu_via_native(fields, v1: int, v2: int) -> int:
-    """经加速执行引擎计算 R 型 ALU 指令."""
-    r = _native.exec_alu_op(fields.func3, fields.func7, v1, v2)
-    if r.trap:
-        raise ValueError(
-            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
-        )
-    return r.value
 
 
 #  I 型立即数 ALU 的纯 Python 计算, 按 funct3 分组
@@ -294,7 +265,7 @@ def _op_imm_py_001(funct6: int, v1: int, imm: int, shamt: int) -> int:
 
 def _op_imm_py_010(funct6: int, v1: int, imm: int, shamt: int) -> int:
     """funct3=010: slti."""
-    return 1 if sint64(v1) < imm else 0
+    return 1 if sint64(v1) < sint64(imm) else 0
 
 
 def _op_imm_py_011(funct6: int, v1: int, imm: int, shamt: int) -> int:
@@ -350,16 +321,6 @@ _OP_IMM_PY_OPS = {
 }
 
 
-def _exec_op_imm_via_native(fields, v1: int) -> int:
-    """经加速执行引擎计算 I 型立即数 ALU 指令."""
-    r = _native.exec_op_imm(fields.func3, fields.func7, v1, fields.imm12_se)
-    if r.trap:
-        raise ValueError(
-            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
-        )
-    return r.value
-
-
 #  RV64 32 位字运算的纯 Python 计算, 按 funct3 分组
 #
 #  各函数收到的 v1 与 v2 已截断为 32 位.
@@ -377,46 +338,18 @@ def _op32_py_000(funct7: int, v1: int, v2: int) -> int:
 
 
 def _op32_py_001(funct7: int, v1: int, v2: int) -> int:
-    """funct3=001: sllw / mulw 的高 32 位 / rolw."""
+    """funct3=001: sllw / rolw; funct7 取其余值属保留编码."""
     if funct7 == 0:
         return sext32(mask32(v1 << (v2 & 0x1F)))
-    if funct7 == 1:
-        s1 = sint64(sext32(v1))
-        s2 = sint64(sext32(v2))
-        return mask64(sint64((s1 * s2) >> 32))
     if funct7 == 0x30:  # rolw
         return sext32(rol32(v1, v2 & 0x1F))
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=001")
 
 
-def _op32_py_010(funct7: int, v1: int, v2: int) -> int:
-    """funct3=010: sltw / mulhsuw."""
-    if funct7 == 0:
-        return 1 if sint64(sext32(v1)) < sint64(sext32(v2)) else 0
-    if funct7 == 1:
-        s1 = sint64(sext32(v1))
-        u2 = mask64(v2)
-        return mask64(sint64((s1 * u2) >> 32))
-    raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=010")
-
-
-def _op32_py_011(funct7: int, v1: int, v2: int) -> int:
-    """funct3=011: sltuw / mulhuw."""
-    if funct7 == 0:
-        return 1 if v1 < v2 else 0
-    if funct7 == 1:
-        return mask64((v1 * v2) >> 32)
-    raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=011")
-
-
 def _op32_py_100(funct7: int, v1: int, v2: int) -> int:
-    """funct3=100: xorw / divw."""
-    if funct7 == 0:
-        return sext32(mask32(v1 ^ v2))
+    """funct3=100: divw; funct7 取其余值属保留编码."""
     if funct7 == 1:
-        return sext32(
-            mask32(_trunc_div(sint64(sext32(v1)), sint64(sext32(v2))))
-        )
+        return sext32(mask32(trunc_div(sint64(sext32(v1)), sint64(sext32(v2)))))
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=100")
 
 
@@ -425,7 +358,7 @@ def _op32_py_101(funct7: int, v1: int, v2: int) -> int:
     if funct7 == 0:
         return sext32(mask32(v1 >> (v2 & 0x1F)))
     if funct7 == 1:
-        return sext32(mask32(_trunc_div(v1, v2)))
+        return sext32(mask32(trunc_div(v1, v2)))
     if funct7 == 0x20:
         return sext32(mask32(sint64(sext32(v1) >> (v2 & 0x1F))))
     if funct7 == 0x30:  # rorw
@@ -434,30 +367,23 @@ def _op32_py_101(funct7: int, v1: int, v2: int) -> int:
 
 
 def _op32_py_110(funct7: int, v1: int, v2: int) -> int:
-    """funct3=110: orw / remw."""
-    if funct7 == 0:
-        return sext32(mask32(v1 | v2))
+    """funct3=110: remw; funct7 取其余值属保留编码."""
     if funct7 == 1:
-        return sext32(
-            mask32(_trunc_rem(sint64(sext32(v1)), sint64(sext32(v2))))
-        )
+        return sext32(mask32(trunc_rem(sint64(sext32(v1)), sint64(sext32(v2)))))
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=110")
 
 
 def _op32_py_111(funct7: int, v1: int, v2: int) -> int:
-    """funct3=111: andw / remuw."""
-    if funct7 == 0:
-        return sext32(mask32(v1 & v2))
+    """funct3=111: remuw; funct7 取其余值属保留编码."""
     if funct7 == 1:
-        return sext32(mask32(_trunc_rem(v1, v2)))
+        return sext32(mask32(trunc_rem(v1, v2)))
     raise ValueError(f"invalid funct7={funct7:#x} for op32 funct3=111")
 
 
+# funct3 为 010 与 011 的编码未定义, 不在表中, 查表落空即投递非法指令陷态.
 _OP32_PY_OPS = {
     0b000: _op32_py_000,
     0b001: _op32_py_001,
-    0b010: _op32_py_010,
-    0b011: _op32_py_011,
     0b100: _op32_py_100,
     0b101: _op32_py_101,
     0b110: _op32_py_110,
@@ -486,17 +412,10 @@ def _op32_py(
     shift = _OP32_UW_SHIFT.get((func3, funct7))
     if shift is not None:
         return mask64((mask32(v1) << shift) + v2)
-    return _OP32_PY_OPS[func3](funct7, mask32(v1), mask32(v2))
-
-
-def _exec_op32_via_native(fields, v1: int, v2: int) -> int:
-    """经加速执行引擎计算 RV64 32 位字运算指令."""
-    r = _native.exec_op32(fields.func3, fields.func7, v1, v2)
-    if r.trap:
-        raise ValueError(
-            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
-        )
-    return r.value
+    op = _OP32_PY_OPS.get(func3)
+    if op is None:
+        raise ValueError(f"undefined encoding for op32 funct3={func3:#x}")
+    return op(funct7, mask32(v1), mask32(v2))
 
 
 #  I 型 32 位字立即数运算的纯 Python 计算, 按 funct3 分组
@@ -545,30 +464,16 @@ def _op_imm32_py(func3: int, funct7: int, v1: int, imm: int, shamt: int) -> int:
     return op(funct7, v1, imm, shamt)
 
 
-def _exec_op_imm32_via_native(fields, v1: int) -> int:
-    """经加速执行引擎计算 I 型 32 位字立即数运算."""
-    r = _native.exec_op_imm32(fields.func3, fields.func7, v1, fields.imm12_se)
-    if r.trap:
-        raise ValueError(
-            f"invalid funct3={fields.func3:#b} funct7={fields.func7:#x}"
-        )
-    return r.value
-
-
 #  对外入口: 加速执行引擎可用时经其计算, 否则查纯 Python 表
 
 
 def exec_alu(fields, v1: int, v2: int) -> int:
     """计算 R 型 ALU 指令."""
-    if native_available():
-        return _exec_alu_via_native(fields, v1, v2)
     return _ALU_PY_OPS[fields.func3](fields.func7, v1, v2)
 
 
 def exec_op_imm(fields, v1: int) -> int:
     """计算 I 型立即数 ALU 指令."""
-    if native_available():
-        return _exec_op_imm_via_native(fields, v1)
     return _OP_IMM_PY_OPS[fields.func3](
         fields.func7 >> 1, v1, fields.imm12_se, fields.imm12_se & 0x3F
     )
@@ -576,15 +481,11 @@ def exec_op_imm(fields, v1: int) -> int:
 
 def exec_op32(fields, v1: int, v2: int) -> int:
     """计算 RV64 的 32 位字运算指令."""
-    if native_available():
-        return _exec_op32_via_native(fields, v1, v2)
     return _op32_py(fields.func3, fields.func7, v1, v2)
 
 
 def exec_op_imm32(fields, v1: int) -> int:
     """计算 I 型 32 位字立即数运算指令."""
-    if native_available():
-        return _exec_op_imm32_via_native(fields, v1)
     return _op_imm32_py(
         fields.func3, fields.func7, v1, fields.imm12_se, fields.imm12_se & 0x3F
     )

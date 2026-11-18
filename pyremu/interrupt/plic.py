@@ -40,6 +40,7 @@ import ctypes
 import threading
 
 from pyremu.memory.bus import Device
+from pyremu.utils.mask import mask32
 
 # PLIC 常量 — 地址空间分区
 PLIC_PRIORITY_BASE = 0x000000
@@ -316,7 +317,7 @@ class PLIC(Device):
         if context >= self.num_contexts or word_idx >= self.num_enable_words:
             return
         src_base = word_idx << 5
-        bits = val & 0xFFFF_FFFF
+        bits = mask32(val)
         # source 0 为保留项, 始终不使能
         if src_base == 0:
             bits &= ~1

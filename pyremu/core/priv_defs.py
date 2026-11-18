@@ -12,26 +12,8 @@ from __future__ import annotations
 
 from enum import Enum
 
-
-class RiscvMode(Enum):
-    """RISC-V 特权级模式。
-
-    数值按标准 RISC-V 特权级编码:
-        U=0 (用户), S=1 (监管), H=2 ( hypervisor ),
-        M=3 (机器), D=8 (调试).
-    """
-
-    U = 0
-    S = 1
-    H = 2
-    M = 3
-    D = 8
-
-
 #  mstatus / sstatus 位字段定义 (RV64)
-
 # 这些常量用于按位读写 mstatus CSR 中的关键控制位。
-
 MSTATUS_SIE = 1 << 1  # Supervisor 中断使能
 MSTATUS_MIE = 1 << 3  # Machine 中断使能
 MSTATUS_SPIE = 1 << 5  # Supervisor 先前中断使能 (进入 trap 前)
@@ -51,3 +33,18 @@ MSTATUS_TSR = 1 << 22  # 陷入 SRET
 MSTATUS_UXL = 0b11 << 32  # 用户级 XLEN 字段, RV64 上只读
 MSTATUS_UXL_64 = 0b10 << 32  # mstatus.UXL 的读出值, 表示 U 模式为 64 位
 MSTATUS_SD = 1 << 63  # 状态脏位, 由 FS、VS、XS 是否为 3 算出
+
+
+class RiscvMode(Enum):
+    """RISC-V 特权级模式。
+
+    数值按标准 RISC-V 特权级编码:
+        U=0 (用户), S=1 (监管), H=2 ( hypervisor ),
+        M=3 (机器), D=8 (调试).
+    """
+
+    U = 0
+    S = 1
+    H = 2
+    M = 3
+    D = 8

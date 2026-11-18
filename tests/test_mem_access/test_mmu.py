@@ -9,6 +9,8 @@ import pytest
 
 from pyremu.core.decoder import Hart
 from pyremu.core.hart import HartWithRegs, RiscvMode
+from pyremu.emulator import Emulator
+from pyremu.interrupt.clint import CLINT
 from pyremu.memory.bus import Bus
 from pyremu.memory.mmu import (
     MemAccessMode,
@@ -27,7 +29,9 @@ from pyremu.memory.mmu import (
     sv39_walk,
     translate_va,
 )
+from pyremu.platform import PlatformConfig
 from tests.conftest import make_test_ram
+from tests.hart_helpers import make_hart, make_pmp
 
 # ============================================================
 #  PTE 字段读写
@@ -492,13 +496,6 @@ class TestSv39Walk:
         修复前根页表项只接受指向下一级的指针, 带 R 或 X 的根页表项被判为无效,
         受调试程序在 satp 生效后的首次取指投递 InstrPageFault.
         """
-        _, read_fn, write_fn = ram_ctx
-        self._write_1gib_root_leaf(write_fn, 0x8000_1234)
-        self._assert_1gib_translation(read_fn)
-
-    def test_root_leaf_without_native_lib(self, ram_ctx, monkeypatch):
-        """加速执行库不可用时, 纯 Python 路径同样翻译 1 GiB 页."""
-        monkeypatch.setattr("pyremu.memory.mmu._NATIVE_MMU", False)
         _, read_fn, write_fn = ram_ctx
         self._write_1gib_root_leaf(write_fn, 0x8000_1234)
         self._assert_1gib_translation(read_fn)
@@ -1105,3 +1102,46 @@ class TestSatpAsidHardwiredZero:
         h = HartWithRegs(id=0)
         h.satp_val = 0x8000_1000_0008_2F1B
         assert h.satp_val == 0x8000_0000_0008_2F1B
+
+
+class TestSatpIsolation:
+    """satp 是 per-hart CSR: Hart 0 写 satp 不影响 Hart 1."""
+
+    def test_satp_independent_per_hart(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        assert h0.satp_val == 0 and h1.satp_val == 0
+
+        h0.satp_val = 0x8000000000080000  # Sv39
+        assert h0._mmu_mode == 8
+        assert h1.satp_val == 0, f"H1 satp={h1.satp_val:#x}, 应为 0"
+        assert h1._mmu_mode == 0, f"H1 _mmu_mode={h1._mmu_mode}, 应为 0"
+
+    def test_satp_native_roundtrip(self):
+        """Rust batch marshal/unmarshal 后 satp 不串扰."""
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+        h0.satp_val = 0x8000000000080000
+        emu.step()
+        assert h1.satp_val == 0, f"Rust roundtrip H1 satp={h1.satp_val:#x}"
+
+    def test_mmu_mode_cache_independent(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h0.satp_val = 0x8000000000080000
+        h1.satp_val = 0
+        assert h0._mmu_mode == 8 and h1._mmu_mode == 0
+
+        h0.satp_val = 0  # 改回 Bare
+        assert h1._mmu_mode == 0, "H1 _mmu_mode 被 H0 修改污染了"

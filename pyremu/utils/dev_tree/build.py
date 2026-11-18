@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import libfdt
 
+from pyremu.check_configs import check_reserved_ranges
 from pyremu.configs_gen import PYREMU_AIA, TIMER_FREQ
 from pyremu.peripheral.power_ctrl import PowerCtrl, PowerRequest, REG_CTRL
 from pyremu.platform import InterruptMode, PlatformConfig
@@ -628,6 +629,8 @@ def build_default_dtb(
     Returns:
         完整的 DTB blob 字节串, 可直接写入 RAM 供固件使用.
     """
+    ranges = reserved_ranges or []
+    check_reserved_ranges(cfg.ram_base, cfg.ram_size, ranges)
     devices = devices or DefaultDtbDev()
     is_aia = cfg.interrupt_mode == InterruptMode.AIA
 
@@ -645,7 +648,7 @@ def build_default_dtb(
     _dtb_aliases(sw, cfg, devices.uart)
     cpu_phandles = _dtb_cpus(sw, cfg, is_aia=is_aia)
     _dtb_memory(sw, cfg)
-    _dtb_reserved_memory(sw, reserved_ranges or [])
+    _dtb_reserved_memory(sw, ranges)
     _dtb_soc(sw, cfg, devices, cpu_phandles, is_aia)
 
     sw.end_node()  # root

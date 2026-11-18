@@ -22,6 +22,11 @@ RESERVED_MEM_BASE    ?= 0x83000000
 # 2.25 GiB. ram 须不小于 6G, 以留出内核与根文件系统的空间.
 RESERVED_MEM_SIZE    ?= 0x90000000
 
+# make emu 传给模拟器的主存大小, 以 MiB 计: 覆盖固件保留区与飞地内存池的上界,
+# 即 [RAM_BASE, RESERVED_MEM_BASE + RESERVED_MEM_SIZE). 内存池须落在主存之内,
+# 否则固件清零内存池时写出主存上界, 触发存储访问故障.
+EMU_RAM_MB ?= $(shell echo $$(( ( $(RESERVED_MEM_BASE) + $(RESERVED_MEM_SIZE) - $(RAM_BASE) + 1048575 ) / 1048576 )))
+
 # 固件所处内存基地址
 FW_RESERVED_MEM_BASE ?= 0x80000000
 # 容量 4 MiB: 固件映像及其后须嵌入的驱动性代码的末尾终止于 0x80382F68。

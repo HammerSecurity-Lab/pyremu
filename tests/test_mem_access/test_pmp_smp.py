@@ -29,10 +29,14 @@ import threading
 
 import pytest
 
-from pyremu._native import FfiPmpCtx, native_available, PmpInfo
+from pyremu._native import FfiPmpCtx, native_available
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
+from pyremu.generic_ops import PmpInfo
+from pyremu.interrupt.clint import CLINT
+from pyremu.memory.bus import Bus
 from tests.conftest import make_test_emu
+from tests.hart_helpers import make_hart, make_pmp
 
 pytestmark = pytest.mark.skipif(
     not native_available(),
@@ -133,15 +137,39 @@ def _flat_buf(hart_num: int, per_hart: int = 64):
 def test_pmpinfo_num_is_per_hart_not_flattened(hart_num):
     """PmpInfo.num 必须是每 hart 条目数, 而非扁平缓冲总长."""
     cfg, addr = _flat_buf(hart_num)
-    info = PmpInfo(cfg=cfg, addr=addr, hart_num=hart_num)
+    info = PmpInfo.from_buffers(cfg, addr, hart_num)
     assert info.num == 64, f"hart_num={hart_num}: num={info.num} 期望 64"
 
 
 def test_pmpinfo_num_survives_u8_ffi_at_four_harts():
     """4 hart 的 per-hart num 经 c_uint8 FFI 字段往返仍为 64."""
     cfg, addr = _flat_buf(4)
-    info = PmpInfo(cfg=cfg, addr=addr, hart_num=4)
+    info = PmpInfo.from_buffers(cfg, addr, 4)
     ffi = FfiPmpCtx()
     ffi.num = info.num
     # 修复前 info.num=256, 写入 u8 后读回 0, 于是 PMP 被禁用。
     assert ffi.num == 64, f"FfiPmpCtx.num={ffi.num} 期望 64"
+
+
+class TestPmpEnclaveIsolation:
+    def test_pmpsplit_per_hart(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h0.pmpsplit_val = 32
+        h1.pmpsplit_val = 0
+        assert h0.pmpsplit_val == 32
+        assert h1.pmpsplit_val == 0, f"H1 pmpsplit={h1.pmpsplit_val}"
+
+    def test_mdid_per_hart(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h0.mdid_val = 5
+        h1.mdid_val = 0
+        assert h0.mdid_val == 5
+        assert h1.mdid_val == 0, f"H1 mdid={h1.mdid_val}"

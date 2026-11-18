@@ -22,6 +22,7 @@ from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
 from pyremu.core.registers import check_csr_access, csr_bank, CsrAccessError
 from pyremu.memory.bus import Bus
+from pyremu.utils.mask import mask32
 
 _AIA_CSRS: tuple[int, ...] = (
     0x150,  # siselect
@@ -196,6 +197,6 @@ class TestAiaCsrGateInstruction:
             assert h.mcause_val == 0, "AIA=1: mtopi probe must not trap"
         else:
             assert h.mcause_val == 2, "AIA=0: mtopi probe must trigger IllInstr"
-            assert (h.mtval_val & 0xFFFF_FFFF) == instr, (
+            assert (mask32(h.mtval_val)) == instr, (
                 "mtval must carry the faulting instruction"
             )

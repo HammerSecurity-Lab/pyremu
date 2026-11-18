@@ -18,7 +18,7 @@ import struct
 import pyfsapfs
 
 from pyremu.disk.base import DiskFormatError, DiskRegion, DiskSummary
-from pyremu.utils.mask import is_power_of_two_in
+from pyremu.utils.math import is_power_of_two_in
 from pyremu.utils.str_aux import flag_names, join_names, uuid_text
 
 FORMAT_NAME = "apfs"

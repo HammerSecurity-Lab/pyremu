@@ -15,8 +15,8 @@ from pyremu.core.registers import AIA_CSR_ADDRS, csr_bank, sync_aia_csr_gate
 from pyremu.core.trap_def import trap_cause_code, TrapType
 from pyremu.emulator import Emulator
 from pyremu.interrupt.imsic import IMSIC
-from pyremu.peripheral.termio import TerminalIO
 from pyremu.platform import InterruptMode, PlatformConfig
+from pyremu.termio import TerminalIO
 from tests.conftest import (
     AIA_APLIC_M_BASE,
     AIA_APLIC_S_BASE,

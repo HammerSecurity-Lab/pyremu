@@ -7,8 +7,8 @@ CompressedInstrOps 由 decoder/hart.py 的 Hart 组合, 方法以 hart 自身为
 各象限按 funct3 查表分发.
 """
 
-from pyremu._native import decode_compressed
 from pyremu.core.trap_def import TrapType
+from pyremu.generic_ops import decode_compressed
 from pyremu.utils.mask import mask32, mask64, sext, sext32, sint64
 
 # C1 ALU 的寄存器运算, 索引为 bits[6:5]

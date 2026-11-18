@@ -17,9 +17,6 @@ from pyremu.disasm.common import (
     UNKNOWN,
 )
 
-#  F/D floating-point disassembly
-
-
 _FP_LOAD_MNEMONIC = {0b010: "flw", 0b011: "fld"}
 _FP_STORE_MNEMONIC = {0b010: "fsw", 0b011: "fsd"}
 # OP-FP funct7[6:2] ->助记符基名 (S/D 后缀由 fmt 决定)

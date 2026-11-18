@@ -12,11 +12,13 @@ import time
 
 import pytest
 
+from pyremu.core.hart import RiscvMode
 from pyremu.emu import run
 from pyremu.emulator import Emulator, TimeoutError
-from pyremu.peripheral.termio import TerminalIO, translate_host_keys
 from pyremu.peripheral.uart import UART, UART_IRQ
 from pyremu.platform import PeripheralConfig, PlatformConfig
+from pyremu.termio import TerminalIO, translate_host_keys
+from tests.hart_helpers import set_mie, set_mip
 
 
 class TestEmulatorInit:
@@ -909,3 +911,41 @@ class TestSatpFlushNotification:
         before = emu.bus.tlb_flush_cnt.value
         hart.satp_val = (8 << 60) | 0x1000
         assert emu.bus.tlb_flush_cnt.value == before + 1
+
+
+class TestMultiStepConsistency:
+    """多次 step 后跨 hart 状态不应漂移 (累积性串扰检测)."""
+
+    def test_repeated_steps_no_state_drift(self):
+        """10 次 step, 不活跃 Hart 1 的状态应完全不变."""
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+
+        # 冻结 Hart 1: Bare mode, 已知 PC, S 模式, 已知寄存器
+        h1.pc = 0x80200000
+        h1.mode = RiscvMode.S
+        h1.satp_val = 0
+        set_mie(h1, 0)
+        set_mip(h1, 0)
+        h1._waiting = True  # WFI 等待, 不执行
+
+        # Hart 0: M 模式, 可执行
+        h0.pc = 0x80000000
+        h0.mode = RiscvMode.M
+        h0.satp_val = 0
+
+        for _ in range(10):
+            emu.step()
+
+        # Hart 1 所有状态应不变
+        assert h1.pc == 0x80200000, f"10 步后 H1 PC={h1.pc:#x}"
+        assert h1.mode == RiscvMode.S, f"10 步后 H1 mode={h1.mode}"
+        assert h1.satp_val == 0, f"10 步后 H1 satp={h1.satp_val:#x}"
+        assert h1.mie_val == 0, f"10 步后 H1 mie={h1.mie_val:#x}"
+        assert h1.mip_val == 0, f"10 步后 H1 mip={h1.mip_val:#x}"
+        assert h1._mmu_mode == 0, f"10 步后 H1 _mmu_mode={h1._mmu_mode}"

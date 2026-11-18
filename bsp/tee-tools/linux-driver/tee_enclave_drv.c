@@ -33,7 +33,7 @@
  * 未生效时只在进入与交还处各报告一次静默态, 其间开始的宽限期仍会等待本 hart
  * 直至报告停顿, 故要求内核配置 CONFIG_CONTEXT_TRACKING_USER_FORCE=y.
  *
- * 用 local_irq_save/restore 而非 disable/enable: 交还与进入时的中断状态一致.
+ * 用 local_irq_save/restore 而非 disable/enable确保交还与进入时的中断状态一致.
  */
 struct tee_guest_state {
 	unsigned long flags;
@@ -125,7 +125,9 @@ static inline struct sbiret sbi_enclave_ecall_4(
 	unsigned long a2_val,
 	unsigned long a3_val
 ) {
-	return sbi_ecall(SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, 0, 0);
+	return sbi_ecall(
+		SBI_ENCLAVE_EXT_ID, func_id, a0_val, a1_val, a2_val, a3_val, 0, 0
+	);
 }
 
 static inline struct sbiret sbi_enclave_ecall_0(unsigned long func_id) {
@@ -281,7 +283,9 @@ static long tee_ioctl(
 			return sbi_err_to_errno((long)ret.error);
 		}
 		/* Write enclave_id back to userspace args[0]. */
-		if (copy_to_user((void __user *)arg, &ret.error, sizeof(unsigned long long))) {
+		if (copy_to_user(
+				(void __user *)arg, &ret.error, sizeof(unsigned long long)
+			)) {
 			return -EFAULT;
 		}
 		return 0;
@@ -297,7 +301,8 @@ static long tee_ioctl(
 			return -EFAULT;
 		}
 
-		if (kargs.enter.payload_size == 0 || kargs.enter.payload_size > (128UL << 20)) {
+		if (kargs.enter.payload_size == 0 ||
+			kargs.enter.payload_size > (128UL << 20)) {
 			return -EINVAL;
 		}
 
@@ -324,8 +329,8 @@ static long tee_ioctl(
 		struct tee_guest_state guest_state = tee_guest_enter();
 		ret								   = sbi_enclave_ecall_6(
 			SBI_ENCLAVE_ENTER, kargs.enclave_id, kargs.enter.argc,
-			(unsigned long)argv_buf, (unsigned long)payload_buf, kargs.enter.payload_size,
-			kargs.token
+			(unsigned long)argv_buf, (unsigned long)payload_buf,
+			kargs.enter.payload_size, kargs.token
 		);
 		tee_guest_exit(guest_state);
 
@@ -346,7 +351,9 @@ static long tee_ioctl(
 	case TEE_IOC_GET_ID: {
 		ret = sbi_enclave_ecall_0(SBI_ENCLAVE_GET_ID);
 		/* a0 = 当前mdid的取值 */
-		if (copy_to_user((void __user *)arg, &ret.error, sizeof(unsigned long long))) {
+		if (copy_to_user(
+				(void __user *)arg, &ret.error, sizeof(unsigned long long)
+			)) {
 			return -EFAULT;
 		}
 		return 0;
@@ -392,8 +399,8 @@ static long tee_ioctl(
 		tee_guest_exit(guest_state);
 		if ((long)ret.error < 0) {
 			pr_err(
-				"tee_enclave: RESUME(405) id=%llu failed, error=%ld\n", kargs.enclave_id,
-				ret.error
+				"tee_enclave: RESUME(405) id=%llu failed, error=%ld\n",
+				kargs.enclave_id, ret.error
 			);
 			rc = sbi_err_to_errno((long)ret.error);
 		} else {
@@ -409,7 +416,8 @@ static long tee_ioctl(
 			return -EFAULT;
 		}
 		struct tee_guest_state guest_state = tee_guest_enter();
-		ret = sbi_enclave_ecall_2(SBI_ENCLAVE_SHUTDOWN, kargs.enclave_id, kargs.token);
+		ret =
+			sbi_enclave_ecall_2(SBI_ENCLAVE_SHUTDOWN, kargs.enclave_id, kargs.token);
 		tee_guest_exit(guest_state);
 		if ((long)ret.error < 0) {
 			pr_err(
@@ -476,7 +484,9 @@ static long tee_ioctl(
 			return -EFAULT;
 		}
 
-		ret = sbi_enclave_ecall_2(SBI_ENCLAVE_MODULE_REQ, kargs.enclave_id, kargs.token);
+		ret = sbi_enclave_ecall_2(
+			SBI_ENCLAVE_MODULE_REQ, kargs.enclave_id, kargs.token
+		);
 		if ((long)ret.error < 0) {
 			pr_err(
 				"tee_enclave: MODULE_REQ(503) id=%llu failed, error=%ld\n",

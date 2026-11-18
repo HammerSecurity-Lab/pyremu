@@ -12,15 +12,15 @@ import ctypes
 import sys
 from typing import Any
 
-from pyremu._native import (
+from pyremu.core.decoder import Hart
+from pyremu.core.hart import RatifiedHartAttrs
+from pyremu.generic_ops import (
     FfiUartCtx,
     HartState,
     InstrToBeExec,
     native_available,
     termio_set_emu_stop_flag,
 )
-from pyremu.core.decoder import Hart
-from pyremu.core.hart import RatifiedHartAttrs
 from pyremu.interrupt.aplic import APLIC
 from pyremu.interrupt.imsic import IID_EXT_MIN, IMSIC
 from pyremu.interrupt.plic import PLIC
@@ -33,7 +33,6 @@ from pyremu.peripheral import (
     I2C,
     PowerCtrl,
     SPI,
-    TerminalIO,
     UART,
     VirtIOBlock,
     VirtIONet,
@@ -44,6 +43,7 @@ from pyremu.peripheral.virtio_net import (
 )
 from pyremu.peripheral.watchdog import HartWatchdog
 from pyremu.platform import InterruptMode, PlatformConfig
+from pyremu.termio import TerminalIO
 
 
 class SetupOps:

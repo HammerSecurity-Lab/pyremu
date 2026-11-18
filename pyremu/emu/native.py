@@ -12,17 +12,6 @@ hart、PMP、CLINT、PLIC、UART 与 virtio-blk 的状态在每轮加速执行�
 
 import ctypes
 
-from pyremu._native import (
-    ClintInfo,
-    DevInfo,
-    InstrToBeExec,
-    PlicInfo,
-    PmpInfo,
-    run_parallel,
-    RunConfig,
-    UartInfo,
-    VirtIOInfo,
-)
 from pyremu.configs_aux import cfg_int
 from pyremu.core.decoder import Hart
 from pyremu.core.hart_ffi import (
@@ -37,6 +26,17 @@ from pyremu.core.hart_ffi import (
 from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.trap_def import TrapType
 from pyremu.emu.run import RunStopReason
+from pyremu.generic_ops import (
+    ClintInfo,
+    DevInfo,
+    InstrToBeExec,
+    PlicInfo,
+    PmpInfo,
+    run_parallel,
+    RunConfig,
+    UartInfo,
+    VirtIOInfo,
+)
 from pyremu.stat import recording
 from pyremu.utils.mask import mask64
 
@@ -305,11 +305,11 @@ class NativeOps:
                 hart.pmp.rebuild_cache()
         self._pmp_cfg_snapshot = bytes(self._pmp_cfg_buf)
         self._pmp_addr_snapshot = bytes(self._pmp_addr_buf)
-        return PmpInfo(
+        return PmpInfo.from_buffers(
             cfg=self._pmp_cfg_buf,
             addr=self._pmp_addr_buf,
-            pmpsplit=active[0].pmpsplit_val if active else 0,
             hart_num=len(self.harts),
+            pmpsplit=active[0].pmpsplit_val if active else 0,
         )
 
     def _native_unmarshal_pmp(self) -> None:

@@ -27,6 +27,7 @@ from pyremu.configs_gen import (
     RESERVED_MEM_SIZE,
 )
 from pyremu.emulator import Emulator
+from pyremu.platform import PlatformConfig
 from pyremu.utils import dev_tree
 from tests.conftest import make_test_config
 
@@ -97,7 +98,7 @@ def test_reserved_memory_reg_encodes_base_above_4gib():
     """reg 的地址高于 4 GiB 时, 其高 32 位落在 addr_hi 单元."""
     ranges = [(0x1_0000_0000, 0x20_0000)]
     blob = dev_tree.build_default_dtb(
-        make_test_config(ram_size=128 * 1024 * 1024), reserved_ranges=ranges
+        make_test_config(ram_size=RAM_SIZE_6GIB), reserved_ranges=ranges
     )
     assert _reg("/reserved-memory/reserved-0@100000000", blob) == ranges[0]
 
@@ -110,13 +111,16 @@ def test_reserved_memory_reg_encodes_base_above_4gib():
 def test_reserved_memory_default_pool():
     """默认 reserved_memory_ranges 应为固件映像区与 enclave 池两个
     no-map 节点."""
-    cfg = make_test_config()
+    cfg = PlatformConfig()
     assert len(cfg.reserved_memory_ranges) == 2, (
         "default should reserve fw + pool"
     )
+    # 默认主存放不下内存池; 只调整配置取值, 不分配 6 GiB 主存
+    cfg.ram_size = RAM_SIZE_6GIB
 
-    emu = Emulator(cfg, bootargs="console=ttySIF0")
-    blob = emu.build_default_dtb()
+    blob = dev_tree.build_default_dtb(
+        cfg, reserved_ranges=cfg.reserved_memory_ranges
+    )
     fdt = libfdt.Fdt(blob)
     rm = fdt.path_offset("/reserved-memory")
     assert rm >= 0
@@ -143,8 +147,13 @@ def test_reserved_memory_covers_firmware_region():
     cfg = make_test_config()
     assert int(FW_RESERVED_MEM_BASE) == cfg.ram_base, "fw 区应自 ram_base 起"
 
-    emu = Emulator(cfg, bootargs="console=ttySIF0")
-    fdt = libfdt.Fdt(emu.build_default_dtb())
+    blob = dev_tree.build_default_dtb(
+        cfg,
+        reserved_ranges=[
+            (int(FW_RESERVED_MEM_BASE), int(FW_RESERVED_MEM_SIZE))
+        ],
+    )
+    fdt = libfdt.Fdt(blob)
     nodes = _reserved_nodes(fdt)
 
     covering = [
@@ -160,13 +169,14 @@ def test_reserved_memory_covers_firmware_region():
 
 def test_reserved_memory_multiple_ranges():
     """多个 reserved 区域应分别生成子节点."""
-    cfg = make_test_config()
-    cfg.reserved_memory_ranges = [
-        (0x8300_0000, 0x0080_0000),
-        (0x9000_0000, 0x0100_0000),
-    ]
-    emu = Emulator(cfg, bootargs="console=ttySIF0")
-    blob = emu.build_default_dtb()
+    cfg = make_test_config(ram_size=RAM_SIZE_6GIB)
+    blob = dev_tree.build_default_dtb(
+        cfg,
+        reserved_ranges=[
+            (0x8300_0000, 0x0080_0000),
+            (0x9000_0000, 0x0100_0000),
+        ],
+    )
     fdt = libfdt.Fdt(blob)
 
     nodes = _reserved_nodes(fdt)
@@ -199,7 +209,7 @@ class TestDeviceTree:
 
     def test_build_default_dtb_returns_valid_dtb(self):
         """build_default_dtb 返回非空 DTB blob."""
-        emu = Emulator()
+        emu = Emulator(make_test_config())
         dtb = emu.build_default_dtb()
         assert len(dtb) > 0
         # DTB 应以 FDT magic 开头 (0xD00DFEED big-endian)
@@ -208,14 +218,14 @@ class TestDeviceTree:
 
     def test_build_default_dtb_contains_memory_node(self):
         """build_default_dtb DTB 包含 memory 节点信息."""
-        emu = Emulator()
+        emu = Emulator(make_test_config())
         dtb = emu.build_default_dtb()
         # DTB 应包含 "memory" 字符串 (节点名)
         assert b"memory" in dtb, "DTB 应包含 memory 节点"
 
     def test_load_dtb_blob_sets_a1(self):
         """load_dtb_blob 写入 DTB 并设置所有 hart 的 a1."""
-        emu = Emulator(num_harts=2, ram_size=16 * 1024 * 1024)
+        emu = Emulator(make_test_config(num_harts=2, ram_size=16 * 1024 * 1024))
         dtb = emu.build_default_dtb()
         addr = 0x80FF0000
         emu.load_dtb_blob(addr, dtb)
@@ -228,7 +238,9 @@ class TestDeviceTree:
 
     def test_load_dtb_generates_and_loads(self):
         """load_default_dtb 生成并加载 DTB, a1 指向该地址."""
-        emu = Emulator(num_harts=1, ram_size=128 * 1024 * 1024)
+        emu = Emulator(
+            make_test_config(num_harts=1, ram_size=128 * 1024 * 1024)
+        )
         addr = 0x87FF0000
         emu.load_default_dtb(addr)
         # 验证 a1
@@ -240,7 +252,7 @@ class TestDeviceTree:
 
     def test_default_bootargs_provides_console(self):
         """未指定 bootargs 时, 默认包含 earlycon=sbi console=ttySIF0."""
-        emu = Emulator()
+        emu = Emulator(make_test_config())
         dtb = emu.build_default_dtb()
         assert b"earlycon=sbi" in dtb, (
             "默认 bootargs 应包含 earlycon=sbi 以确保内核输出可见"
@@ -254,7 +266,7 @@ class TestDeviceTree:
 
     def test_explicit_bootargs_overrides_default(self):
         """显式指定 bootargs 时使用用户值而非默认值."""
-        emu = Emulator(bootargs="console=ttyS0 debug")
+        emu = Emulator(make_test_config(), bootargs="console=ttyS0 debug")
         dtb = emu.build_default_dtb()
         assert b"console=ttyS0 debug" in dtb
         # 默认值不应出现

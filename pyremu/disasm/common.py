@@ -3,7 +3,7 @@
 from enum import Enum
 
 from pyremu.disasm.regname import gpr_name
-from pyremu.utils.mask import mask64, sext, sext12
+from pyremu.utils.mask import sext, sext12
 
 UNKNOWN = "<unk-op>"
 
@@ -35,9 +35,6 @@ class Opc(Enum):
     jalr = 0b11001_11  # 无条件跳转 (寄存器)
     jal = 0b11011_11  # 无条件跳转
     sys = 0b11100_11  # ecall/ebreak/sfence.vma / CSR
-
-
-#  Funct3 / Funct7 enumerations
 
 
 AluOp = Enum(
@@ -158,9 +155,6 @@ AMOW_MAP: dict[int, AmoWidth] = {
     v.value: v
     for v in AmoWidth  # type: ignore[var-annotated]
 }
-
-
-#  Instruction-field extractors
 
 
 def parse_opcode(x: int) -> int:
@@ -292,14 +286,6 @@ def fmt_imm(val: int) -> str:
     if val >= (1 << 63):
         val = val - (1 << 64)
     return str(val)
-
-
-def fmt_addr(val: int) -> str:
-    """格式化绝对地址: hex."""
-    return f"0x{mask64(val):x}"
-
-
-#  字段提取辅助
 
 
 def rd_name(instr: int) -> str:

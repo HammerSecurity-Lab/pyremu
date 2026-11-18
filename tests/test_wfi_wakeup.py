@@ -6,8 +6,18 @@ import threading
 import pytest
 
 from pyremu.core.hart import RiscvMode
+from pyremu.core.priv_defs import MSTATUS_MIE
 from pyremu.emulator import Emulator
+from pyremu.interrupt.clint import CLINT
+from pyremu.memory.bus import Bus
 from pyremu.platform import PlatformConfig
+from tests.conftest import make_test_emu
+from tests.hart_helpers import (
+    make_hart,
+    make_pmp,
+    set_mie,
+    set_msip,
+)
 
 CLINT_BASE = 0x02000000
 
@@ -221,3 +231,178 @@ class TestMsipStoreInNativeBatch:
             f"hart1 未在唤醒后写入标记: waiting={h1._waiting}, pc={h1.pc:#x}, "
             f"mip={h1.mip_val:#x}, mie={h1.mie_val:#x}, msip={emu.clint._msip}"
         )
+
+
+class TestWfiCrossHartWake:
+    """WFI 等待的 hart 应能被另一 hart 的 MSIP 唤醒."""
+
+    def test_wfi_wake_by_msip_python(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        h1._waiting = True
+        set_mie(h1, 1 << 3)
+        set_msip(clint, 1, 1)
+
+        h1.sync_pending_interrupts()
+        awakened = h1.wake_hart_from_wfi()
+        assert awakened, "MSIP=1 时应唤醒 WFI"
+        assert not h1._waiting, "唤醒后 _waiting 应为 False"
+
+    def test_wfi_native_batch_wake(self):
+        """Rust batch 中 WFI hart 应被 CLINT MSIP 唤醒."""
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+
+        h1._waiting = True
+        set_mie(h1, 1 << 3)
+        h1.mode = RiscvMode.M
+        emu.clint._msip[1] = 1
+
+        emu.step()
+        assert not h1._waiting, f"native batch 后 H1 _waiting={h1._waiting}"
+
+
+class TestWfiWakeupMsipNeedsMsie:
+    """WFI 唤醒: 挂起的中断还须在 mie 中使能.
+
+    RISC-V 特权规范 §3.6.1: 任一挂起且已使能的中断使 WFI 恢复执行, 与
+    mstatus.MIE 无关; mie 中未使能的挂起中断不构成唤醒来源. MSIP 挂起而
+    mie.MSIE 为 0 时 hart 继续等待, 由受调试程序置位 MSIE 后才被唤醒.
+    """
+
+    @staticmethod
+    def _setup_msip_handler(emu: Emulator):
+        """MSIP 陷态处理函数 @ 0x80000000: 写 0 到 CLINT MSIP 后 mret.
+
+        hart 处于 M 模式且 mstatus.MIE=1, mie 由调用方设置.
+        """
+        h = emu.harts[0]
+        # lui  t0, 0x02000  -> t0 = 0x02000000 (CLINT 基址)
+        # sw   x0, 0(t0)    -> CLINT MSIP[hart0] = 0
+        # mret
+        emu.bus.write_ram_direct(0x80000000, (0x020002B7).to_bytes(4, "little"))
+        emu.bus.write_ram_direct(0x80000004, (0x0002A023).to_bytes(4, "little"))
+        emu.bus.write_ram_direct(0x80000008, (0x30200073).to_bytes(4, "little"))
+        h.csrs["mtvec"].val = 0x80000000
+        h.mode = RiscvMode.M
+        h.mstatus_val |= MSTATUS_MIE
+        h.pc = 0x8000000C  # 用户代码起点 (处理函数占 12 字节)
+
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_wfi_keeps_waiting_with_msie_zero(self, use_native):
+        """CLINT MSIP=1 且 mie.MSIE=0 时 wake_hart_from_wfi 返回 False."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        h = emu.harts[0]
+        h.mode = RiscvMode.M
+        h.mstatus_val |= MSTATUS_MIE
+        set_mie(h, 0)  # MSIE=0
+        set_msip(emu.clint, 0, 1)
+
+        # 手工置 WFI 等待
+        h._waiting = True
+
+        h.sync_pending_interrupts()
+        result = h.wake_hart_from_wfi()
+        assert not result, (
+            f"[{'native' if use_native else 'python'}] "
+            "CLINT MSIP=1 但 MSIE=0: wake_hart_from_wfi 应返回 False"
+        )
+        assert h._waiting, "WFI 等待标志应保持"
+        assert not h._wfi_woken, "未唤醒时 wfi_woken 不应置位"
+
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_sync_writes_mip_without_changing_mie(self, use_native):
+        """同步硬件中断源只写 mip, 不改变 mie.MSIE."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        h = emu.harts[0]
+        h.mode = RiscvMode.M
+        h.mstatus_val |= MSTATUS_MIE
+        set_mie(h, 0)  # MSIE=0
+        set_msip(emu.clint, 0, 1)
+        h._waiting = True
+
+        h.sync_pending_interrupts()
+
+        assert (h._csr_read_raw("mie") & (1 << 3)) == 0, (
+            f"[{'native' if use_native else 'python'}] 同步之后 MSIE 应仍为 0"
+        )
+        assert (h.mip_val & (1 << 3)) != 0, "MSIP 挂起应写入 mip"
+
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_msip_wakes_and_traps_after_msie_set(self, use_native):
+        """置位 MSIE 之后 MSIP 唤醒 hart 并投递到 M 模式陷态处理函数."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        self._setup_msip_handler(emu)
+        h = emu.harts[0]
+        set_mie(h, 0)
+        set_msip(emu.clint, 0, 1)
+        h._waiting = True
+
+        h.sync_pending_interrupts()
+        assert not h.wake_hart_from_wfi(), "MSIE=0 时不应唤醒"
+
+        h._csr_write_raw("mie", 1 << 3)
+        h.sync_pending_interrupts()
+        assert h.wake_hart_from_wfi(), "MSIE=1 时 MSIP 应唤醒"
+        assert not h._waiting
+
+        assert h.check_pending_interrupts(), "MSIP 应投递到 M 模式"
+        assert h.pc == 0x80000000, "pc 应跳到 mtvec"
+        mcause = h.mcause_val
+        assert mcause >> 63 == 1, "mcause 的中断位应为 1"
+        assert (mcause & 0x7FFF_FFFF) == 3, "mcause 的中断码应为 MSIP"
+        assert emu.clint._msip[0] == 1, "投递不改变 CLINT 的 MSIP"
+
+    @pytest.mark.parametrize("use_native", [False, True])
+    def test_wfi_wakeup_msie_enabled_no_spurious_halt(self, use_native):
+        """MSIE=1 时 MSIP 唤醒并投递, 处理函数清除中断源, 不应 halted."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        self._setup_msip_handler(emu)
+        h = emu.harts[0]
+
+        # WFI @ 0x8000000C — 处理函数 mret 之后执行, 进入等待并退出批次
+        emu.bus.write_ram_direct(0x8000000C, (0x10500073).to_bytes(4, "little"))
+
+        set_mie(h, 1 << 3)  # MSIE=1
+        set_msip(emu.clint, 0, 1)
+
+        emu.step()
+
+        assert not h._halted, (
+            f"[{'native' if use_native else 'python'}] MSIP 唤醒不应 halted"
+        )
+
+    def test_wfi_wakeup_with_mie_msie_also_works(self):
+        """mie.MSIE=1 的正常路径不受影响."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        h = emu.harts[0]
+        h.mode = RiscvMode.M
+        h.mstatus_val |= MSTATUS_MIE
+        set_mie(h, 1 << 3)  # MSIE=1
+        set_msip(emu.clint, 0, 1)
+        h._waiting = True
+
+        h.sync_pending_interrupts()
+        assert h.wake_hart_from_wfi(), "MSIE=1 时 MSIP 应正常唤醒"
+        assert not h._waiting
+
+    def test_wfi_wakeup_no_interrupt_no_wake(self):
+        """无待处理中断时 WFI 不应被唤醒."""
+        emu = make_test_emu(ram_size=1024 * 1024)
+        h = emu.harts[0]
+        h.mode = RiscvMode.M
+        h.mstatus_val |= MSTATUS_MIE
+        set_mie(h, 1 << 3)  # MSIE=1
+        set_msip(emu.clint, 0, 0)  # MSIP=0
+        h._waiting = True
+
+        h.sync_pending_interrupts()
+        assert not h.wake_hart_from_wfi(), "无待处理中断时不应唤醒"
+        assert h._waiting, "WFI 等待标志应保持"

@@ -15,7 +15,7 @@ from pathlib import Path
 import struct
 
 from pyremu.disk.base import DiskFormatError, DiskRegion, DiskSummary
-from pyremu.utils.mask import is_power_of_two_in
+from pyremu.utils.math import is_power_of_two_in
 from pyremu.utils.str_aux import (
     bytes_to_utf8,
     flag_names,

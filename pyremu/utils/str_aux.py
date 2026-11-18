@@ -36,7 +36,10 @@ def uuid_text(raw: bytes) -> str:
 
 
 def fmt_addr(addr: int) -> str:
-    """64 位地址转换为固定 16 位、带 0x 前缀的十六进制字符串."""
+    """
+    默认情况下假设处在64位表示
+    故仅固定 16 位并返回带 0x 前缀的十六进制字符串.
+    """
     return f"0x{addr:016x}"
 
 

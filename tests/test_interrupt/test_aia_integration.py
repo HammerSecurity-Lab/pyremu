@@ -35,6 +35,7 @@ def _make_legacy_emu(num_harts: int = 1) -> Emulator:
     cfg.ram_base = 0x4000_0000
     cfg.prog_cnt = 0x4000_0000
     cfg.rom_base = 0
+    cfg.reserved_memory_ranges = []
     return Emulator(cfg)
 
 

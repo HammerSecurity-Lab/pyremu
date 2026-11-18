@@ -26,14 +26,8 @@ import lief
 
 from pyremu.utils.wrapper import seize_err_if_any
 
-#  文件格式魔数
-
-
 ELF_MAGIC = b"\x7fELF"
 PE_MAGIC = b"MZ"
-
-
-#  数据模型
 
 
 @dataclass
@@ -110,7 +104,6 @@ ELF64_SYM_SIZE = struct.calcsize(ELF64_SYM_FMT)  # 24
 
 # 符号绑定 (bits 7:4 of st_info)
 STB_LOCAL = 0
-
 # 符号类型 (bits 3:0 of st_info) — ELF64 STT_* 常量
 _STT_NOTYPE = 0
 _STT_OBJECT = 1

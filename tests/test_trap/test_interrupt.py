@@ -14,7 +14,11 @@ from pyremu.core.priv_defs import (
     MSTATUS_SIE,
 )
 from pyremu.core.registers import CsrAccessError
+from pyremu.emulator import Emulator
 from pyremu.interrupt.clint import CLINT
+from pyremu.memory.bus import Bus
+from pyremu.platform import PlatformConfig
+from tests.hart_helpers import make_hart, make_pmp, set_mie, set_mip
 from tests.test_trap.support import (
     MTVEC,
     StubImsic,
@@ -752,3 +756,45 @@ class TestSstcNotDeclared:
 
         assert hart.scause_val == self.STI_CAUSE
         assert hart.pc == STVEC
+
+
+class TestMipMieIsolation:
+    """mip/mie 是 per-hart CSR."""
+
+    def test_mie_independent(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        set_mie(h0, (1 << 3) | (1 << 7))  # MSIE | MTIE
+        assert h0.mie_val == ((1 << 3) | (1 << 7))
+        assert h1.mie_val == 0, f"H1 mie={h1.mie_val:#x}, 应为 0"
+
+    def test_mip_independent(self):
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        set_mip(h0, 1 << 3)
+        assert h0.mip_val & (1 << 3)
+        assert (h1.mip_val & (1 << 3)) == 0, f"H1 mip={h1.mip_val:#x} 被污染"
+
+    def test_mip_mie_native_roundtrip(self):
+        """经 Rust batch marshal/unmarshal 后 mip/mie 不串扰."""
+        cfg = PlatformConfig(
+            num_harts=2,
+            ram_base=0x80000000,
+            ram_size=128 * 1024 * 1024,
+        )
+        emu = Emulator(cfg)
+        h0, h1 = emu.harts
+
+        set_mie(h0, (1 << 3) | (1 << 7))
+        set_mip(h0, 1 << 7)
+
+        emu.step()
+
+        assert h1.mie_val == 0, f"Rust roundtrip H1 mie={h1.mie_val:#x}"
+        assert h1.mip_val == 0, f"Rust roundtrip H1 mip={h1.mip_val:#x}"

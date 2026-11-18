@@ -11,6 +11,10 @@ from pathlib import Path
 from pyremu.utils.wrapper import seize_err_if_any
 
 
+def abs_dir(p: PathLike) -> Path:
+    return Path(p).parent.resolve()
+
+
 def reloc_path(src: PathLike, *intermidate: str | PathLike) -> str:
     ret = Path(src)
     for mid in intermidate:

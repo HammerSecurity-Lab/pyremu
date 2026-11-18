@@ -5,7 +5,7 @@
 # 并做了模块切分、标识符更名与静态检查所需的少量改写.
 # 版权声明与许可条款见同目录下的 LICENSE.
 
-"""设备树的语法分析 — 记号序列到节点树, 以及树的后续整理."""
+"""设备树语法分析"""
 
 import collections
 from collections.abc import Iterable

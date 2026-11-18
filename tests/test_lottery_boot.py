@@ -92,11 +92,6 @@ def lottery_lines_4h(emu_4h: Emulator) -> list[str]:
     return _run_lottery(emu_4h)
 
 
-# ------------------------------------------------------------
-#  TestUartLineBuffering
-# ------------------------------------------------------------
-
-
 class TestUartLineBuffering:
     """多 hart UART 行缓冲 — 输出不交错, 日志文件按 hart 隔离.
 

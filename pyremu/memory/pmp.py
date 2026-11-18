@@ -20,11 +20,9 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
-from pyremu._native import (
-    native_available,
-    pmp_check,
-)
+from pyremu import generic_ops
 from pyremu.configs_gen import PMP_ENTRIES
+from pyremu.generic_ops import native_available
 from pyremu.utils.mask import mask64
 
 # PMP 配置位 (每 8-bit 条目中的位偏移)
@@ -232,6 +230,19 @@ class Pmp:
 
     # ---- 权限检查入口 ----
 
+    def ensure_cache(self) -> None:
+        """重建条目组缓存, 使平面快照与当前条目一致."""
+        if self._cache_dirty:
+            self.rebuild_cache()
+
+    def flat_cfg_bytes(self) -> bytes:
+        """按条目顺序给出 cfg 字节快照."""
+        return bytes(self._flat_cfg)
+
+    def flat_addr_array(self):
+        """按条目顺序给出 pmpaddr 取值快照."""
+        return self._flat_addr
+
     def check(self, info: PmpAccessInfo) -> bool:
         """检查物理地址访问是否允许. 返回 True 表示通过."""
         pmpsplit, mdid = info.pmpsplit, info.mdid
@@ -240,21 +251,10 @@ class Pmp:
         if mdid != 0 and pmpsplit > 0 and pmpsplit >= self._num_entries:
             return False
 
-        # 加速执行路径: 由加速执行引擎处理 M 模式旁路、MPRV、pmpsplit 等全部逻辑
-        if self._use_native:
-            if self._cache_dirty:
-                self.rebuild_cache()
-            return pmp_check(
-                bytes(self._flat_cfg),
-                self._flat_addr,
-                self._num_entries,
-                info,
-            )
+        # 后端选择在 pyremu.generic_ops 内完成
+        return generic_ops.pmp.check(self, info)
 
-        # 加速执行库不可用时的纯 Python 路径
-        return self._check_py(info)
-
-    def _check_py(self, info: PmpAccessInfo) -> bool:
+    def check_py(self, info: PmpAccessInfo) -> bool:
         """纯 Python PMP 检查, 加速执行库缺失时使用."""
         pa, size = info.pa, info.size
         mode_val, mstatus_val = info.mode_val, info.mstatus_val

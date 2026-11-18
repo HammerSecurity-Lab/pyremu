@@ -67,11 +67,6 @@ class TestDetectFormat:
         assert result == "raw"
 
 
-# ============================================================
-#  parse_firmware — raw binary
-# ============================================================
-
-
 class TestParseRaw:
     """验证 raw binary 解析."""
 
@@ -111,11 +106,6 @@ class TestParseRaw:
         """解析不存在的文件应返回 None (seize_err_if_any)."""
         img = parse_firmware("/nonexistent/file.bin")
         assert img is None
-
-
-# ============================================================
-#  parse_firmware — ELF (需要 bins/elf 下的真实 ELF 文件)
-# ============================================================
 
 
 class TestParseElf:

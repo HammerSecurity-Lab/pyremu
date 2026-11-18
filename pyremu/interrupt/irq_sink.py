@@ -18,7 +18,7 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pyremu._native import FfiExtIrqCtx
+    from pyremu.generic_ops import FfiExtIrqCtx
     from pyremu.interrupt.aplic import APLIC
     from pyremu.interrupt.plic import PLIC
 

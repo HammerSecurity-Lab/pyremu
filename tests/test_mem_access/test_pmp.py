@@ -362,10 +362,8 @@ class TestPmpCheck:
 
     # ---- 纯 Python 检查入口 ----
 
-    def test_check_py_m_mode_mprv_zero_bypasses(self, pmp):
-        assert pmp._check_py(
-            PmpAccessInfo(0x1000, 4, mode_val=3, mstatus_val=0)
-        )
+    def testcheck_py_m_mode_mprv_zero_bypasses(self, pmp):
+        assert pmp.check_py(PmpAccessInfo(0x1000, 4, mode_val=3, mstatus_val=0))
 
 
 class TestPmpConstruction:

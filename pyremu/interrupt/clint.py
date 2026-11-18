@@ -28,7 +28,30 @@ from pyremu.interrupt.controller import (
     IntSource,
 )
 from pyremu.memory.bus import Device
-from pyremu.utils.mask import mask64, read_u64_bytes, write_u64_bytes
+from pyremu.utils.mask import mask64
+
+
+def _read_u64_bytes(val: int, byte_off: int, size: int) -> bytes:
+    """从 64 位寄存器的第 byte_off 个字节起取出 size 个字节.
+
+    寄存器值先按 64 位截断; 越过寄存器末尾的部分读为 0.
+    """
+    raw = mask64(val).to_bytes(8, "little", signed=False)
+    chunk = raw[byte_off : byte_off + size]
+    return chunk + b"\x00" * (size - len(chunk))
+
+
+def _write_u64_bytes(cur: int, byte_off: int, data: bytes) -> int | None:
+    """把 data 自 64 位寄存器的第 byte_off 个字节起写入, 返回合并后的值.
+
+    写入越过寄存器末尾时返回 None, 调用方据此丢弃该次写入.
+    """
+    if byte_off + len(data) > 8:
+        return None
+    raw = bytearray(mask64(cur).to_bytes(8, "little", signed=False))
+    raw[byte_off : byte_off + len(data)] = data
+    return int.from_bytes(raw, "little", signed=False)
+
 
 # CLINT 标准基址
 CLINT_BASE = 0x0200_0000
@@ -153,7 +176,9 @@ class CLINT(InterruptController, Device):
         if offset < MTIMECMP_OFFSET:
             hart_id = offset // 4
             if 0 <= hart_id < self._num_harts:
-                return read_u64_bytes(self._msip[hart_id] & 1, offset % 4, size)
+                return _read_u64_bytes(
+                    self._msip[hart_id] & 1, offset % 4, size
+                )
             return b"\x00" * size
 
         # MTIMECMP 区域: offset 0x4000..0xBFF7
@@ -161,14 +186,14 @@ class CLINT(InterruptController, Device):
             local_off = offset - MTIMECMP_OFFSET
             hart_id = local_off // 8
             if 0 <= hart_id < self._num_harts:
-                return read_u64_bytes(
+                return _read_u64_bytes(
                     self._mtimecmp[hart_id], local_off % 8, size
                 )
             return b"\x00" * size
 
         # MTIME 寄存器: offset 0xBFF8
         if MTIME_OFFSET <= offset < MTIME_OFFSET + 8:
-            return read_u64_bytes(self._mtime, offset - MTIME_OFFSET, size)
+            return _read_u64_bytes(self._mtime, offset - MTIME_OFFSET, size)
 
         return b"\x00" * size
 
@@ -192,7 +217,7 @@ class CLINT(InterruptController, Device):
             local_off = offset - MTIMECMP_OFFSET
             hart_id = local_off // 8
             if 0 <= hart_id < self._num_harts:
-                merged = write_u64_bytes(
+                merged = _write_u64_bytes(
                     self._mtimecmp[hart_id], local_off % 8, data
                 )
                 if merged is not None:
@@ -201,7 +226,7 @@ class CLINT(InterruptController, Device):
 
         # MTIME 寄存器
         if MTIME_OFFSET <= offset < MTIME_OFFSET + 8:
-            merged = write_u64_bytes(self._mtime, offset - MTIME_OFFSET, data)
+            merged = _write_u64_bytes(self._mtime, offset - MTIME_OFFSET, data)
             if merged is not None:
                 self._mtime = merged
 

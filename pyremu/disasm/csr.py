@@ -60,9 +60,6 @@ def dis_priv(instr: int) -> str:
     return mnemonic
 
 
-#  FENCE
-
-
 def dis_fence(instr: int) -> str:
     f3 = parse_func3(instr)
     if f3 == 0b000:

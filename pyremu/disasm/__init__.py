@@ -33,7 +33,6 @@ from pyremu.disasm.common import (
     BrFn3_MAP,
     decode_c_sdsp,
     decode_sd_sp,
-    fmt_addr,
     fmt_imm,
     LdFn3,
     LdFn3_MAP,
@@ -83,7 +82,6 @@ __all__ = [
     "decode_c_sdsp",
     "decode_sd_sp",
     "disasm",
-    "fmt_addr",
     "fmt_imm",
     "parse_compressed",
     "parse_func3",
@@ -104,9 +102,6 @@ __all__ = [
     "rs1_name",
     "rs2_name",
 ]
-
-
-#  主入口
 
 
 _DISASM_HANDLERS: dict[Opc, Callable[[int], str]] = {

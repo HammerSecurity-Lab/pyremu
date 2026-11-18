@@ -238,6 +238,7 @@ pub extern "C" fn exec_op32(funct3: u8, funct7: u8, v1: u64, v2: u64) -> Alu64 {
 			0x30 => w1.rotate_left((w2 as u32) & 0x1F),
 			_ => return Alu64::ill(),
 		},
+		0b010 | 0b011 => return Alu64::ill(),
 		0b100 => {
 			if funct7 != 1 {
 				return Alu64::ill();

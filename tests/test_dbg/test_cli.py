@@ -1045,7 +1045,12 @@ class TestDebuggerEntry:
         assert emu.num_harts == 3
         assert [h.pc for h in emu.harts] == [RAM_BASE] * 3
 
-    def test_default_fdt_address_is_recorded(self, tmp_path, repl_capture):
+    def test_default_fdt_address_is_recorded(
+        self, tmp_path, repl_capture, monkeypatch
+    ):
+        # 测试平台的主存只有 4 MiB, 默认的飞地内存池放不进去, 换成同址小区间
+        monkeypatch.setattr("pyremu.configs_gen.RESERVED_MEM_BASE", 0x8000_0000)
+        monkeypatch.setattr("pyremu.configs_gen.RESERVED_MEM_SIZE", 0x1000)
         fw = _raw_firmware(tmp_path)
         cli.debugger([fw, "--ram", "4M", "--base-addr", hex(RAM_BASE), "--fdt"])
         dbg = repl_capture["dbg"]
@@ -1300,8 +1305,12 @@ class TestDebuggerEntry:
             (work / "symbols").resolve()
         )
 
-    def test_initrd_is_loaded_before_device_tree(self, tmp_path, repl_capture):
+    def test_initrd_is_loaded_before_device_tree(
+        self, tmp_path, repl_capture, monkeypatch
+    ):
         """initramfs 的范围要写入设备树, 故必须先生成 DTB 之前加载."""
+        monkeypatch.setattr("pyremu.configs_gen.RESERVED_MEM_BASE", 0x8000_0000)
+        monkeypatch.setattr("pyremu.configs_gen.RESERVED_MEM_SIZE", 0x1000)
         fw = _raw_firmware(tmp_path)
         initrd = tmp_path / "initrd.cpio"
         initrd.write_bytes(b"\x00" * 0x1000)

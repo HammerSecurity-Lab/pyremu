@@ -13,7 +13,6 @@ import re
 from rich.markup import escape
 from rich.table import Table
 
-from pyremu._native import decode_fields
 from pyremu.core.hart import RiscvMode
 from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.core.trap_def import trap_cause_name
@@ -25,6 +24,7 @@ from pyremu.debug.utils import (
     read_va_bytes,
 )
 from pyremu.disasm import disasm
+from pyremu.generic_ops import decode_fields
 from pyremu.memory.mmu import PTE_R, PTE_U, PTE_W, PTE_X, sv39_walk
 from pyremu.utils.mask import mask64
 from pyremu.utils.str_aux import dye_hexdump

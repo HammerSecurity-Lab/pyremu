@@ -37,11 +37,7 @@ import ctypes
 from functools import partialmethod
 import sys
 
-from pyremu._native import (
-    bus_read_ram,
-    bus_write_ram,
-    native_available,
-)
+from pyremu import generic_ops
 from pyremu.configs_gen import PYREMU_NO_L2
 
 # Module-level cache for native pointers to bytearray buffers.
@@ -183,7 +179,6 @@ class DirectRam:
         self._pie_ofs_base: int = 0
         self._pie_ofs_size: int = 0
 
-        self._use_native: bool = native_available()
         self._ram_native_ptr: int = 0
         self._read_out_ptr: int = 0
         # 直读RAM, 供 bus_read_ram / bus_write_ram 一次性传入
@@ -194,6 +189,7 @@ class DirectRam:
             0,
             0,
         )
+        self._use_native: bool = generic_ops.native_available()
         if self._use_native:
             # 两处地址用 ctypes.addressof 取得;
             # 取地址不用 ctypes.cast, 后者会与所转换的对象构成引用环.
@@ -284,10 +280,9 @@ class DirectRam:
         # Rust native fast path: only for regular access sizes (1/2/4/8).
         # L2 cache line fills (64 B) would overflow the 8-byte read-out buffer.
         if (
-            self._use_native
-            and self._ram_native_ptr
+            self._ram_native_ptr
             and size in (1, 2, 4, 8)
-            and bus_read_ram(
+            and generic_ops.mem.bus_read_ram(
                 self._ram_win,
                 addr,
                 size,
@@ -312,10 +307,9 @@ class DirectRam:
         # Rust native fast path: only for regular access sizes (1/2/4/8).
         # L2 cache line fills produce larger writes via the Python path.
         if (
-            self._use_native
-            and self._ram_native_ptr
+            self._ram_native_ptr
             and data_len in (1, 2, 4, 8)
-            and bus_write_ram(
+            and generic_ops.mem.bus_write_ram(
                 self._ram_win,
                 addr,
                 data,

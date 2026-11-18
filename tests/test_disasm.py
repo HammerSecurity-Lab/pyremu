@@ -126,6 +126,22 @@ class TestRV64In32Bit:
         )
         assert disasm(instr, 0) == "slliw        x3, x1, 2"
 
+    @pytest.mark.parametrize(
+        "funct3, funct7",
+        [
+            (0b001, 1),
+            (0b010, 0),
+            (0b011, 0),
+            (0b100, 0),
+            (0b110, 0),
+            (0b111, 0),
+        ],
+    )
+    def test_undefined_encoding_has_no_mnemonic(self, funct3, funct7):
+        """OP-32 未定义的编码不作反汇编."""
+        instr = r_type(OP32, 3, (funct7 << 3) | funct3, 0b00001_00010)
+        assert disasm(instr, 0) == "<unk-op>"
+
 
 # ============================================================
 #  Load / Store
@@ -171,13 +187,13 @@ class TestLoadStore:
         (
             [BR, 0, 11, 12, 16],
             0x80000000,
-            lambda x: "beq" in x and "0x80000010" in x,
+            lambda x: "beq" in x and "0x0000000080000010" in x,
         ),
         # offset = -8, bne x1, x0, -8
         (
             [BR, 1, 1, 0, -8],
             0x80000010,
-            lambda x: "bne" in x and "0x80000008" in x,
+            lambda x: "bne" in x and "0x0000000080000008" in x,
         ),
         ([BR, 5, 11, 12, 16], 0x8000_0000, lambda x: "bge" in x),
     ],
@@ -199,7 +215,7 @@ class TestJumps:
         # offset = 16: imm20=0, imm10_1=8, imm11=0, imm19_12=0
         instr = j_type(JAL, 1, 16)
         result = disasm(instr, 0x80000000)
-        assert result == "jal          x1, 0x80000010"
+        assert result == "jal          x1, 0x0000000080000010"
 
     def test_jalr(self):
         instr = i_type(imm12=16, rs1=1, funct3=0, rd=1, opcode=JALR)
@@ -207,11 +223,11 @@ class TestJumps:
 
     def test_lui(self):
         instr = u_type(imm20=0x12345, rd=5, opcode=LUI)
-        assert disasm(instr, 0) == "lui          x5, 0x12345"
+        assert disasm(instr, 0) == "lui          x5, 0x0000000000012345"
 
     def test_auipc(self):
         instr = u_type(imm20=0x21000, rd=10, opcode=AUIPC)
-        assert disasm(instr, 0) == "auipc        x10, 0x21000"
+        assert disasm(instr, 0) == "auipc        x10, 0x0000000000021000"
 
 
 class TestSystem:

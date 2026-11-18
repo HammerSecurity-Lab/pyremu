@@ -21,6 +21,7 @@ from pyremu.interrupt.clint import (
 )
 from pyremu.interrupt.controller import INT_SOURCE_MIP_MASK, IntSource
 from pyremu.memory.bus import Bus
+from tests.hart_helpers import make_hart, make_pmp, set_mie, set_msip
 
 
 class TestCLINTRegisters:
@@ -337,3 +338,161 @@ class TestCLINTMmioPath:
             f"清零后 mip.MSIP 必须为 0, 实际 mip={h.mip_val:#x}"
         )
         assert not has_pending, "check_interrupt 应返回 no pending"
+
+
+class TestHardwareMipClear:
+    def test_msip_cleared_after_clint_write_zero(self):
+        """CLINT MSIP 写 0 后, check_pending_interrupts 应清除 mip.MSIP."""
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+
+        # 设置为 M 模式, 使能 MSIE, mtvec 指向有效地址
+        h0.mode = RiscvMode.M
+        h0.mstatus_val |= MSTATUS_MIE  # 全局中断使能 (mstatus.MIE)
+        set_mie(h0, 1 << 3)  # MSIE
+        h0.csrs["mtvec"].val = 0x80000000
+
+        # Step 1: 设置 MSIP 后 mip 应有 MSIP
+        set_msip(clint, 0, 1)
+        has_pending, mip_bits, _ = clint.check_interrupt(0)
+        assert has_pending and (mip_bits & (1 << 3)), "MSIP=1 时应 pending"
+
+        # Step 2: check_pending_interrupts 投递中断
+        delivered = h0.check_pending_interrupts()
+        assert delivered, "MSIP pending + MSIE enabled -> 应投递中断"
+        # 进入 M-mode trap handler 后 MIE 被硬件清除
+        assert not h0.mie, "trap 入口应清除 MIE"
+        # 模拟 handler 处理: 清除 CLINT MSIP
+        clint.clear_ipi(0)
+        assert clint._msip[0] == 0, "clear_ipi 后 MSIP 应为 0"
+
+        # Step 3: 模拟 mret 后恢复 MIE
+        h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
+        assert h0.mie, "mret 后 MIE 应恢复为 1"
+
+        # Step 4: 再次调用 check_pending_interrupts
+        # ── 核心断言: MSIP 已清, 不应再投递任何中断 ──
+        delivered_again = h0.check_pending_interrupts()
+        assert not delivered_again, (
+            "CLINT MSIP 已清零, check_pending_interrupts 不应再投递中断 "
+            "(旧 bug: mip MSIP 位未清除, 导致虚假重入)"
+        )
+
+        # 验证 mip CSR 中 MSIP 位确已清除
+        mip_after = h0._csr_read_raw("mip")
+        assert (mip_after & (1 << 3)) == 0, (
+            f"mip.MSIP 应在 CLINT 清零后撤除, 实际 mip={mip_after:#x}"
+        )
+
+    def test_mtip_cleared_after_mtimecmp_disabled(self):
+        """mtimecmp=0 (禁用) 后, MTIP 不再挂起."""
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+
+        h0.mode = RiscvMode.M
+        h0.mstatus_val |= MSTATUS_MIE  # 全局中断使能
+        set_mie(h0, 1 << 7)  # MTIE
+        h0.csrs["mtvec"].val = 0x80000000
+
+        # Step 1: 设置 mtimecmp 并使 mtime 超过它
+        clint._mtimecmp[0] = 100
+        clint._mtime = 200
+        has_pending, mip_bits, _ = clint.check_interrupt(0)
+        assert has_pending and (mip_bits & (1 << 7)), (
+            "mtime >= mtimecmp 时 MTIP 应 pending"
+        )
+
+        # Step 2: 投递中断
+        delivered = h0.check_pending_interrupts()
+        assert delivered, "MTIP pending + MTIE enabled -> 应投递中断"
+
+        # Step 3: 模拟 handler 清除定时器 (写入 mtimecmp=0)
+        clint._mtimecmp[0] = 0
+
+        # Step 4: 恢复 MIE (模拟 mret)
+        h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
+
+        # Step 5: 核心断言 — MTIP 已清除
+        delivered_again = h0.check_pending_interrupts()
+        assert not delivered_again, (
+            "mtimecmp 已禁用, check_pending_interrupts 不应再投递 MTIP 中断"
+        )
+        mip_after = h0._csr_read_raw("mip")
+        assert (mip_after & (1 << 7)) == 0, (
+            f"mip.MTIP 应在 mtimecmp=0 后清除, 实际 mip={mip_after:#x}"
+        )
+
+    def test_msip_clear_prevents_spurious_retrap_loop(self):
+        """模拟 MSIP 风暴场景: 依次执行 IPI、trap、clear 与 mret 后不重入.
+
+        这是诊断中观察到的真实故障模式: 两个 hart 在 M-mode 之间无限往返,
+        每次 ~5500 traps/10s, 900s 内共投递 214K 次 MSIP 中断.
+        """
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+
+        h0.mode = RiscvMode.M
+        h0.mstatus_val |= MSTATUS_MIE  # 全局中断使能
+        set_mie(h0, 1 << 3)  # MSIE
+        h0.csrs["mtvec"].val = 0x80000000
+
+        trap_count = 0
+
+        # 模拟一次完整的 IPI 处理循环
+        for _ in range(10):
+            # 外部 hart 发 IPI (置 MSIP)
+            if trap_count == 0:
+                clint.send_ipi(0)
+
+            # 检查中断
+            if h0.check_pending_interrupts():
+                trap_count += 1
+                # handler: 清除本 hart 的 MSIP
+                clint.clear_ipi(0)
+                # mret: 恢复 MIE
+                h0._csr_write_raw("mstatus", h0.mstatus_val | MSTATUS_MIE)
+
+        # 核心断言: 只投递了 1 次中断, 不是 10 次
+        assert trap_count == 1, (
+            f"IPI 清除后不应再有中断重入. "
+            f"预期 1 次, 实际 {trap_count} 次 "
+            f"(旧 bug: 每次 check_pending_interrupts 都重投递 MSIP)"
+        )
+
+    def test_cross_hart_msip_no_storm(self):
+        """跨 hart 完整流程: Hart 0 发 IPI, Hart 1 收到后清除, 不重入."""
+        bus = Bus(ram_base=0x80000000, ram_size=128 * 1024 * 1024)
+        clint = CLINT(num_harts=2)
+        h0 = make_hart(0, bus, clint, make_pmp())
+        h1 = make_hart(1, bus, clint, make_pmp())
+
+        # 两 hart 均 M 模式, MSIE 使能, 全局中断开启
+        for h in [h0, h1]:
+            h.mode = RiscvMode.M
+            h.mstatus_val |= MSTATUS_MIE  # 全局中断使能
+            set_mie(h, 1 << 3)  # MSIE
+            h.csrs["mtvec"].val = 0x80000000
+
+        # Hart 0 发 IPI 给 Hart 1
+        clint.send_ipi(1)
+
+        # Hart 1 收到中断
+        delivered = h1.check_pending_interrupts()
+        assert delivered, "Hart 1 应收到 MSIP 中断"
+
+        # Hart 1 handler 清除自己的 MSIP
+        clint.clear_ipi(1)
+
+        # mret 恢复 MIE
+        h1._csr_write_raw("mstatus", h1.mstatus_val | (1 << 3))
+
+        # Hart 1 不应再有中断
+        assert not h1.check_pending_interrupts(), "清除后 Hart 1 不应重入"
+
+        # Hart 0 不受影响
+        assert (h0._csr_read_raw("mip") & (1 << 3)) == 0, (
+            "Hart 0 的 MSIP 不应被污染"
+        )

@@ -2,7 +2,6 @@
 
 from pyremu.disasm.common import (
     BrFn3,
-    fmt_addr,
     fmt_imm,
     parse_func3,
     parse_imm12_se,
@@ -14,8 +13,7 @@ from pyremu.disasm.common import (
     UNKNOWN,
 )
 from pyremu.utils.mask import mask64
-
-#  Branch
+from pyremu.utils.str_aux import fmt_addr
 
 
 def dis_branch(instr: int, pc: int) -> str:
@@ -31,9 +29,6 @@ def dis_branch(instr: int, pc: int) -> str:
         f"{mnemonic:<12} {rs1_name(instr)}, {rs2_name(instr)}, "
         f"{fmt_addr(target)}"
     )
-
-
-#  JAL / JALR
 
 
 def dis_jal(instr: int, pc: int) -> str:

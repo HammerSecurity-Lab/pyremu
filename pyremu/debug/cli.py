@@ -38,9 +38,6 @@ VIRTIO_BLK_DEVICE = dev_tree.DtDeviceRequest(
 )
 
 
-#  Argument parser
-
-
 def _build_arg_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器."""
     p = argparse.ArgumentParser(
@@ -220,9 +217,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-#  CLI 工具函数
-
-
 def _setup_logger(level: str) -> None:
     """配置 loguru: 彩色输出到 stdout."""
     logger.remove()
@@ -249,8 +243,7 @@ class PlatformParams:
     rom_size: int
     timebase_freq: int
     pmp_entries: int
-    # 平台声明的扩展集合; 芯片设备树声明了扩展时取树中的声明.
-    isa: str
+    isa: str  # 平台声明的扩展集合; 芯片设备树声明了扩展时取树中的声明.
 
 
 def _load_chip_dts(
@@ -438,8 +431,8 @@ def _load_firmware_image(
     for seg in image.segments:
         logger.info(
             f"  {seg.name:<{max_name}s}  vaddr=0x{seg.vaddr:016x}"
-            f"  size={fmt_size(len(seg.data)):>10s}"
-            f"  memsz={fmt_size(seg.memsz):>10s}"
+            f"  size={fmt_size(len(seg.data))}"
+            f"  memsz={fmt_size(seg.memsz)}"
         )
 
     load_offset = 0

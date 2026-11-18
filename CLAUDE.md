@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Pyremu is a RISC-V emulator written in Python (CPython 3.14). It models a multi-hart in-order CPU core targeting the RV64 IMAFDC ISA with Zicsr, Zifencei, Zbb and Sstc, privilege levels (U/S/H/M/D), Sv39 MMU with TLB, L2 cache with MESI protocol, CLINT timer/IPI controller, PLIC and AIA (IMSIC + APLIC) interrupt controllers, memory-mapped peripherals (UART/SPI/I2C/GPIO/CRNG/watchdog/virtio-mmio block and network/termio), an FDT generator, and an interactive debugger (rvdb). The project is in active mid-stage development.
+Pyremu is a RISC-V emulator written in Python (CPython 3.14). It models a multi-hart in-order CPU core targeting the RV64 IMAFDC ISA with Zicsr, Zifencei, Zbb and Sstc, privilege levels (U/S/H/M/D), Sv39 MMU with TLB, L2 cache with MESI protocol, CLINT timer/IPI controller, PLIC and AIA (IMSIC + APLIC) interrupt controllers, memory-mapped peripherals (UART/SPI/I2C/GPIO/CRNG/watchdog/virtio-mmio block and network), an FDT generator, and an interactive debugger (rvdb). The project is in active mid-stage development.
 
 **Implemented**: RV64 I (base integer), M (mul/div), A (atomics — LR/SC/AMO), F/D (single and double precision floating point, with `mstatus.FS` gating), C (compressed), Zicsr (CSR read/write), Zbb (bit manipulation), Zifencei, Sstc (`stimecmp`/`stimecmph`), FENCE/FENCE.I, ECALL/EBREAK/MRET/SRET, WFI (true pipeline stop with interrupt wake-up, TW trap), SFENCE.VMA, Sv39 address translation (4 KiB pages, 2 MiB and 1 GiB superpages, hardware A/D bit update), trap delegation (medeleg/mideleg) to S-mode, PMP (NAPOT/NA4/TOR, locked entries enforced in M-mode, MPRV), configurable PMA (ram_base + device MMIO routing), PLIC and AIA (IMSIC M/S files, APLIC S/M domains), virtio-mmio transport with block and network devices (loopback backend), terminal I/O bridge (termio), watchdog and CRNG devices, FDT/DTB generation, a full RV64 disassembler (I/M/A/C/Zicsr/privileged), an interactive debugger with rich TUI + prompt_toolkit REPL (disasm, stack backtrace, multi-step, command repeat, snapshot/rollback), a platform configuration system (dataclass-based presets + JSON/TOML/YAML deserialization).  
 
-**Not yet implemented**: RVV 1.0 Vector extension (opcode 0x57, ~200 条指令: vsetivli/vsetvl/vector load/store/arithmetic/permute), H extension (两阶段地址翻译与 IMSIC guest interrupt file, 见 [docs/aia-imsic-hypervisor-plan.md](docs/aia-imsic-hypervisor-plan.md)).
+**Not yet implemented**: RVV 1.0 Vector extension (opcode 0x57, ~200 条指令: vsetivli/vsetvl/vector load/store/arithmetic/permute), H extension (两阶段地址翻译与 IMSIC guest interrupt file, 见 [docs/plans/08-hypervisor-extension.md](docs/plans/08-hypervisor-extension.md)).
 
 ## Commands
 
@@ -45,6 +45,17 @@ pyremu/
   platform.py               # PlatformConfig — 平台配置 (dataclass 预设 + JSON/TOML/YAML)
   configs_aux.py            # 配置辅助 — 环境变量优先, 回退到 configs_gen
   configs_gen.py            # 由 mk/ 下的配置分片生成的常量 (生成物, 不手工编辑)
+  check_configs.py          # mk/ 常量的合法性检查、设备区间分配与保留区间校验
+
+  generic_ops/              # 加速执行 Ops — 调用方唯一入口, 不区分后端
+    decode.py               # 指令字段解码
+    mmu.py                  # Sv39 页表项拆解、合成与页大小
+    pmp.py                  # PMP 访问检查
+    alu.py                  # 整数与位运算计算
+    fpu.py                  # 浮点计算
+    mem.py                  # 主存直接读写
+    ext_isa.py              # 扩展判定
+    engine.py               # 连续执行的配置、FFI 上下文编组与 run_parallel 调用
 
   debug/                    # 交互式调试器 rvdb 的实现 (操作类组合, 见 debug/__init__.py)
     base.py                 # DebuggerBase — 共享状态初始化、hart 访问、输出、信号处理
@@ -109,7 +120,10 @@ pyremu/
     watchdog.py             # 看门狗
     crng.py                 # 随机数发生器
     power_ctrl.py           # 关机与复位请求设备
-    termio.py               # 终端 I/O 桥接 (宿主 stdin/stdout 与 UART 之间)
+
+  termio/                   # 终端 I/O 桥接 — 宿主 stdin/stdout 与 UART 之间
+    bridge.py               # TerminalIO — TX/RX 环形缓冲、后台线程与回退轮询
+    keys.py                 # 宿主按键编码到受调试程序终端编码的改写
 
   interrupt/                # 中断子系统
     controller.py           # InterruptController ABC, IntSource
@@ -141,6 +155,7 @@ pyremu/
     str_aux.py              # 格式化辅助: fmt_addr, fmt_hexdump
     parse_bin.py            # 固件解析 (ELF/PE/raw binary, 基于 LIEF)
     mask.py                 # 位宽掩码 — mask64/mask32, 统一截断点
+    math.py                 # 整数运算辅助 — align_up 与 2 的幂判定
     isa.py                  # ISA 字符串解析, 扩展名到开关与 misa 取值的编码
     tick.py                 # 时钟辅助 — yield_cpu 让出 CPU
     counter.py              # 顺序编号计数器 — 调用返回自增前的取值
@@ -152,6 +167,10 @@ pyremu/
       fdt_node.py           # pyfdt 节点树上的属性读写与单元格编解码
 
   _native/                  # Rust 加速执行引擎 (多指令连续执行 + termio)
+    defs_aux.py             # 从 Rust 侧 LLVM IR 的 DI 元数据生成 FFI 定义
+    export_lib_syms.py      # 给 ctypes 函数对象赋值生成物给出的签名
+    ffi_spec.json           # 生成物 — 结构体与导出函数声明 (不入版本库)
+    defs_gen.py             # 生成物 — ctypes 结构体与函数签名 (不入版本库)
     cpu/src/                # 并发执行引擎入口 (concurrent.rs), 共享状态 (shared.rs),
                             # 时钟推进 (clock.rs), 工作线程 (hart_sched.rs),
                             # 陷态 (trap.rs), CSR (csr.rs) 与 FFI (ffi.rs)
@@ -159,7 +178,9 @@ pyremu/
                             # fetch, fpu, op_dispatcher, handlers/ (模组与入口 mod,
                             # 压缩指令 compressed, 特权与 SBI system, 原子操作 amo,
                             # 半主机 semihosting)
-      mem/                  # 内存访问: access, mmu, pmp, translate
+      mem/                  # 内存访问: access, mmu, pmp,
+                            # translate/ (入口与权限检查 mod, 页表遍历 sv39,
+                            # TLB 管理 tlb, 主存直接访问与 LR/SC ram)
       interrupt/            # clint, imsic, wfi
       peripheral/           # plic, uart, virtio
     termio/                 # 终端输入输出守护线程
@@ -473,9 +494,10 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 ### 终端 I/O 桥接 (termio)
 
-[pyremu/peripheral/termio.py](pyremu/peripheral/termio.py) 在宿主 stdin/stdout 与 UART 之间
-做桥接: 宿主键入的字节经守护线程写入 UART 接收路径, UART 发送的字节回显到宿主 stdout。
-该桥接与 UART 设备模型分离, 使 UART 在无宿主终端时仍可独立使用。
+[pyremu/termio/](pyremu/termio/) 在宿主 stdin/stdout 与 UART 之间做桥接: 宿主键入的
+字节经守护线程写入 UART 接收路径, UART 发送的字节回显到宿主 stdout。该桥接不实现
+Device 接口, 不属于内存映射外设, 由 Emulator 创建并注入 UART, 使 UART 在无宿主终端时
+仍可独立使用。
 
 ### 默认 MMIO 地址
 
@@ -504,44 +526,48 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 - `chip.py` 从芯片 DTS 文本读出平台参数; `rewrite.py` 以该树为底写入模拟器装配出的 RAM 窗口、保留区间与 `/chosen`, 交给受调试程序的设备树由此给出
 - `parser/` 是由 Zephyr Project 的 `dtlib.py` 拆分而来的 DTS 解析器, 版权声明与许可条款见同目录下的 LICENSE, 许可证为 BSD-3-Clause
 - Emulator 在初始化外设后可选通过 `build_default_dtb()` 生成 DTB 并加载到 RAM
+- `build_default_dtb()` 在写出 `/reserved-memory` 之前校验每个保留区间落在
+  `[ram_base, ram_base + ram_size)` 之内, 越界时以 `SystemExit` 报出区间与主存
+  范围; 保留区间落在主存之外时, 固件按该区间访问内存会触发存储访问故障
 - DTB 地址写入 `a1` (x11) 寄存器供固件使用
 
 ## Testing
 
-共 3505 个用例, 分布于 10 个顶层测试文件与 11 个测试子目录, 计数取自
+共 3623 个用例, 分布于 11 个顶层测试文件与 11 个测试子目录, 计数取自
 `pytest --collect-only`。
 
 测试子目录仅在该子系统的测试源达到 1000 行及以上时建立; 未达到时合并为单个顶层
-文件, 文件名不带方向后缀, 例如合并后的 `test_native.py` 与 `test_dtb.py`。
+文件, 文件名不带方向后缀, 例如 `test_preload.py` 与 `test_parse_elf.py`。
 
 顶层文件:
 
 | 文件 | 用例数 | 覆盖内容 |
 |------|-------|---------|
-| test_disasm.py | 81 | 所有指令格式反汇编, 含 R/I/S/B/U/J, CSR, 特权, AMO, 浮点与压缩 |
-| test_emulator.py | 57 | 多 hart 执行循环, 固件加载, 内存 dump, PC 推进, store 指令写入 RAM, AUIPC sign-extend 回归, M->S 模式切换, PMP 配置, WFI 低功耗等待, UART 输出, 汇编反汇编集成, GPR 值规范化回归, FFI struct 布局 |
-| test_multihart_diff.py | 41 | 多 hart 差分测试; 与其余用例共享状态, 随完整套件运行 |
-| test_stat.py | 16 | 性能统计调用包 |
+| test_disasm.py | 95 | 所有指令格式反汇编, 含 R/I/S/B/U/J, CSR, 特权, AMO, 浮点与压缩 |
+| test_emulator.py | 59 | 多 hart 执行循环, 固件加载, 内存 dump, PC 推进, store 指令写入 RAM, AUIPC sign-extend 回归, M->S 模式切换, PMP 配置, WFI 低功耗等待, UART 输出, 汇编反汇编集成, GPR 值规范化回归, 多次 step 后跨 hart 状态不漂移 |
+| test_configs_aux.py | 17 | 配置辅助: 环境变量优先与回退 |
+| test_check_configs.py | 22 | mk/ 常量的合法性检查, 设备区间分配, 保留区间是否落在主存之内, 默认配置的越界保留区间在生成设备树时报错 |
+| test_stat.py | 30 | 性能统计调用包 |
+| test_wfi_wakeup.py | 16 | WFI 被跨核 MSIP 唤醒; 唤醒要求挂起中断在 mie 中使能 |
 | test_parse_elf.py | 14 | ELF/PE/raw 格式检测与解析, FirmwareSegment 模型 |
 | test_preload.py | 14 | Preloader 注入与 shellcode 片段 |
 | test_lottery_boot.py | 11 | 多 hart UART 行缓冲与 OpenSBI 彩票启动 |
 | test_preempt.py | 8 | 短时间片抢占下进程交替执行与结果正确性 |
 | test_multihart.py | 6 | 多 hart 启动与定时器中断 |
-| test_wfi_wakeup.py | 4 | WFI 被跨核 MSIP 唤醒 |
 
 子目录:
 
 | 目录 | 用例数 | 覆盖内容 |
 |------|-------|---------|
-| test_native/ | 357 | test_alu 147, test_ffi_layout 69, test_trap_isa 65, test_mem 44, test_compressed 20, test_engine_diff 12. 纯 Python 路径的算术与回退分支, 非法编码与扩展开关, 访存与跨页访问, 压缩指令差分, 与加速执行引擎的随机差分, FFI 结构布局与状态编组 |
-| test_dbg/ | 1152 | test_mem 218, test_cli 154, test_base 112, test_sym_cmds 105, test_sym 100, test_bp 93, test_tlb_cache 56, test_reg 55, test_sym_elf_idx 43, test_utils 38, test_sym_loader 32, test_exec 31, test_mmu_view 28, test_status 25, test_sym_model 24, test_stk_frame 17, test_types 11, test_device_map 10. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 栈回溯, 调试器数据类型, 设备总线区间, 多来源符号 |
-| test_calc/ | 448 | test_compressed_diff 107, test_compressed 94, test_zbb 53, test_amo 46, test_instr 46, test_zba_zbs 38, test_alu 26, test_fpu 26, test_amo_encoding 12. 压缩指令及其与非压缩等效指令的差分, Zbb/Zba/Zbs 位操作, LR/SC 与 AMO, 整数与 F/D 浮点运算 |
-| test_trap/ | 321 | test_mem_fault 72, test_privilege 71, test_wfi 48, test_interrupt 46, test_delivery 34, test_stk_overflow 20, test_ecall 19, test_cause 9, test_sfence 2. trap cause code 编解码, `deliver_trap` M/S 投递与委派, mtvec/stvec direct/vectored, ECALL/EBREAK/MRET/SRET, CSR 特权级检查, 访存对齐/PMA 故障, 缺页异常, 定时器中断与 `stimecmp`, MSIP 投递, WFI, 栈溢出 |
-| test_peripheral/ | 286 | test_uart 42, test_virtio_blk 42, test_virtio_net 41, test_bus 30, test_watchdog 28, test_i2c 25, test_gpio 21, test_power_ctrl 18, test_spi 17, test_crng 15, test_virtio_net_dtb 7. virtio 块设备与网卡, 描述符链成环保护, UART, 总线读写与地址区间列举, PMA 检查, 关机与复位请求, CRNG, 网卡设备树节点 |
-| test_interrupt/ | 232 | test_imsic 49, test_ipi_chain 40, test_plic 40, test_aia_integration 24, test_clint 24, test_aplic 12, test_controller 11, test_aia_config 10, test_aia_csr 7, test_irq_sink 7, test_native_plic_sync 5, test_aia 3. IMSIC, PLIC, APLIC, CLINT, IPI 投递链, AIA 配置与 CSR 门控, 加速执行引擎的 PLIC 状态同步 |
-| test_mem_access/ | 183 | test_pmp 76, test_mmu 63, test_mem_check_aux 35, test_pmp_smp 9. PTE 与 Sv39 三级页表遍历, 超级页, Bare 模式, PMP 编解码与权限, 多 hart PMP 隔离, counteren 门控与跨页访问 |
-| test_cache/ | 144 | test_l2cache 45, test_mdid 43, test_tlb 20, test_l2cache_stress 18, test_cache_base 10, test_l2_coherence 4, test_tlb_shootdown 4. MDID CSR 与域隔离, L2 MESI 状态与回写, TLB 查找/替换/刷新, 跨核 TLB shootdown 同步 |
-| test_utils/ | 102 | test_isa 22, test_configs_aux 17, test_wrapper 17, test_mask 10, test_str_aux 10, test_file_ops 9, test_regname 7, test_tick 6, test_counter 4. 配置辅助, 异常装饰器, 位宽掩码, 格式化, 文件路径, 寄存器名称, 时钟, 计数器 |
+| test_dbg/ | 1160 | test_mem 219, test_cli 154, test_base 112, test_sym_cmds 105, test_sym 100, test_bp 93, test_tlb_cache 56, test_reg 55, test_sym_elf_idx 43, test_utils 38, test_sym_loader 32, test_exec 38, test_mmu_view 28, test_status 25, test_sym_model 24, test_stk_frame 17, test_types 11, test_device_map 10. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 栈回溯, 调试器数据类型, 设备总线区间, 多来源符号 |
+| test_calc/ | 449 | test_compressed_diff 107, test_compressed 95, test_zbb 53, test_amo 46, test_instr 46, test_zba_zbs 38, test_alu 26, test_fpu 26, test_amo_encoding 12. 压缩指令及其与非压缩等效指令的差分, Zbb/Zba/Zbs 位操作, LR/SC 与 AMO, 整数与 F/D 浮点运算 |
+| test_ops/ | 357 | test_alu 144, test_ffi_layout 72, test_trap_isa 65, test_mem 44, test_compressed 20, test_engine_diff 12. 纯 Python 路径的算术与回退分支, 非法编码与扩展开关, 访存与跨页访问, 压缩指令差分, 与加速执行引擎的随机差分, FFI 结构布局与状态编组 |
+| test_trap/ | 326 | test_mem_fault 72, test_privilege 71, test_interrupt 49, test_wfi 48, test_delivery 36, test_stk_overflow 20, test_ecall 19, test_cause 9, test_sfence 2. trap cause code 编解码, `deliver_trap` M/S 投递与委派, mtvec/stvec direct/vectored, ECALL/EBREAK/MRET/SRET, CSR 特权级检查, 访存对齐/PMA 故障, 缺页异常, 定时器中断与 `stimecmp`, MSIP 投递与 mip/mie 跨 hart 隔离, WFI, 栈溢出 |
+| test_peripheral/ | 295 | test_virtio_blk 51, test_uart 42, test_virtio_net 41, test_bus 30, test_watchdog 28, test_i2c 25, test_gpio 21, test_power_ctrl 18, test_spi 17, test_crng 15, test_virtio_net_dtb 7. virtio 块设备与网卡, 描述符链成环保护, UART, 总线读写与地址区间列举, PMA 检查, 关机与复位请求, CRNG, 网卡设备树节点 |
+| test_interrupt/ | 248 | test_ipi_chain 52, test_imsic 49, test_plic 40, test_clint 28, test_aia_integration 24, test_aplic 12, test_controller 11, test_aia_config 10, test_aia_csr 7, test_irq_sink 7, test_native_plic_sync 5, test_aia 3. IMSIC, PLIC, APLIC, CLINT, IPI 投递链与 MSIP 清除, CLINT 硬件中断源的 mip 位撤除, AIA 配置与 CSR 门控, 加速执行引擎的 PLIC 状态同步 |
+| test_mem_access/ | 190 | test_pmp 76, test_mmu 68, test_mem_check_aux 35, test_pmp_smp 11. PTE 与 Sv39 三级页表遍历, 超级页, Bare 模式, 逐 hart 的 satp 与 MMU 模式, PMP 编解码与权限, 多 hart PMP 隔离, counteren 门控与跨页访问 |
+| test_cache/ | 146 | test_l2cache 45, test_mdid 43, test_tlb 20, test_l2cache_stress 18, test_cache_base 10, test_tlb_shootdown 6, test_l2_coherence 4. MDID CSR 与域隔离, L2 MESI 状态与回写, TLB 查找/替换/刷新, 跨核 TLB shootdown 同步与 TLB 事务跨批次保留 |
+| test_utils/ | 86 | test_isa 22, test_wrapper 17, test_str_aux 11, test_mask 10, test_file_ops 9, test_regname 7, test_tick 6, test_counter 4. 配置辅助, 异常装饰器, 位宽掩码, 格式化, 文件路径, 寄存器名称, 时钟, 计数器 |
 | test_dev_tree/ | 71 | test_dev_tree 49, test_dtb 18, test_initrd 4. 芯片设备树回写为 DTB, `/memory` 与 `/reserved-memory` 的 reg 编码, initramfs 接入 |
 | test_tools/ | 3 | test_parse_dbg_stats 3. 调试统计输出的解析 |
 
@@ -549,23 +575,23 @@ feature 集合、配置空间与请求或帧处理。描述符链遍历的步数
 
 ### FFI struct 布局锁定: Python ctypes ↔ Rust `#[repr(C)]` 同步
 
-`HartState`, `TlbEntry`, `BatchResult` 通过 ctypes 跨越 FFI 边界传递.
+`HartState`, `TlbEntry`, `InstrToBeExec` 等结构体通过 ctypes 跨越 FFI 边界传递.
 **两侧布局必须逐字节一致**, 否则 Rust 在错误偏移处读取字段 -> SIGBUS.
 
-核心约束:
-- **array-of-structs, 非 struct-of-arrays**. `[TlbEntry; 32]` 在两侧必须是
-  连续 24 字节条目数组, 不能拆成 `itlb_vpn[32] + itlb_ppn[32] + ...`.
-- 修改 `HartState` / `TlbEntry` / `BatchResult` 字段时, 必须同步更新三方:
-  1. Rust `#[repr(C)]` struct (`pyremu/_native/cpu/src/state.rs`)
-  2. Python ctypes `_fields_` (`pyremu/core/hart.py`)
-  3. `marshal_hart()` / `unmarshal_hart()` 字段读写
-- 验证命令:
-  ```bash
-  cargo test --manifest-path pyremu/_native/Cargo.toml  # Rust 侧 sizeof/align
-  uv run pytest tests/test_emulator.py::TestNativeBatchLayout  # Python 侧
-  ```
-- `TestNativeBatchLayout` 锁死: TlbEntry ≡ 24B, HartState 对齐 + < 4KB,
-  itlb/dtlb 确保 `.vpn` / `.ppn` / `.valid` 属性存在 (即 struct 非分离数组).
+Python 侧的 ctypes 定义不是手写的: [pyremu/_native/defs_aux.py](pyremu/_native/defs_aux.py)
+对两个 crate 执行 `cargo rustc --emit=llvm-ir -C debuginfo=2`, 从 LLVM IR 的 DI
+元数据读出每个 `#[repr(C)]` 结构体的字段名、字段顺序、字段类型与字节数, 以及每个
+未改名的导出函数的源码级返回类型与参数类型, 先写 `ffi_spec.json`, 再生成
+`defs_gen.py`. 两个生成物不入版本库.
+
+- 重新生成: `make ffi-defs`; `make build-native` 在安装动态库之后自动执行该目标.
+- 改动结构体后的检查: `tests/test_ops/test_ffi_layout.py` 的 `TestFfiSpecDrift`
+  核对导出函数名集合与 Rust 源码一致, 并断言每个结构体的 `ctypes.sizeof`
+  等于 DI 元数据给出的字节数.
+- **array-of-structs, 非 struct-of-arrays**. `[TlbEntry; TLB_ENTRIES]` 在两侧必须是
+  连续条目数组, 不能拆成 `itlb_vpn[...] + itlb_ppn[...] + ...`; 生成器按 DI 的
+  字段类型逐个生成, 拆分即与 Rust 布局不符.
+- 结构体字段的原子包装类型 (`Atomic<u64>` 等) 按其中的标量类型参与 ctypes 布局.
 
 **教训**: 初次实现 Phase B 时, Rust 侧新增 `itlb: [TlbEntry; 32]` 但 Python 侧误用
 分离数组布局. 旧测试因 `PYREMU_NATIVE_BATCH=0` 从未触发 native batch -> 静默通过.

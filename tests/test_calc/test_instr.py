@@ -10,6 +10,7 @@ from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
+from pyremu.utils.mask import mask64
 
 
 class TestStoreImmediateOffset:
@@ -411,7 +412,7 @@ class TestBranchEdgeCases:
         """BLTZ at 0x3ab6: branch taken iff s2 < 0."""
         hart = self._make_hart()
         hart.pc = 0x3AB6
-        hart.gprs[18] = s2_val & 0xFFFF_FFFF_FFFF_FFFF  # s2
+        hart.gprs[18] = mask64(s2_val)  # s2
 
         # bltz s2, 0x3b0a = 0x04094a63
         advance = hart.exec_instr(0x04094A63)
@@ -439,8 +440,8 @@ class TestBranchEdgeCases:
         """BNE at 0x3b06: branch NOT taken when s2 == s4."""
         hart = self._make_hart()
         hart.pc = 0x3B06
-        hart.gprs[18] = s2_val & 0xFFFF_FFFF_FFFF_FFFF  # s2
-        hart.gprs[20] = s4_val & 0xFFFF_FFFF_FFFF_FFFF  # s4
+        hart.gprs[18] = mask64(s2_val)  # s2
+        hart.gprs[20] = mask64(s4_val)  # s4
 
         # bne s2, s4, 0x3ad0 = 0xFD4915E3
         advance = hart.exec_instr(0xFD4915E3)

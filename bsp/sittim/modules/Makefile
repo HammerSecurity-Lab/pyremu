@@ -37,11 +37,11 @@ LD          := /usr/bin/ld.lld
 OBJCOPY     := $(CUSTOM_LLVM)/llvm-objcopy
 READELF     := $(CUSTOM_LLVM)/llvm-readelf
 
-# cargo 可执行文件; 调用方以绝对路径覆盖, 供 PATH 中无 cargo 的构建环境 (如经由 sudo
-# 运行的 rootfs 构建) 使用.
+# cargo 可执行文件; 调用方以绝对路径覆盖, 供 PATH 中无 cargo 的构建环境使用.
 CARGO       ?= cargo
 
-# 私钥路径与其余平台量取自 bsp/sittim 的配置; 其中的路径以 bsp/sittim 为基准, 本文件
+# 私钥路径与其余平台量取自 bsp/sittim 的配置
+# 其中的路径以 bsp/sittim 为基准, 本文件
 # 按目录关系加一级前缀, 见 KEY。
 include ../config.mk
 
@@ -163,7 +163,8 @@ mod-tbl: dist
 	$(foreach m,$(DIST_MODS),$(file >>$(MOD_TBL_INC),$(call mod_row,$(m))))
 phony += mod-tbl
 
-# 签名工具是宿主程序, 在它自己的目录下构建: cargo 按当前目录向上寻找配置文件,
+# 签名工具是宿主程序, 在它自己的目录下构建
+# cargo 按当前目录向上寻找配置文件,
 # 从本目录调用会读到 sittim 的目标三元组与模块的编译参数。
 $(SIGN_TOOL): FORCE
 	cd $(SIGN_DIR) && $(CARGO) build --release --target $(HOST_TARGET)

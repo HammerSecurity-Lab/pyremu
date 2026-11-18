@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 from pyremu.core.hart_ffi import EXIT_ECALL, EXIT_MMIO, EXIT_WFI_WAIT
 from pyremu.stat import recording
 from pyremu.stat.batch import (
@@ -77,8 +79,7 @@ def test_end_round_without_begin_ignored():
     # 未调用 begin 时 end 不生效, 避免把不成对的记录计入汇总.
     stats = BatchStats()
     stats.end(EXIT_ECALL, 100)
-    assert stats.batch_count == 0
-    assert stats.instr_total == 0
+    assert stats.batch_count == 0 and stats.instr_total == 0
 
 
 def test_instr_buckets_by_batch_length():
@@ -106,60 +107,49 @@ def test_report_contains_totals_and_exit_names():
         stats.mark("sync_after")
         stats.end(EXIT_ECALL, 200)
     text = stats.report()
-    assert "批次 3" in text
-    assert "指令 600" in text
-    assert "平均每批 200.0 条" in text
-    assert "ECALL: 3 批次" in text
-    assert "进入前同步" in text
-    assert "引擎执行" in text
-    assert "退出后同步" in text
+    expects = [
+        "批次 3",
+        "指令 600",
+        "平均每批 200.0 条",
+        "ECALL: 3 批次",
+        "进入前同步",
+        "引擎执行",
+        "退出后同步",
+    ]
+    for e in expects:
+        assert e in text
 
 
 def test_report_empty_when_no_round():
     assert "未记录" in BatchStats().report()
 
 
-def test_decode_exit_instr_unrecorded():
-    """未记录退出指令时给出占位名称."""
-    assert decode_exit_instr(0) == "无"
-
-
-def test_decode_exit_instr_system():
-    """特权指令按 funct12 给出助记符, sfence.vma 的取值含 rs2 的低位."""
-    assert decode_exit_instr(0x0000_0073) == "ecall"
-    assert decode_exit_instr(0x0010_0073) == "ebreak"
-    assert decode_exit_instr(0x1020_0073) == "sret"
-    assert decode_exit_instr(0x1050_0073) == "wfi"
-    assert decode_exit_instr(0x3020_0073) == "mret"
-    assert decode_exit_instr(0x1200_0073) == "sfence.vma"
-    # rs2 = 31 时 funct12 为 0x13F, 仍属 sfence.vma
-    assert decode_exit_instr(0x13F0_0073) == "sfence.vma"
-    # 未登记的 funct12 按数值报告
-    assert decode_exit_instr(0x7FF0_0073) == "system 0x7ff"
-
-
-def test_decode_exit_instr_csr_gives_number():
-    """CSR 指令给出 CSR 编号, 与 op-imm 等普通指令区分."""
-    # csrr a0, 0x7c2: funct3 = 2, csr = 0x7c2
-    assert decode_exit_instr(0x7C20_2573) == "csr 0x7c2"
-
-
-def test_decode_exit_instr_32bit_opcodes():
-    """按主操作码归类, 未登记的按操作码数值报告."""
-    assert decode_exit_instr(0x0001_2083) == "load"
-    assert decode_exit_instr(0x00A1_2023) == "store"
-    assert decode_exit_instr(0x0000_00B3) == "op"
-    assert decode_exit_instr(0x0000_0013) == "op-imm"
-    assert decode_exit_instr(0x0000_0063) == "branch"
-    assert decode_exit_instr(0x0000_006F) == "jal"
-    assert decode_exit_instr(0x0000_0057) == "vector"
-    assert decode_exit_instr(0x0000_000B) == "opcode 0x0b"
-
-
-def test_decode_exit_instr_compressed():
-    """压缩指令按象限与 funct3 归类, 不按 32 位主操作码解释."""
-    # c.li a0, 0: 象限 1, funct3 = 2
-    assert decode_exit_instr(0x4501) == "c1.2"
+@pytest.mark.parametrize(
+    "val, inst_name",
+    [
+        (0, "无"),
+        (0x0000_0073, "ecall"),
+        (0x0010_0073, "ebreak"),
+        (0x1020_0073, "sret"),
+        (0x1050_0073, "wfi"),
+        (0x3020_0073, "mret"),
+        (0x1200_0073, "sfence.vma"),
+        (0x13F0_0073, "sfence.vma"),
+        (0x7FF0_0073, "system 0x7ff"),
+        (0x7C20_2573, "csr 0x7c2"),
+        (0x0001_2083, "load"),
+        (0x00A1_2023, "store"),
+        (0x0000_00B3, "op"),
+        (0x0000_0013, "op-imm"),
+        (0x0000_0063, "branch"),
+        (0x0000_006F, "jal"),
+        (0x0000_0057, "vector"),
+        (0x0000_000B, "opcode 0x0b"),
+        (0x4501, "c1.2"),
+    ],
+)
+def test_decoder(val: int, inst_name: str):
+    assert decode_exit_instr(val) == inst_name
 
 
 def test_end_round_records_kind_hart_and_pc():
@@ -199,9 +189,13 @@ def test_report_contains_exit_details():
     stats.begin()
     stats.end(EXIT_ECALL, 100, 0x0000_0073, 0x8000_1000, 1)
     text = stats.report()
-    assert "退出指令:" in text
-    assert "ecall: 1 批次" in text
-    assert "退出 hart:" in text
-    assert "\t1: 1 批次" in text
-    assert "退出位置:" in text
-    assert "0x80001000: 1 批次" in text
+    expects = [
+        "退出指令:",
+        "ecall: 1 批次",
+        "退出 hart:",
+        "\t1: 1 批次",
+        "退出位置:",
+        "0x80001000: 1 批次",
+    ]
+    for e in expects:
+        assert e in text

@@ -243,9 +243,8 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
     ):
         self.id = id
         # 未给出平台属性时取编译期配置的 PMP 条目数与 ISA 字符串.
-        if ratified_hart_attrs is None:
-            self.ratified_hart_attrs = RatifiedHartAttrs()
-        else:
+        self.ratified_hart_attrs = RatifiedHartAttrs()
+        if ratified_hart_attrs is not None:
             self.ratified_hart_attrs = ratified_hart_attrs
         self.gprs = GprFile()
         # 浮点寄存器原始位模式, 单精度结果经 NaN-boxing 写入, 为浮点状态的唯一
@@ -289,7 +288,7 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         # 中断控制器引用 — 每条指令执行后在指令边界检查是否有待处理中断
         self._interrupt_ctrl: InterruptController | None = None
 
-        # PLIC维护外部中断MEIP/SEIP
+        # PLIC 维护外部中断 MEIP/SEIP
         self._plic: PLIC | None = None
 
         # AIA IMSIC 维护外部与通过MSI发出的软件中断
@@ -847,20 +846,8 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
 
     @satp_val.setter
     def satp_val(self, v: int) -> None:
-        """写入 satp 时同步更新缓存的 MMU 模式.
-
-        ASID 字段即 bits[59:44], 按 WARL 硬连线为 0: 本实现的 TLB 在 Python 与
-        加速执行用动态链接库两侧的查找均不带 ASID 标签。若允许 ASID 读回非零,
-        Linux 探测到 ASID 支持后会启用 ASID 分配器, 上下文切换时仅改写
-        satp.ASID 而不执行 sfence.vma — 前一地址空间的 TLB 表项残留命中,
-        用户进程读到脏数据随机 SIGSEGV, 表现为 ld.so 崩溃。读回 0 则内核走
-        no-ASID 路径, 每次 mm 切换显式 local_flush_tlb_all().
-
-        每次 satp 写入均刷新 TLB — 不仅限 MODE 字段变化.
-        约束: 飞地上下文切换经 alter_hart_ctx_for_enclave 恢复 host
-        satp 时, host 与飞地均为 Sv39 使 MODE 相同, 若按 MODE 字段是否变化
-        判断则跳过刷新, 飞地的 TLB 残留随后毒化内核地址空间, 导致缺页异常 +
-        栈溢出; 该残留的 VPN2=0x180 与内核 VA 重叠.
+        """
+        写入 satp 时同步更新缓存的 MMU 模式.
         """
         v &= ~(0xFFFF << 44)
         self.csrs["satp"].val = mask64(v)
@@ -910,8 +897,9 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         调用方须先刷新本 hart 在 Python 侧的两个 TLB; 本方法只负责让引擎在下一轮
         开始处判定条目已陈旧.
         """
-        if self._bus is not None:
-            self._bus.note_tlb_flush()
+        if self._bus is None:
+            return
+        self._bus.note_tlb_flush()
 
     @property
     def interrupt_ctrl(self):
@@ -1069,7 +1057,7 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
 
         PMP 条目 [0, split) 归 host (mdid==0) 使用,
         [split, N) 归飞地 (mdid!=0) 使用.
-        值为 0 时全部条目归 host (无飞地 PMP 隔离).
+        值为 0 时全部条目归 host.
         """
         return self._pmpsplit_val
 
@@ -1078,10 +1066,6 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         val = mask64(v)
         self._pmpsplit_val = val
         self.csrs["pmpsplit"].val = val
-
-    # ----------------------------------------------------------
-    #  加速执行引擎的 TLB 计数 (只读)
-    # ----------------------------------------------------------
 
     @property
     def speedup_itlb_counts(self) -> tuple[int, int]:
@@ -1092,10 +1076,6 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
     def speedup_dtlb_counts(self) -> tuple[int, int]:
         """数据 TLB 的 (命中次数, 未命中次数) — 由加速执行引擎累计."""
         return self._speedup_dtlb_hits, self._speedup_dtlb_misses
-
-    # ----------------------------------------------------------
-    #  mip 快捷属性 (中断挂起位)
-    # ----------------------------------------------------------
 
     @property
     def mip_val(self) -> int:
@@ -1127,12 +1107,8 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
         """读取 mie CSR (中断使能寄存器)."""
         return self.csrs["mie"].val
 
-    # ----------------------------------------------------------
-    #  LR/SC 预留管理 (A-extension)
-    # ----------------------------------------------------------
-
     def set_reservation(self, addr: int, value: int = 0) -> None:
-        """设置 LR 预留地址和加载值 (原子 load-reserved 成功时调用)."""
+        """设置 LR 预留地址和加载值, 原子 load-reserved 成功时调用."""
         self._reservation_addr = addr
         self._reservation_valid = True
         self._reservation_value = value

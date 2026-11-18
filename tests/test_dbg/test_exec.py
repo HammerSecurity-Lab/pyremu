@@ -14,6 +14,7 @@ from pyremu.debug.exec import ExecutionOps
 from pyremu.debug.types import MemoryChange
 from pyremu.emulator import Emulator
 from pyremu.peripheral.power_ctrl import PowerRequest
+from pyremu.platform import PeripheralConfig
 from tests.conftest import (
     DbgTestBase,
     make_test_dbg,
@@ -78,7 +79,12 @@ class _TestExecDbg(DbgTestBase, ExecutionOps):
 
 
 def _make_edbg(num_harts=1, ram_size=0x10000):
-    emu = Emulator(num_harts=num_harts, ram_size=ram_size, prog_cnt=0x8000_0000)
+    emu = Emulator(
+        num_harts=num_harts,
+        ram_size=ram_size,
+        prog_cnt=0x8000_0000,
+        periph=PeripheralConfig(power_base=0x0010_0000),
+    )
     emu.load_code(0x8000_0000, b"\x13\x00\x00\x00")  # NOP
     return _TestExecDbg(emu)
 

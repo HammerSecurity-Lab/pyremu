@@ -12,6 +12,7 @@ import pytest
 from pyremu.core.decoder import Hart
 from pyremu.disasm import AmoFunct5, AmoWidth
 from pyremu.emulator import Emulator
+from pyremu.utils.mask import mask64
 from tests.conftest import make_test_ram
 
 
@@ -94,7 +95,7 @@ class TestLRSC:
     def test_lr_stores_memory_value(self, hart):
         """LR 应将内存值加载到 rd."""
         # 预先写内存
-        val = 0xFEED_FACE_CAFE_BABE & 0xFFFF_FFFF_FFFF_FFFF
+        val = mask64(0xFEED_FACE_CAFE_BABE)
         _, rf, wf = make_test_ram()
         hart.mem_read_phy = rf
         hart.mem_write_phy = wf
@@ -104,7 +105,7 @@ class TestLRSC:
         hart.gprs[10] = 0x2000
         lr = _make_amo_instr(AmoFunct5.LR, AmoWidth.D, rd=11, rs1=10, rs2=0)
         hart.exec_instr(lr)
-        assert hart.gprs[11] == val & 0xFFFF_FFFF_FFFF_FFFF
+        assert hart.gprs[11] == mask64(val)
 
 
 class TestAMOArithmetic:

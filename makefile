@@ -1,8 +1,6 @@
 phony =
 # Last modified at 2026/11/13 星期五 18:35:45
 
-# 全部用于编译配置的变量定义集中在mk/*.mk中。
-# 并通过统一导出文件mods.mk而导出。
 include mk/mods.mk
 
 ifeq ($(OS),Windows_NT)
@@ -36,6 +34,13 @@ __configs-gen:
 	@$(MAKE) -C pyremu
 phony += __configs-gen
 
+# 由 Rust 侧 LLVM IR 的 DI 元数据生成 pyremu/_native/ffi_spec.json 与
+# defs_gen.py. 生成物不入版本库; 修改 #[repr(C)] 结构体或 #[no_mangle]
+# 导出的函数之后重跑本目标.
+ffi-defs: __uv-check
+	@uv run python $(NATIVE_DIR)/defs_aux.py
+phony += ffi-defs
+
 # CARGO_FLAGS 变化时强制重建 native .so
 CONFIG_GEN_RS = $(NATIVE_DIR)/cpu/src/configs_gen.rs
 
@@ -59,6 +64,7 @@ $(NATIVE_SO) $(TERMIO_SO): $(NATIVE_SRC) $(CONFIG_GEN_RS)
 	cargo build --release --manifest-path $(NATIVE_DIR)/Cargo.toml --workspace $(CARGO_FLAGS)
 	install -m 755 $(NATIVE_DIR)/target/release/libdecode.so $(NATIVE_SO)
 	install -m 755 $(NATIVE_DIR)/target/release/libtermio.so $(TERMIO_SO)
+	@$(MAKE) --no-print-directory ffi-defs
 	@echo "libdecode.so and libtermio.so have built"
 
 clean-native:

@@ -10,8 +10,6 @@ from pyremu.disasm.common import (
     UNKNOWN,
 )
 
-#  AMO
-
 
 def dis_amo(instr: int) -> str:
     funct5_val = (instr >> 27) & 0x1F
@@ -32,7 +30,7 @@ def dis_amo(instr: int) -> str:
     if order:
         suffix += "." + order
     base = op.name.lower()
-    # LR / SC 不带 amo 前缀, 其余原子操作带
+    # LR / SC 不带 amo 前缀
     if op in (AmoFunct5.LR, AmoFunct5.SC):
         mnemonic = base + suffix
     else:
