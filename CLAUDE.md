@@ -42,29 +42,43 @@ ulimit -v 4194304 && PYTHONPATH=/path/to/pyremu timeout 120 uv run /tmp/diag.py
 pyremu/
   emulator.py               # 多核执行循环 (round-robin, 停止条件: 断点/停机/全 halted/超时)
   debugger.py               # 调试器入口 — 转出 pyremu/debug/ 的公开符号并启动 REPL
-  platform.py               # PlatformConfig — 平台配置 (dataclass 预设 + JSON/TOML/YAML)
+  platform/                 # 平台配置
+    specs.py                # 设备定义 — DeviceSpec 与各外设窗口、芯片设备树来源
+    assembly.py             # 芯片设备树到外设配置的装配
+    config.py               # PlatformConfig — 预设与 JSON/TOML/YAML 反序列化
   configs_aux.py            # 配置辅助 — 环境变量优先, 回退到 configs_gen
   configs_gen.py            # 由 mk/ 下的配置分片生成的常量 (生成物, 不手工编辑)
   check_configs.py          # mk/ 常量的合法性检查、设备区间分配与保留区间校验
 
+  emu/                      # Emulator 的实现拆分
+    setup.py                # SetupOps — hart、总线与外设的装配
+    load.py                 # LoadOps — 固件、设备树与 initrd 的装载
+    run.py                  # RunOps — 执行循环与停止原因
+    native.py               # NativeOps — 加速执行引擎的状态编组与调用
+    hart.py                 # Hart(HartWithRegs), exec_instr(), 32 位指令的 handler 分发
+
   generic_ops/              # 加速执行 Ops — 调用方唯一入口, 不区分后端
     decode.py               # 指令字段解码
+    compressed.py           # CompressedInstrOps — 16 位压缩指令的 C0 / C1 / C2 象限
     mmu.py                  # Sv39 页表项拆解、合成与页大小
     pmp.py                  # PMP 访问检查
     alu.py                  # 整数与位运算计算
     fpu.py                  # 浮点计算
     mem.py                  # 主存直接读写
-    ext_isa.py              # 扩展判定
-    engine.py               # 连续执行的配置、FFI 上下文编组与 run_parallel 调用
+    ext_isa.py              # 扩展判定 — 编码到扩展的对应表与 DecodedFields 入口
+    engine.py               # 连续执行的配置、FFI 上下文编组、TLB 刷新计数与 run_parallel 调用
+    hart_ffi.py             # HartFfiOps — hart 与加速执行引擎之间的状态编组
 
   debug/                    # 交互式调试器 rvdb 的实现 (操作类组合, 见 debug/__init__.py)
+    addr.py                 # AddrOps — pc、寄存器、CSR、符号与数值字面量的地址解析
     base.py                 # DebuggerBase — 共享状态初始化、hart 访问、输出、信号处理
     cli.py                  # CLI 入口 — 解析参数、加载固件并启动 REPL
     dispatch.py             # DispatchOps — REPL 命令分发、帮助信息、hart 切换
     exec.py                 # ExecutionOps — 指令执行、快照回滚、写监控、运行循环
     breakpoint.py           # BreakpointOps — 断点设置/命中检查/条件评估
     reg.py                  # RegisterOps — GPR/CSR 读写命令
-    mem.py                  # MemoryOps — 虚拟/物理内存读写、地址解析、反汇编
+    mem.py                  # MemoryOps — 虚拟/物理内存读写与反汇编
+    disasm_view.py          # 反汇编文本着色与控制流分类
     stk_frame.py            # StackWalkOps — FP 链回溯、跨特权级边界帧
     status.py               # StatusOps — Hart 状态、CSR Bitfield 显示
     tlb_cache.py            # TlbCacheOps — TLB 与 L2 缓存的状态显示和刷新
@@ -81,24 +95,23 @@ pyremu/
       registry.py           # 模块清单的登记、替换、移除与失效刷新
     exception.py            # 调试器共用的异常类型
     types.py                # 数据类型 — 快照、内存变更、栈帧、断点
-    utils.py                # 无状态工具 — 格式化、校验与常量
+    utils.py                # 无状态工具 — 输入校验、常量与调试器侧的读取辅助
     attrs.py                # 跨操作类的共享属性声明 (供静态分析)
 
   core/                     # 处理器核心
     priv_defs.py            # RiscvMode 枚举与 mstatus 位常量
     hart.py                 # HartWithRegs(MemoryAccessOps, TrapOps), CSR 快捷属性
-    decoder/                # 指令解码与执行 (见下)
-      hart.py               # Hart(HartWithRegs), exec_instr(), 32 位指令的 handler 分发
-      check_ext_isa.py      # 按平台声明的扩展判定该指令是否可解码执行
-      alu.py                # 纯 Python 算术表, 以及加速执行引擎与纯 Python 的选择
-      compressed.py         # 16 位压缩指令的 C0 / C1 / C2 三个象限
-      sys_ops.py            # 特权指令与 CSR 指令
-      mem_ops.py            # 加载与原子操作的取值辅助, decode_c_sdsp / decode_sd_sp
     trap_handler.py         # TrapOps 操作类: deliver_trap, trap_ecall, trap_mret, trap_sret, handle_wfi, check_pending_interrupts
     mem_check_aux.py        # MemoryAccessOps 操作类: mem_read/mem_write/validate_csr/translate_addr
     registers.py            # Reg, FPR, CSR 模型 + 工厂函数 + CSR 表
     trap_def.py             # TrapType 枚举, cause code ↔ name 双向映射, 中断优先级与 semihosting 常数
     diag.py                 # sret/mret 返回 U 模式时的寄存器状态跟踪 (环境变量门控)
+
+  decoder/                  # 指令解码的纯 Python 定义 — 不导入 generic_ops
+    alu.py                  # 纯 Python 算术表
+    compressed_imm.py       # 压缩指令的立即数位段解码
+    sys_instr.py            # 特权指令与 CSR 指令
+    mem_instr.py            # 加载与原子操作的取值辅助, decode_c_sdsp / decode_sd_sp
 
   memory/                   # 内存子系统
     mmu.py                  # PTE, Sv39 页表遍历, translate_va()
@@ -152,7 +165,8 @@ pyremu/
   utils/                    # 工具
     file_ops.py             # 文件路径操作
     wrapper.py              # 异常处理装饰器: seize_* / silent_on_err / print_exc_on_err / die_if_err
-    str_aux.py              # 格式化辅助: fmt_addr, fmt_hexdump
+    str_aux.py              # 格式化与解析辅助: fmt_addr, hex_addr, fmt_size,
+                            #   parse_size, fmt_display_name, fmt_hexdump
     parse_bin.py            # 固件解析 (ELF/PE/raw binary, 基于 LIEF)
     mask.py                 # 位宽掩码 — mask64/mask32, 统一截断点
     math.py                 # 整数运算辅助 — align_up 与 2 的幂判定
@@ -238,9 +252,10 @@ Device (memory/bus.py) — ABC, read(offset, size) / write(offset, data)
 
 PMP (memory/pmp.py) — PMP 条目管理, NAPOT 编解码, 地址匹配检查
 
-PlatformConfig (platform.py) — dataclass, 描述 CPU 拓扑、内存布局、外设映射
+PlatformConfig (platform/config.py) — dataclass, 描述 CPU 拓扑、内存布局、外设映射
 ├── CpuConfig / MemoryConfig / PeripheralConfig / IsaConfig
-└── 工厂方法: qemu_virt(), sifive_u54(), dump_json/toml/yaml()
+└── 工厂方法: sifive_u54(), basic_machine(), minimal(), basic_aia_machine(),
+    from_chip(), from_dict/from_json/from_toml/from_yaml()
 
 TrapOps (core/trap_handler.py) — 陷态投递、陷态返回、WFI 与中断检查
 MemoryAccessOps (core/mem_check_aux.py) — 访存、CSR 校验与地址翻译, 继承 TrapOps
@@ -251,24 +266,29 @@ HartWithRegs (core/hart.py)  ← 组合 MemoryAccessOps 与 TrapOps
     mem_read_phy, mem_write_phy,
     reservation (LR/SC), _halted, _waiting
     mstatus/mtvec/mepc/mcause/… 快捷 property
-└── Hart (core/decoder/hart.py)  ← 组合 CompressedInstrOps 与 SysInstrOps
+└── Hart (emu/hart.py)  ← 组合 CompressedInstrOps, SysInstrOps 与 HartFfiOps
         exec_instr() -> 返回 2/4 (PC 需推进) 或 0 (PC 已被修改)
         访存与陷态处理直接调用 hart 自身的方法: mem_read(va, size) /
         mem_write(va, data) / validate_csr(addr, is_write) / deliver_trap(...) /
         trap_ecall() / handle_wfi(instr) 等
         handle_alu/handle_op_imm/handle_op32/handle_ld/handle_st/
         handle_br/handle_jalr/handle_sys/handle_fence/handle_amo 等
-        算术委托 alu.py 的 exec_alu/exec_op_imm/exec_op32/exec_op_imm32,
-        压缩指令由 compressed.py 的 CompressedInstrOps 提供 exec_compressed,
-        特权与 CSR 指令由 sys_ops.py 的 SysInstrOps 提供 exec_sys,
-        加载与原子操作的取值取自 mem_ops.py
+        算术委托 generic_ops 的 exec_alu/exec_op_imm/exec_op32/exec_op_imm32,
+        压缩指令由 generic_ops 的 CompressedInstrOps 提供 exec_compressed,
+        特权与 CSR 指令由 sys_instr.py 的 SysInstrOps 提供 exec_sys,
+        加载与原子操作的取值取自 mem_instr.py
 ```
 
 操作类的划分沿用 [pyremu/debug/](pyremu/debug/) 的做法: 方法定义留在原模块,
 由 hart 类组合进来, 调用方以 hart 自身为接收者. `HartWithRegs` 的模块依赖顺序为
-`priv_defs -> trap_def -> trap_handler -> mem_check_aux -> hart`; `Hart` 另依赖
-`compressed` 与 `sys_ops`, 两个模块只导入 `HartWithRegs` 的注解所需类型. 依赖顺序与
-组合顺序一致, 不构成循环导入.
+`priv_defs -> trap_def -> trap_handler -> mem_check_aux -> hart`; `Hart` 位于
+`pyremu/emu/`, 依赖 `pyremu.generic_ops` 与 `pyremu.decoder` 的 Ops.
+
+**包依赖方向**: `pyremu.generic_ops` 只导入实现后端 (`pyremu._native` 与
+`pyremu.decoder` 的纯 Python 定义)、`pyremu.core.priv_defs` 的枚举与
+`pyremu.utils`; 消费方 (`pyremu.emu`、调试器、用例) 导入 `pyremu.generic_ops`;
+实现后端与 `pyremu.core` 不导入 `pyremu.generic_ops`.
+[tests/test_ops/test_cyclic_deps.py](tests/test_ops/test_cyclic_deps.py) 静态检查这一方向.
 
 ### Instruction execution flow
 
@@ -283,8 +303,9 @@ HartWithRegs (core/hart.py)  ← 组合 MemoryAccessOps 与 TrapOps
 5. 任何 `ValueError` / `NotImplementedError` (非法编码、未实现 opcode) 统一转为 `self.deliver_trap(TrapType.IllInstr, ...)`.
 6. 返回 0 (PC 已修改, 如跳转/trap) 或 2/4 (调用方负责 `pc += advance`).
 
-**字段解码**: 执行侧由 [pyremu/_native/__init__.py](pyremu/_native/__init__.py) 的 `decode_fields`
-给出 `DecodedFields`; 反汇编侧使用 [pyremu/disasm/common.py](pyremu/disasm/common.py) 的
+**字段解码**: 执行侧由 [pyremu/generic_ops/decode.py](pyremu/generic_ops/decode.py) 的 `decode_fields`
+给出 `DecodedFields` (动态链接库不可用时走同一模块的纯 Python 实现);
+反汇编侧使用 [pyremu/disasm/common.py](pyremu/disasm/common.py) 的
 `parse_opcode`, `parse_rd`, `parse_func3`, `parse_rs1`, `parse_rs2`, `parse_func7`,
 `parse_imm12_se`, `parse_imm_s`, `parse_imm_b`, `parse_imm_j`, `parse_imm20_raw`,
 `parse_compressed` (低 2 位 ≠ 3 -> 16-bit); `sext(val, bits)` 与各 `mask*` 位于
@@ -376,7 +397,9 @@ hart.mem_read(va, size) / hart.mem_write(va, data)
 - 寄存器写: `set <name> <val>`, `csrw <name> <val>`, `pc <addr>`
 - 内存: `mem <addr> [size]`, `disasm <addr> [len]`, `sym [filt]`
 - 栈回溯: `stack`/`bt`/`frame`/`f` — GDB 风格, #01 起始编号, `frame N` 切换当前帧并显示其栈内存
-- 设备与地址: `devices`/`dev` — 列出主存、存储区间与全部虚拟设备的总线区间
+- 设备与映像: `devices`/`dev` — 列出主存、存储区间与全部虚拟设备的总线区间;
+  `bins-info` 列出命令行传入的映像及其物理地址范围; `disk-info` 显示磁盘映像的
+  格式摘要与布局
 - 配置: `hart <id>`, `help`/`?`, `q`/`quit`
 
 **GDB 风格特性**: 空输入 (直接按回车) 重复上一条命令.
@@ -392,7 +415,7 @@ hart.mem_read(va, size) / hart.mem_write(va, data)
 | [demo_m_to_s.py](examples/demo_m_to_s.py) | M->S 移交完整演示: 模拟 OpenSBI -> OS boot, 观测 UART 输出和 WFI 状态 |
 | [demo_s_to_u.py](examples/demo_s_to_u.py) | M->S->U 完整演示: UART 输入, Sv39 栈保护页, fib 栈帧验证, 病态进程 S 模式终止 |
 | [demo_multi.py](examples/demo_multi.py) | 多 hart 执行演示 |
-| [demo_easy_kern.py](examples/demo_easy_kern.py) | 配合 [examples/easy_kern/](examples/easy_kern/) 的最小内核演示 |
+| [demo_dts_devices.py](examples/demo_dts_devices.py) | 以芯片设备树为输入, 按该树装配平台并复用调试器的 `devices` 命令列出设备地址区间 |
 
 运行: `uv run python examples/demo_emulator.py` (各文件均可独立运行).
 
@@ -533,7 +556,7 @@ Device 接口, 不属于内存映射外设, 由 Emulator 创建并注入 UART, �
 
 ## Testing
 
-共 3623 个用例, 分布于 11 个顶层测试文件与 11 个测试子目录, 计数取自
+共 3628 个用例, 分布于 11 个顶层测试文件与 11 个测试子目录, 计数取自
 `pytest --collect-only`。
 
 测试子目录仅在该子系统的测试源达到 1000 行及以上时建立; 未达到时合并为单个顶层
@@ -559,16 +582,16 @@ Device 接口, 不属于内存映射外设, 由 Emulator 创建并注入 UART, �
 
 | 目录 | 用例数 | 覆盖内容 |
 |------|-------|---------|
-| test_dbg/ | 1160 | test_mem 219, test_cli 154, test_base 112, test_sym_cmds 105, test_sym 100, test_bp 93, test_tlb_cache 56, test_reg 55, test_sym_elf_idx 43, test_utils 38, test_sym_loader 32, test_exec 38, test_mmu_view 28, test_status 25, test_sym_model 24, test_stk_frame 17, test_types 11, test_device_map 10. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 栈回溯, 调试器数据类型, 设备总线区间, 多来源符号 |
+| test_dbg/ | 1161 | test_mem 215, test_cli 158, test_base 112, test_sym_cmds 105, test_sym 100, test_bp 93, test_tlb_cache 56, test_reg 55, test_sym_elf_idx 43, test_utils 38, test_sym_loader 32, test_exec 38, test_mmu_view 28, test_status 25, test_sym_model 24, test_stk_frame 17, test_types 11, test_device_map 11. 断点, TLB 与 L2 缓存视图, 寄存器读写, 状态与 CSR 位域显示, 执行与快照回滚, 页表视图, 栈回溯, 调试器数据类型, 设备总线区间, 多来源符号 |
 | test_calc/ | 449 | test_compressed_diff 107, test_compressed 95, test_zbb 53, test_amo 46, test_instr 46, test_zba_zbs 38, test_alu 26, test_fpu 26, test_amo_encoding 12. 压缩指令及其与非压缩等效指令的差分, Zbb/Zba/Zbs 位操作, LR/SC 与 AMO, 整数与 F/D 浮点运算 |
-| test_ops/ | 357 | test_alu 144, test_ffi_layout 72, test_trap_isa 65, test_mem 44, test_compressed 20, test_engine_diff 12. 纯 Python 路径的算术与回退分支, 非法编码与扩展开关, 访存与跨页访问, 压缩指令差分, 与加速执行引擎的随机差分, FFI 结构布局与状态编组 |
-| test_trap/ | 326 | test_mem_fault 72, test_privilege 71, test_interrupt 49, test_wfi 48, test_delivery 36, test_stk_overflow 20, test_ecall 19, test_cause 9, test_sfence 2. trap cause code 编解码, `deliver_trap` M/S 投递与委派, mtvec/stvec direct/vectored, ECALL/EBREAK/MRET/SRET, CSR 特权级检查, 访存对齐/PMA 故障, 缺页异常, 定时器中断与 `stimecmp`, MSIP 投递与 mip/mie 跨 hart 隔离, WFI, 栈溢出 |
+| test_ops/ | 359 | test_alu 144, test_ffi_layout 72, test_trap_isa 65, test_mem 44, test_compressed 20, test_engine_diff 12, test_cyclic_deps 2. 纯 Python 路径的算术与回退分支, 非法编码与扩展开关, 访存与跨页访问, 压缩指令差分, 与加速执行引擎的随机差分, FFI 结构布局与状态编组, generic_ops 的导入边界 |
+| test_trap/ | 327 | test_mem_fault 72, test_privilege 71, test_interrupt 49, test_wfi 48, test_delivery 36, test_stk_overflow 20, test_ecall 20, test_cause 9, test_sfence 2. trap cause code 编解码, `deliver_trap` M/S 投递与委派, mtvec/stvec direct/vectored, ECALL/EBREAK/MRET/SRET, CSR 特权级检查, 访存对齐/PMA 故障, 缺页异常, 定时器中断与 `stimecmp`, MSIP 投递与 mip/mie 跨 hart 隔离, WFI, 栈溢出 |
 | test_peripheral/ | 295 | test_virtio_blk 51, test_uart 42, test_virtio_net 41, test_bus 30, test_watchdog 28, test_i2c 25, test_gpio 21, test_power_ctrl 18, test_spi 17, test_crng 15, test_virtio_net_dtb 7. virtio 块设备与网卡, 描述符链成环保护, UART, 总线读写与地址区间列举, PMA 检查, 关机与复位请求, CRNG, 网卡设备树节点 |
 | test_interrupt/ | 248 | test_ipi_chain 52, test_imsic 49, test_plic 40, test_clint 28, test_aia_integration 24, test_aplic 12, test_controller 11, test_aia_config 10, test_aia_csr 7, test_irq_sink 7, test_native_plic_sync 5, test_aia 3. IMSIC, PLIC, APLIC, CLINT, IPI 投递链与 MSIP 清除, CLINT 硬件中断源的 mip 位撤除, AIA 配置与 CSR 门控, 加速执行引擎的 PLIC 状态同步 |
 | test_mem_access/ | 190 | test_pmp 76, test_mmu 68, test_mem_check_aux 35, test_pmp_smp 11. PTE 与 Sv39 三级页表遍历, 超级页, Bare 模式, 逐 hart 的 satp 与 MMU 模式, PMP 编解码与权限, 多 hart PMP 隔离, counteren 门控与跨页访问 |
 | test_cache/ | 146 | test_l2cache 45, test_mdid 43, test_tlb 20, test_l2cache_stress 18, test_cache_base 10, test_tlb_shootdown 6, test_l2_coherence 4. MDID CSR 与域隔离, L2 MESI 状态与回写, TLB 查找/替换/刷新, 跨核 TLB shootdown 同步与 TLB 事务跨批次保留 |
 | test_utils/ | 86 | test_isa 22, test_wrapper 17, test_str_aux 11, test_mask 10, test_file_ops 9, test_regname 7, test_tick 6, test_counter 4. 配置辅助, 异常装饰器, 位宽掩码, 格式化, 文件路径, 寄存器名称, 时钟, 计数器 |
-| test_dev_tree/ | 71 | test_dev_tree 49, test_dtb 18, test_initrd 4. 芯片设备树回写为 DTB, `/memory` 与 `/reserved-memory` 的 reg 编码, initramfs 接入 |
+| test_dev_tree/ | 72 | test_dev_tree 50, test_dtb 18, test_initrd 4. 芯片设备树回写为 DTB, `/memory` 与 `/reserved-memory` 的 reg 编码, initramfs 接入 |
 | test_tools/ | 3 | test_parse_dbg_stats 3. 调试统计输出的解析 |
 
 ## Important design notes
@@ -895,6 +918,27 @@ def foo():
 - **pytest** / **pytest-cov** / **pytest-timeout** — 测试框架 (每个用例的超时取 `pyproject.toml` 的 `timeout = 10` 秒)
 - **pyyaml** — 平台配置文件反序列化 (YAML)
 - **ruff** — lint & format
+
+## Packaging
+
+`uv build` 产出平台轮子 (`py3-none-<平台>`), 内含 `libdecode.so`、`libtermio.so`
+与生成物 `configs_gen.py`、`ffi_spec.json`、`defs_gen.py`; 安装后
+`native_available()` 为真. 安装后提供 `rvdb` 命令, 入口为
+`pyremu.debugger:debugger`.
+
+构建前无须手工生成: [setup.py](setup.py) 的 `build_py` 按需执行
+`make __configs-gen`, `make pyremu/_native/cpu/src/configs_gen.rs`,
+`cargo build --release` 与 `defs_aux.py`; 产物已存在且新于源码时跳过, editable
+安装不会重复编译. 构建要求 make、Rust 工具链与网络, `Cargo.lock` 中的
+`softfloat-pure` 为 git 依赖; `PYREMU_CARGO_OFFLINE=1` 给 `cargo build` 加
+`--offline`, 使用本机缓存或 vendor 目录.
+
+`PYREMU_PURE_WHEEL=1 uv build --wheel` 产出 `py3-none-any` 的纯 Python 轮子:
+不含两个动态库, 保留生成物 `configs_gen.py`、`ffi_spec.json`、`defs_gen.py`,
+安装后 `native_available()` 为假, 计算走纯 Python 实现.
+
+sdist 含 Rust 源码、`Cargo.lock`、`mk/`、根 `makefile` 与
+`bsp/sittim/config.mk`, 可在目标平台直接构建出同样的轮子.
 
 ## Custom LLVM toolchain
 

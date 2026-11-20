@@ -22,7 +22,6 @@ from typing import Any
 
 from pyremu import generic_ops
 from pyremu.configs_gen import PMP_ENTRIES
-from pyremu.generic_ops import native_available
 from pyremu.utils.mask import mask64
 
 # PMP 配置位 (每 8-bit 条目中的位偏移)
@@ -152,7 +151,6 @@ class Pmp:
         self._flat_cfg: bytearray = bytearray(64)
         self._flat_addr: array = array("Q", [0] * 64)
         self._cache_dirty: bool = True
-        self._use_native: bool = native_available()
 
     # ---- 属性 ----
 
@@ -246,12 +244,9 @@ class Pmp:
     def check(self, info: PmpAccessInfo) -> bool:
         """检查物理地址访问是否允许. 返回 True 表示通过."""
         pmpsplit, mdid = info.pmpsplit, info.mdid
-
-        # 飞地 split 超限预检 (在所有路径前, 避免无谓的缓存重建)
         if mdid != 0 and pmpsplit > 0 and pmpsplit >= self._num_entries:
             return False
 
-        # 后端选择在 pyremu.generic_ops 内完成
         return generic_ops.pmp.check(self, info)
 
     def check_py(self, info: PmpAccessInfo) -> bool:

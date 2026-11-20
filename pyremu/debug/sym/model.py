@@ -94,7 +94,7 @@ def _selection_key(mod: SymMod, has_pa: bool) -> tuple[int, int, int]:
 
     选取时比较元组的大小, 故物理区间取 1, 虚拟区间取 0.
     """
-    return (mod.span, -mod.load_order, 1 if has_pa else 0)
+    return (mod.span, -mod.load_order, int(has_pa))
 
 
 def select_module(

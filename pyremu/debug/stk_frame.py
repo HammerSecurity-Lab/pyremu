@@ -12,12 +12,11 @@ import struct
 
 from rich.table import Table
 
-from pyremu.core.decoder import decode_c_sdsp, decode_sd_sp
 from pyremu.core.hart import RiscvMode
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import StackFrame, TrapEntry
-from pyremu.debug.utils import hex_addr
-from pyremu.utils.str_aux import dye_hexdump
+from pyremu.decoder.mem_instr import decode_c_sdsp, decode_sd_sp
+from pyremu.utils.str_aux import dye_hexdump, hex_addr
 from pyremu.utils.wrapper import seize_val_err
 
 # 跨特权级 trap 上下文中 RA/FP 保存偏移的常见布局.

@@ -12,7 +12,7 @@ RISC-V Platform-Level Interrupt Controller (PLIC).
 - 按上下文 (hart * privilege) 的使能位
 - 优先级阈值 + Claim/Complete 机制
 
-内存布局 (SiFive 兼容, context stride = 0x1000):
+内存布局:
 
   0x000000 - 0x000FFC   Source priorities (4 bytes each, source 1..N)
   0x001000 - 0x00107C   Pending bits (32 words * 32 bits)
@@ -57,8 +57,15 @@ PLIC_CONTEXT_CLAIM_OFF = 0x004
 PLIC_DEFAULT_BASE = 0x0C00_0000
 
 
+def plic_mem_range(
+    num_contexts: int,
+) -> int:
+    """PLIC 的地址窗口字节数: 到最后一个 context 末尾再加 4 KiB."""
+    return PLIC_CONTEXT_BASE + (num_contexts - 1) * PLIC_CONTEXT_STRIDE + 0x1000
+
+
 class PLIC(Device):
-    """RISC-V Platform-Level Interrupt Controller (PLIC).
+    """RISC-V Platform-Level Interrupt Controller.
 
     实现 MMIO 寄存器接口供 Guest 访问,
     同时提供 set_irq / get_pending_mip 供硬件模型集成.
@@ -71,7 +78,7 @@ class PLIC(Device):
         num_contexts: int = 1,
     ) -> None:
         self.base_addr = base_addr
-        self.num_sources = num_sources  # source 1..N (source 0 保留)
+        self.num_sources = num_sources  # source 1..N
         self.num_contexts = num_contexts
         self.num_enable_words = (num_sources + 31) // 32
 
@@ -91,19 +98,11 @@ class PLIC(Device):
         self.pending = (ctypes.c_uint8 * (num_sources + 1))()
         self.level = (ctypes.c_uint8 * (num_sources + 1))()
 
-        # 计算设备区域大小 — 到最后一个 context + 4 KiB
-        last_context_end = (
-            PLIC_CONTEXT_BASE
-            + (num_contexts - 1) * PLIC_CONTEXT_STRIDE
-            + 0x1000
-        )
-        self.size = last_context_end
+        self.size = plic_mem_range(num_contexts)
 
-        # 并发安全: RX daemon (设备线程) 经 set_irq 写 pending/level, 主线程经
+        # 并发安全: RX daemon 经 set_irq 写 pending/level, 主线程经
         # get_pending_mip/read/write 读仲裁状态 — 共享状态访问需互斥.
         self._lock = threading.Lock()
-
-    # ---- 硬件集成 API (供模拟器其他组件调用) ----
 
     def reset(self) -> None:
         """恢复上电复位状态: 清空优先级、使能、阈值、挂起与电平."""
@@ -127,7 +126,7 @@ class PLIC(Device):
         """
         with self._lock:
             if 0 < source <= self.num_sources:
-                val = 1 if pending else 0
+                val = int(pending)
                 self.level[source] = val
                 self.pending[source] = val
 

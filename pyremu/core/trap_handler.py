@@ -256,6 +256,10 @@ class TrapOps:
 
     #  ECALL / EBREAK / MRET / SRET
 
+    def trap_ill_instr(self, tval: int) -> None:
+        """非法指令陷态: 携带该指令的编码作为 *tval*."""
+        self.deliver_trap(TrapType.IllInstr, tval=tval, is_interrupt=False)
+
     def trap_ecall(
         self,
     ) -> None:
@@ -279,16 +283,15 @@ class TrapOps:
         read_ram_u64/u8 一致.
 
         加速执行引擎仅在 ``[ram_base, ram_base + ram_size)`` 内读, 越界视为 0;
-        设备 MMIO 地址不在此范围内, 一并视为越界.
+        设备 MMIO 地址不在此范围内, 一并视为越界. 落在 PIE 链接地址区间内的
+        地址按同一段字节读取.
         """
         bus = self._bus
         if bus is None or size < 1:
             return b"\x00" * size
         if not bus.is_ram_addr(pa) or not bus.is_ram_addr(pa + size - 1):
             return b"\x00" * size
-        ram: bytearray = bus._ram
-        off = pa - bus.ram_base
-        return bytes(ram[off : off + size])
+        return bus.read_ram_direct(pa, size)
 
     def _semihosting_markers_match(
         self,
@@ -351,7 +354,7 @@ class TrapOps:
             self.gprs[10] = 1
         elif op == SEMIHOSTING_SYS_ISTTY:
             fd = int.from_bytes(self._sh_read_ram(param, 8), "little")
-            self.gprs[10] = 1 if fd <= 2 else 0
+            self.gprs[10] = int(fd <= 2)
         else:
             self.gprs[10] = SEMIHOSTING_ERR
         self.pc = mask64(self.pc + 8)

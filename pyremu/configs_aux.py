@@ -25,9 +25,7 @@ from pyremu.utils.wrapper import die_if_err
 def cfg_str(name: str) -> str:
     """读取环境变量 *name*, 未设置时回退到 configs_gen 中的同名默认值."""
     val = os.environ.get(name, "")
-    if val != "":
-        return val
-    return str(getattr(configs_gen, name, ""))
+    return val if val != "" else str(getattr(configs_gen, name, ""))
 
 
 @die_if_err

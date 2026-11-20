@@ -33,7 +33,7 @@
 
 ## 未定
 
-- `pyremu/core/decoder/` 中的 `exec_compressed(hart, instr)` 与 `exec_sys(hart, f, instr)`
+- `pyremu/decoder/` 中的 `exec_compressed(hart, instr)` 与 `exec_sys(hart, f, instr)`
   是否一并转为方法, 以及方法归属 `Hart` 还是 `HartWithRegs`。
 
 ---

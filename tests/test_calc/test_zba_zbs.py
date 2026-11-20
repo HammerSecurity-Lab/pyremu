@@ -15,7 +15,7 @@ Zbs (单比特): bset, bclr, binv, bext, bseti, bclri, binvi, bexti. 寄存器�
 
 import pytest
 
-from pyremu.core.decoder import Hart
+from pyremu.emu.hart import Hart
 from tests.instr_encode import i_type, pack_funct, pack_src_regs, r_type
 
 # Opcode 常量

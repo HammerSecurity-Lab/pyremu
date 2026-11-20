@@ -11,6 +11,26 @@ from pyremu.core.hart import HartGroup
 from pyremu.core.priv_defs import MSTATUS_TVM, RiscvMode
 from pyremu.core.trap_def import TrapType
 
+CSR_OPS = {
+    0b001: (lambda old, src: src, False),  # CSRRW
+    0b010: (lambda old, src: old | src, True),  # CSRRS
+    0b011: (lambda old, src: old & ~src, True),  # CSRRC
+    0b101: (lambda old, src: src, False),  # CSRRWI
+    0b110: (lambda old, src: old | src, True),  # CSRRSI
+    0b111: (lambda old, src: old & ~src, True),  # CSRRCI
+}
+
+# ops: funct12 -> sys_fn_name
+SYS_PRIV_OPS: dict[int, str] = {
+    0x000: "_sys_ecall",
+    0x001: "_sys_ebreak",
+    0x302: "_sys_mret",
+    0x102: "_sys_sret",
+    0x105: "_sys_wfi",
+    0x120: "_sys_sfence_vma",
+    0x5A0: "_sys_mfence_did",
+}
+
 
 class SysInstrOps:
     """特权指令与 CSR 指令的处理方法."""
@@ -86,21 +106,12 @@ class SysInstrOps:
             if l2 is not None:
                 l2.flush_by_mdid(mdid_val)
 
-    # 特权指令分发表: funct12 映射到方法名
-    _SYS_PRIV_OPS: dict[int, str] = {
-        0x000: "_sys_ecall",
-        0x001: "_sys_ebreak",
-        0x302: "_sys_mret",
-        0x102: "_sys_sret",
-        0x105: "_sys_wfi",
-        0x120: "_sys_sfence_vma",
-        0x5A0: "_sys_mfence_did",
-    }
+
 
     def _sys_privileged(self, f, instr: int) -> None:
         """执行 funct3=0 的特权指令, 由 funct12 决定具体操作."""
         funct12 = f.func12
-        op = self._SYS_PRIV_OPS.get(funct12)
+        op = SYS_PRIV_OPS.get(funct12)
         if op is None and 0x121 <= funct12 <= 0x13F:
             # SFENCE.VMA: funct7=0b0001001, 其 rs2 编码在 funct12 的低 5 位
             op = "_sys_sfence_vma"
@@ -138,19 +149,10 @@ class SysInstrOps:
         if f.func3 == 0:
             self._sys_privileged(f, instr)
         else:
-            spec = _CSR_OPS.get(f.func3)
+            spec = CSR_OPS.get(f.func3)
             if spec is None:
                 raise ValueError(f"invalid funct3={f.func3:#x} for sys")
             self._sys_csr(f, spec)
         return 0 if self.pc != saved_pc else 4
 
 
-# CSR 指令: funct3 -> (新值算法, 是否按源操作数是否为零决定写入)
-_CSR_OPS = {
-    0b001: (lambda old, src: src, False),  # CSRRW
-    0b010: (lambda old, src: old | src, True),  # CSRRS
-    0b011: (lambda old, src: old & ~src, True),  # CSRRC
-    0b101: (lambda old, src: src, False),  # CSRRWI
-    0b110: (lambda old, src: old | src, True),  # CSRRSI
-    0b111: (lambda old, src: old & ~src, True),  # CSRRCI
-}

@@ -9,6 +9,8 @@
 - 调试命令列出本次运行注册的全部虚拟设备及其总线区间 — 已完成, 由 `devices` 与 `dev` 命令实现, 用户于 2026-11-12 提出。
 - rvdb restart 一致性缺陷与客机文件读取损坏 — 已完成, restart 按冷启动语义重建, 客机读取损坏由压缩访存跨页修复, 用户于 2026-10-31 报告。
 - `tests/test_native.py` 拆分为按内容命名的测试目录 — 已完成 2026-11-17, 用户于 2026-11-17 提出。
+- 打包为可安装的第三方库 — 已完成 2026-11-20, 平台轮子与 sdist 可独立构建,
+  纯 Python 轮子经 `PYREMU_PURE_WHEEL=1` 产出, 用户于 2026-11-20 提出。
 
 ## `tests/test_native.py` 拆分的实施结果 (2026-11-17)
 
@@ -59,3 +61,24 @@ restart 一致性:
 - 根因是加速执行引擎的压缩访存未按两页拆分, 已修复并补 `TestCompressedCrossPage`,
   详见 [2026-11 变更记录](../changelogs/2026-11.md)。实机复测: 逐行比对用例无差异,
   `/sbin/adduser` 输出与 QEMU 一致。
+
+## 打包为可安装的第三方库的实施结果 (2026-11-20)
+
+- [setup.py](../../setup.py) 的 `build_py` 在构建前按需生成 `configs_gen.py`、
+  `cpu/src/configs_gen.rs`、`defs_gen.py`, 编译 `libdecode.so` 与 `libtermio.so`
+  并复制进包目录; 产物新于源码时跳过, editable 安装不重复编译。
+- 缺少 make 或 cargo 时以 `SystemExit` 终止, 提示缺少的工具与所需步骤;
+  外部命令失败时给出命令与返回码。
+- `PYREMU_PURE_WHEEL=1` 跳过加速库编译, 从构建产物中移除两个动态库,
+  轮子标签为 `py3-none-any`; 生成物仍随轮子分发, 安装后 `native_available()`
+  为假, 计算走纯 Python 实现。
+- `PYREMU_CARGO_OFFLINE=1` 给 `cargo build` 追加 `--offline`。默认允许构建期
+  访问网络, `Cargo.lock` 固定 `softfloat-pure` 的 git 修订。
+- 生成 `configs_gen.rs` 仍经根 `makefile` 的目标, 不改由构建钩子直接展开 mk
+  变量: 变量的取值依赖 include 闭包, sdist 已收录该闭包。
+- 验证: `uv build` 产出 `pyremu-0.10.0-py3-none-linux_x86_64.whl` 与 sdist,
+  轮子含两个动态库、`configs_gen.py`、`ffi_spec.json`、`defs_gen.py` 及全部子包,
+  `Requires-Dist` 只列运行期依赖; 解包到独立目录后 `native_available()` 为真,
+  `decode_fields()` 与 `Emulator(PlatformConfig.basic_machine())` 均正常。
+  纯 Python 轮子解包后 `native_available()` 为假, 同一组调用正常。
+- 未采纳: 为各平台交叉构建的 CI, 以及随 sdist 分发 vendor 目录。

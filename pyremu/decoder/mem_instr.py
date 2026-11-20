@@ -17,6 +17,21 @@ from pyremu.utils.mask import (
     sint64,
 )
 
+LD_READ_SIZE = {
+    LdFn3.lb: 1,
+    LdFn3.lbu: 1,
+    LdFn3.lh: 2,
+    LdFn3.lhu: 2,
+    LdFn3.lw: 4,
+    LdFn3.lwu: 4,
+    LdFn3.ld: 8,
+}
+
+_LD_SIGN_EXTEND = {
+    LdFn3.lb: sext8,
+    LdFn3.lh: sext16,
+    LdFn3.lw: sext32,
+}
 
 def decode_c_sdsp(half: int) -> tuple[int, int] | None:
     """If *half* is ``c.sdsp rs2, uimm(sp)``, return ``(rs2, uimm)``; else None.
@@ -51,7 +66,7 @@ def decode_sd_sp(instr: int) -> tuple[int, int] | None:
     """
     if (instr & 0x7F) != 0b0100011:
         return None
-    if ((instr >> 12) & 0x7) != 0b011:  # funct3 = SD
+    if ((instr >> 12) & 0x7) != 0b011: # funct3 = SD
         return None
     if ((instr >> 15) & 0x1F) != 2:  # rs1 = sp
         return None
@@ -60,23 +75,6 @@ def decode_sd_sp(instr: int) -> tuple[int, int] | None:
     if imm & 0x800:  # 按有符号立即数返回, 供调用方与 sp 相加
         imm -= 0x1000
     return rs2, imm
-
-
-LD_READ_SIZE = {
-    LdFn3.lb: 1,
-    LdFn3.lbu: 1,
-    LdFn3.lh: 2,
-    LdFn3.lhu: 2,
-    LdFn3.lw: 4,
-    LdFn3.lwu: 4,
-    LdFn3.ld: 8,
-}
-
-_LD_SIGN_EXTEND = {
-    LdFn3.lb: sext8,
-    LdFn3.lh: sext16,
-    LdFn3.lw: sext32,
-}
 
 
 def load_value(kind: LdFn3, mem: bytes) -> int:

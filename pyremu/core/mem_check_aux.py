@@ -108,9 +108,6 @@ def _counter_enable_mask(csr_addr: int) -> int | None:
     return None
 
 
-#  地址翻译 (VA -> PA, 经 TLB 缓存)
-
-
 def _check_pte_perm(
     effective_mode: int,
     perm: int,
@@ -131,7 +128,7 @@ def _check_pte_perm(
       仅影响数据 load, 不影响写或取指.
 
     Returns:
-        True 若权限通过, False 否则 (应触发 PageFaultError).
+        True 若权限通过, False 否则.
     """
     pte_u = (perm & PTE_U) != 0
     pte_r = (perm & PTE_R) != 0
@@ -327,9 +324,8 @@ class MemoryAccessOps(TrapOps):
 
         命中时按本次访问重新校验 PTE 权限, 给出物理地址或翻译失败.
         """
-        tlb: TLB = self.dtlb
         asid = mask16(self.satp_val >> 44)
-        hit, ppn, perm = tlb.lookup(va >> 12, asid=asid)
+        hit, ppn, perm = self.dtlb.lookup(va >> 12, asid=asid)
         if not hit:
             return None
         if not _check_pte_perm(
@@ -389,8 +385,7 @@ class MemoryAccessOps(TrapOps):
 
         # 将翻译结果插入 TLB 缓存, 存真实 PTE 权限, 命中路径方可复用
         # _check_pte_perm; 标记当前 hart 的 mdid, 供 mfence.did 按域刷新
-        tlb: TLB = self.dtlb
-        tlb.insert(
+        self.dtlb.insert(
             va >> 12,
             pa >> 12,
             perm=perm,
@@ -758,8 +753,6 @@ class MemoryAccessOps(TrapOps):
                 asid=_asid,
             )
         return True, pa, perm
-
-    #  取指校验 (VA -> PA via itlb -> PMP execute check)
 
     def check_instruction_fetch(
         self,

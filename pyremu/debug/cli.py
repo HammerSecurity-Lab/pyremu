@@ -15,13 +15,19 @@ from loguru import logger
 from pyremu import configs_gen
 from pyremu.debug import Debugger
 from pyremu.debug.types import ImageKind, LoadedImage
-from pyremu.debug.utils import fmt_size, parse_size
 from pyremu.emulator import Emulator
 from pyremu.env_inject import Preloader
+from pyremu.interrupt.clint import CLINT_SIZE
+from pyremu.interrupt.plic import plic_mem_range
 from pyremu.peripheral.virtio_mmio import VIRTIO_MMIO_SIZE
-from pyremu.platform import PeripheralConfig, PlatformConfig
+from pyremu.platform import (
+    periph_from_chip,
+    PeripheralConfig,
+    PlatformConfig,
+)
 from pyremu.utils import dev_tree
 from pyremu.utils.parse_bin import FirmwareImage, parse_firmware
+from pyremu.utils.str_aux import fmt_size, parse_size
 
 # 设备树未声明块设备时交给它的镜像, 相对仓库根目录解析, 不依赖当前工作目录.
 DEFAULT_DISK_IMAGE = (
@@ -729,49 +735,6 @@ def _load_kernel_image(
     return kernel_path, addr, len(data)
 
 
-def _periph_from_chip(
-    chip: dev_tree.ChipDt,
-) -> PeripheralConfig:
-    """把芯片设备树中的外设区间与中断源编号填入外设配置.
-
-    树中没有的节点置 0, 即不注册该设备; 节点声明了 interrupts 时中断源编号取树中
-    的取值, 未声明时取平台默认值.
-    """
-    p = chip.periph
-    boot_addr_size = 0
-    if chip.boot_addr is not None:
-        boot_addr_size = chip.boot_addr.size
-    periph = PeripheralConfig(
-        uart_base=_tree_base(p.uart),
-        spi_base=_tree_base(p.spi),
-        i2c_base=_tree_base(p.i2c),
-        gpio_base=_tree_base(p.gpio),
-        clint_base=_tree_base(p.clint),
-        plic_base=_tree_base(p.plic),
-        virtio_blk_base=_tree_base(p.virtio_blk),
-        virtio_net_s_base=_tree_base(p.virtio_net_s),
-        virtio_net_m_base=_tree_base(p.virtio_net_m),
-        crng_base=_tree_base(p.crng),
-        # 芯片设备树没有关机与复位请求设备的节点, 该模式不注册该设备.
-        power_base=0,
-        boot_addr_base=_tree_base(chip.boot_addr),
-        boot_addr_size=boot_addr_size,
-        watchdog_base=_tree_base(p.watchdog),
-    )
-    irq = chip.irq_vec
-    if irq.uart is not None:
-        periph.uart_irq = irq.uart
-    if irq.watchdog is not None:
-        periph.watchdog_irq = irq.watchdog
-    if irq.virtio_blk is not None:
-        periph.virtio_blk_irq = irq.virtio_blk
-    if irq.virtio_net_s is not None:
-        periph.virtio_net_s_irq = irq.virtio_net_s
-    if irq.virtio_net_m is not None:
-        periph.virtio_net_m_irq = irq.virtio_net_m
-    return periph
-
-
 def _resolve_disk_image(
     ns: argparse.Namespace,
     chip: dev_tree.ChipDt | None,
@@ -802,31 +765,34 @@ def _enable_chip_block_device(
 ) -> None:
     """为芯片设备树中缺少的块设备选定 MMIO 区间与中断源编号.
 
-    树中声明了该设备时按树, 不改动. 树中没有该设备时按补充设备节点的通用规则给出
-    区间与中断源编号, 即地址空间中的第一段可用区间与树中最小的未占用编号.
+    树中声明了该设备时按树, 不改动. 树中没有该设备时给出地址空间中的第一段可用
+    区间与树中最小的未占用编号, 并避开主存、引导只读存储器与配置中的中断控制器.
 
     Raises:
-        ValueError: 树中没有 PLIC 节点, 或没有可用的区间与中断源编号.
+        ValueError: 配置中没有中断控制器, 或没有可用的区间与中断源编号.
     """
     if periph.virtio_blk_base:
         return
-    platform_regions = [
-        (platform.ram_base, platform.ram_base + platform.ram_size)
-    ]
+    if not periph.plic_base and not periph.imsic_m_base:
+        raise ValueError("没有可用于补充块设备中断的中断控制器")
+    reserved = [(platform.ram_base, platform.ram_base + platform.ram_size)]
     if platform.rom_base and platform.rom_size:
-        platform_regions.append(
+        reserved.append(
             (platform.rom_base, platform.rom_base + platform.rom_size)
         )
-    device = chip.place_device(VIRTIO_BLK_DEVICE, reserved=platform_regions)
+    if periph.clint_base:
+        reserved.append((periph.clint_base, periph.clint_base + CLINT_SIZE))
+    if periph.plic_base:
+        contexts = 2 * max(1, chip.num_harts)
+        reserved.append(
+            (periph.plic_base, periph.plic_base + plic_mem_range(contexts))
+        )
+    device = VIRTIO_BLK_DEVICE.placed(
+        chip.first_avail_mmio_region(VIRTIO_BLK_DEVICE.size, reserved=reserved),
+        chip.first_free_irq_source(),
+    )
     periph.virtio_blk_base = device.region.base
     periph.virtio_blk_irq = device.irq
-
-
-def _tree_base(
-    region: dev_tree.DtRegion | None,
-) -> int:
-    """区间的基址; 树中没有该节点时取 0, 即不注册该设备."""
-    return 0 if region is None else region.base
 
 
 def _build_peripheral_config(
@@ -843,7 +809,7 @@ def _build_peripheral_config(
     """
     disk_image = _resolve_disk_image(ns, chip)
     if chip is not None:
-        periph = _periph_from_chip(chip)
+        periph = periph_from_chip(chip)
         _enable_chip_block_device(periph, chip, platform)
         return periph, ns.bootargs, disk_image
     periph = PeripheralConfig()

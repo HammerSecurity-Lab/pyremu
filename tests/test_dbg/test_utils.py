@@ -2,23 +2,25 @@
 # -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
 
-"""测试 pyremu.debug.utils."""
+"""测试 pyremu.debug.utils 与 pyremu.utils.str_aux 的辅助函数."""
 
 import pytest
 
 from pyremu.debug.utils import (
     check_rv64_addr,
     EXC_NAMES,
+    ip_bits,
+    IRQ_NAMES,
+    trap_cause_name,
+)
+from pyremu.debugger import Debugger
+from pyremu.utils.str_aux import (
     fmt_instr_count,
     fmt_size,
     group_order,
     hex_addr,
-    ip_bits,
-    IRQ_NAMES,
     parse_size,
-    trap_cause_name,
 )
-from pyremu.debugger import Debugger
 
 
 class TestHexAddr:

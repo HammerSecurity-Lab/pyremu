@@ -9,6 +9,8 @@
 """
 
 from pyremu.core.trap_def import trap_cause_name
+from pyremu.debug import disasm_view
+from pyremu.debug.addr import AddrOps
 from pyremu.debug.base import DebuggerBase
 from pyremu.debug.bins import BinsInfoOps
 from pyremu.debug.breakpoint import BreakpointOps
@@ -29,12 +31,8 @@ from pyremu.debug.types import (
     MemWriteTracker,
     StackFrame,
 )
-from pyremu.debug.utils import (
-    fmt_instr_count,
-    fmt_size,
-    hex_addr,
-    ip_bits,
-)
+from pyremu.debug.utils import ip_bits
+from pyremu.utils.str_aux import fmt_instr_count, fmt_size, hex_addr
 
 
 class Debugger(
@@ -48,15 +46,15 @@ class Debugger(
     DiskViewOps,
     MmuViewOps,
     TlbCacheOps,
+    AddrOps,
     MemoryOps,
     RegisterOps,
     BreakpointOps,
     ExecutionOps,
     DebuggerBase,
 ):
-    """RISC-V 交互式调试器 — 所有功能域通过操作类组合."""
+    """RISC-V 交互式调试器."""
 
-    # Backward-compatible static helpers — 原始 debugger.py 暴露为类方法.
     _hex = staticmethod(lambda v: hex_addr(v, styled=False))
     _fmt_size = staticmethod(fmt_size)
     _fmt_instr_count = staticmethod(fmt_instr_count)
@@ -64,10 +62,10 @@ class Debugger(
     _ip_bits = staticmethod(ip_bits)
     _trap_cause_name = staticmethod(trap_cause_name)
     _tlb_page_size = staticmethod(TlbCacheOps._tlb_page_size)
-    _colorize_asm = staticmethod(MemoryOps._colorize_asm)
-    _ctrl_flow_kind = staticmethod(MemoryOps._ctrl_flow_kind)
+    _colorize_asm = staticmethod(disasm_view.colorize_asm)
+    _ctrl_flow_kind = staticmethod(disasm_view.ctrl_flow_kind)
     _ctrl_flow_kind_compressed = staticmethod(
-        MemoryOps._ctrl_flow_kind_compressed
+        disasm_view.ctrl_flow_kind_compressed
     )
     _resolve_symbol = staticmethod(SymLookupOps._resolve_symbol)
 

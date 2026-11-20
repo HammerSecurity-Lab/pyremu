@@ -125,12 +125,6 @@ def demo_pathological(emu: Emulator, fw) -> None:
     out = uart.tx_data().decode("latin-1", errors="replace")
     print(f"\n  UART 输出: {out!r}")
 
-    # 验证 S 模式监督
-    if "StorePageFault" in out or "scause=15" in out:
-        print("  S 模式正确捕获了 StorePageFault (scause=15) ✓")
-    if "Process terminated" in out:
-        print("  病态进程被 S 模式终止 ✓")
-
 
 def main() -> None:
     # ---- Well-behaved demo ----

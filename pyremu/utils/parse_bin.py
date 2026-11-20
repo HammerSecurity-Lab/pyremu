@@ -4,7 +4,7 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
 """
-跨平台固件解析器 — 从 ELF / PE / 二进制固件中提取机器码。
+跨平台二进制解析器 — 从 ELF / PE / 二进制固件中提取机器码。
 
 支持格式:
 - ELF (Linux 可执行文件, RISC-V firmware)

@@ -2,13 +2,13 @@
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 """16 位压缩指令的 C0 / C1 / C2 三个象限.
 
-CompressedInstrOps 由 decoder/hart.py 的 Hart 组合, 方法以 hart 自身为接收者.
-对外入口为 exec_compressed, 由它解码一条压缩指令的全部字段并把字段对象向下传递,
-各象限按 funct3 查表分发.
+CompressedInstrOps 由 ``pyremu.emu.hart`` 的 Hart 组合, 方法以 hart 自身为
+接收者. 对外入口为 exec_compressed, 由它解码一条压缩指令的全部字段并把字段对象
+向下传递, 各象限按 funct3 查表分发.
 """
 
-from pyremu.core.trap_def import TrapType
-from pyremu.generic_ops import decode_compressed
+from pyremu.decoder.compressed_imm import imm_q1_shamt
+from pyremu.generic_ops.decode import decode_compressed
 from pyremu.utils.mask import mask32, mask64, sext, sext32, sint64
 
 # C1 ALU 的寄存器运算, 索引为 bits[6:5]
@@ -18,11 +18,6 @@ _C1_ALU_REGS = {
     0b10: lambda a, b: a | b,  # C.OR
     0b11: lambda a, b: a & b,  # C.AND
 }
-
-
-def _c1_shamt(cf) -> int:
-    """C.SRLI/C.SRAI/C.ANDI 的 6 位立即数, 由 bit12 与 bits[6:2] 组成."""
-    return (cf.bit12 << 5) | (cf.rs2 & 0x1F)
 
 
 class CompressedInstrOps:
@@ -35,7 +30,7 @@ class CompressedInstrOps:
     def _c0_addi4spn(self, cf, instr: int) -> int:
         """C.ADDI4SPN: rd' = sp + nzuimm, nzuimm 为 0 属保留编码."""
         if cf.imm == 0:
-            self.deliver_trap(TrapType.IllInstr, tval=instr, is_interrupt=False)
+            self.trap_ill_instr(instr)
             return 0
         self.gprs[cf.rd] = mask64(self.gprs[2] + cf.imm)
         return 2
@@ -116,10 +111,6 @@ class CompressedInstrOps:
         0b111: "_c0_sd",
     }
 
-    # ---------------------------------------------------------------
-    #  C1 象限
-    #  ---------------------------------------------------------------
-
     def _c1_addi(self, cf) -> int:
         """C.ADDI: rd += imm."""
         self.gprs[cf.rd] = mask64(self.gprs[cf.rd] + cf.imm)
@@ -177,10 +168,6 @@ class CompressedInstrOps:
         0b110: "_c1_beqz",
         0b111: "_c1_bnez",
     }
-
-    # ---------------------------------------------------------------
-    #  C2 象限
-    #  ---------------------------------------------------------------
 
     def _sp_addr(self, uimm: int) -> int:
         """栈指针相对的访存地址."""
@@ -294,10 +281,6 @@ class CompressedInstrOps:
         0b111: "_c2_sdsp",
     }
 
-    # ---------------------------------------------------------------
-    #  象限分发与 C1 ALU 运算
-    #  ---------------------------------------------------------------
-
     def exec_compressed(self, instr: int) -> int:
         """执行一条 16-bit 压缩指令, 按低 2 位分派到对应象限的处理函数.
 
@@ -352,12 +335,13 @@ class CompressedInstrOps:
         sf = cf.sf
         rd_rs1 = cf.rs1p  # creg-mapped from bits[9:7]
         v1 = self.gprs[rd_rs1]
+        shamt = imm_q1_shamt(cf.bit12, cf.rs2)
         if sf == 0b00:
-            self.gprs[rd_rs1] = mask64(mask64(v1) >> _c1_shamt(cf))
+            self.gprs[rd_rs1] = mask64(mask64(v1) >> shamt)
         elif sf == 0b01:
-            self.gprs[rd_rs1] = mask64(sint64(v1) >> _c1_shamt(cf))
+            self.gprs[rd_rs1] = mask64(sint64(v1) >> shamt)
         elif sf == 0b10:
-            self.gprs[rd_rs1] = mask64(v1 & sext(_c1_shamt(cf), 6))
+            self.gprs[rd_rs1] = mask64(v1 & sext(shamt, 6))
         elif sf == 0b11:
             self._c1_alu_register(cf, v1)
         else:

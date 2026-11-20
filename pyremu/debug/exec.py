@@ -30,13 +30,14 @@ from pyremu.core.hart import RiscvMode
 from pyremu.core.trap_def import TrapType
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import HartSnapshot, ImageKind, MemWriteTracker
-from pyremu.debug.utils import hex_addr, read_va_bytes
+from pyremu.debug.utils import read_va_bytes
 from pyremu.emulator import Emulator, RunStopReason, TimeoutError
 from pyremu.env_inject import Preloader
 from pyremu.generic_ops import decode_fields
 from pyremu.peripheral.power_ctrl import PowerRequest
 from pyremu.utils.mask import mask64
 from pyremu.utils.parse_bin import FirmwareImage
+from pyremu.utils.str_aux import hex_addr
 
 
 class ExecutionOps(SharedAttrs):
@@ -72,10 +73,6 @@ class ExecutionOps(SharedAttrs):
     _last_command: str | None
     _bins_images: dict[ImageKind, LoadedImage]
 
-    # ----------------------------------------------------------
-    #  快照 & 回滚
-    # ----------------------------------------------------------
-
     def _save_snapshot(self) -> HartSnapshot:
         h = self.hart
         return HartSnapshot(
@@ -108,10 +105,6 @@ class ExecutionOps(SharedAttrs):
             h.set_reservation(snap.reservation_addr)
         else:
             h.clear_reservation()
-
-    # ----------------------------------------------------------
-    #  单步执行
-    # ----------------------------------------------------------
 
     def step_one(self) -> None:
         """执行一条指令并保存快照 (供后续回滚)."""
@@ -188,10 +181,6 @@ class ExecutionOps(SharedAttrs):
                 )
                 return
 
-    # ----------------------------------------------------------
-    #  回滚
-    # ----------------------------------------------------------
-
     def rollback(self) -> None:
         """回滚最近一条指令的影响."""
         if self._snapshot is None:
@@ -209,10 +198,6 @@ class ExecutionOps(SharedAttrs):
         # 快照恢复的取值一致.
         self.hart._total_instrs = max(0, self.hart._total_instrs - 1)
         self._console.print("[dim]已撤销上一条指令[/]")
-
-    # ----------------------------------------------------------
-    #  运行循环
-    # ----------------------------------------------------------
 
     def _run_loop(
         self,
@@ -321,10 +306,6 @@ class ExecutionOps(SharedAttrs):
         elif all(h._halted for h in self._emu.harts):
             self._warn("所有 Hart 已暂停")
         return False
-
-    # ----------------------------------------------------------
-    #  运行命令
-    # ----------------------------------------------------------
 
     @staticmethod
     def _power_request_message(request: PowerRequest) -> str:
@@ -496,10 +477,6 @@ class ExecutionOps(SharedAttrs):
             f"PC = [yellow]{emu.harts[0].pc:#018x}[/][/]"
         )
 
-    # ----------------------------------------------------------
-    #  写监控
-    # ----------------------------------------------------------
-
     def cmd_watch(self, addr_str: str = "", size_str: str = "8") -> None:
         """设置写监控: watch <addr> [size] — 关闭: watch off."""
         if not addr_str or addr_str in ("off", "none", "clear"):
@@ -516,10 +493,6 @@ class ExecutionOps(SharedAttrs):
         self._console.print(
             f"  [green]* 内存写监控[/] {hex_addr(addr)}-{hex_addr(addr + size)}"
         )
-
-    # ----------------------------------------------------------
-    #  多 hart 断点检查 (供 _run_loop 调用)
-    # ----------------------------------------------------------
 
     def _check_single_bp(self, h, bp) -> bool | None:
         """检查单个断点是否命中, 处理去重与报告.

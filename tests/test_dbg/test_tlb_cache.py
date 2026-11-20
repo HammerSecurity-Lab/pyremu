@@ -321,7 +321,7 @@ def _make_l2_dbg(
         size=num_sets * ways * line_size, line_size=line_size, ways=ways
     )
     emu.bus._l2 = l2
-    l2.set_ram_backend(emu.bus._ram_read_direct, emu.bus._ram_write_direct)
+    l2.set_ram_backend(emu.bus.read_ram_direct, emu.bus._ram_write_direct)
     return dbg
 
 

@@ -12,7 +12,7 @@ NaN-boxing、fcsr 累积与 mstatus.FS 门控。
 
 import pytest
 
-from pyremu.core.decoder import Hart
+from pyremu.emu.hart import Hart
 
 # 单/双精度位模式常量
 BOX = 0xFFFF_FFFF_0000_0000  # NaN-boxing 掩码

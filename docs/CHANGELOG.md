@@ -6,7 +6,7 @@
 
 | 月份 | 条目数 | 文件 |
 |------|--------|------|
-| 2026-11 | 7 | [changelogs/2026-11.md](changelogs/2026-11.md) |
+| 2026-11 | 8 | [changelogs/2026-11.md](changelogs/2026-11.md) |
 | 2026-10 | 2 | [changelogs/2026-10.md](changelogs/2026-10.md) |
 | 2026-09 | 24 | [changelogs/2026-09.md](changelogs/2026-09.md) |
 | 2026-08 | 6 | [changelogs/2026-08.md](changelogs/2026-08.md) |

@@ -33,7 +33,7 @@ unsafe extern "C" {
 	static _instr_class_end: u8;
 }
 
-core::arch::global_asm!(include_str!("entry.s"));
+core::arch::global_asm!(include_str!("entry.S"));
 
 /// 阶段一返回给 entry.s 的启动信息。`repr(C)` 确保与汇编的
 /// 寄存器约定一致: satp 映射到 a0, smode_sp 映射到 a1, va_offset 映射到 a2。
@@ -77,7 +77,9 @@ pub unsafe extern "C" fn main_before_mmu(
 	}
 
 	// 授予的区间以 2 MiB 分区为单位划分类别, 故镜像必须落在整数个分区内
-	if let Err(msg) = mem::check_img_layout(base_pa, instr_class_end, end_pa, partition_num) {
+	if let Err(msg) =
+		mem::check_img_layout(base_pa, instr_class_end, end_pa, partition_num)
+	{
 		hang::fault_halt_boot(
 			enclave_id,
 			base_pa,
@@ -284,7 +286,12 @@ unsafe fn push_u64(sp: &mut u64, val: u64) {
 /// auxv 必须完整给出程序头表的三项 (AT_PHDR / AT_PHENT / AT_PHNUM): musl 静态
 /// 链接版的 dl_iterate_phdr 以此为唯一数据源, libunwind 经它定位 .eh_frame_hdr
 /// 才能取到展开表。缺失时 C++ 异常一律退化为 std::terminate
-fn setup_musl_stack(sp_top: u64, argv_pa: u64, argc: u64, payload: &elf::PayloadInfo) -> u64 {
+fn setup_musl_stack(
+	sp_top: u64,
+	argv_pa: u64,
+	argc: u64,
+	payload: &elf::PayloadInfo,
+) -> u64 {
 	let mut sp = sp_top;
 
 	/*

@@ -11,7 +11,7 @@
 Bus 管理:
 - 物理 RAM, 以 bytearray 存储, 默认基址 0x8000_0000, 采用 RISC-V 标准内存映射
 - 共享 L2 缓存, 可选, 继承 CacheBase
-- 内存映射设备, 例如 CLINT, 未来的 IMSIC/APLIC/UART 等
+- 内存映射设备, 例如 CLINT, IMSIC/APLIC/UART 等
 
 RAM 与其访问路径由两个独立的类承担, Bus 只保留设备表与地址路由:
 
@@ -33,17 +33,12 @@ PMA (Physical Memory Attributes):
 """
 
 from abc import ABC, abstractmethod
-import ctypes
 from functools import partialmethod
 import sys
 
-from pyremu import generic_ops
 from pyremu.configs_gen import PYREMU_NO_L2
-
-# Module-level cache for native pointers to bytearray buffers.
-# Stored here (not on Bus instances) so that deepcopy() never
-# touches ctypes from_buffer() objects, which segfault the GC.
-_ram_native_ptrs: dict[int, int] = {}  # id(bytearray) -> raw pointer
+from pyremu.generic_ops.engine import TlbFlushCounter
+from pyremu.generic_ops.mem import RamView
 
 NO_L2 = PYREMU_NO_L2 == 1
 
@@ -51,7 +46,7 @@ NO_L2 = PYREMU_NO_L2 == 1
 class Device(ABC):
     """内存映射设备基类.
 
-    子类: CLINT, (未来) IMSIC, UART, PLIC 等.
+    子类: CLINT, IMSIC, UART, PLIC 等.
 
     设备地址范围 [base_addr, base_addr + size) 内的所有读写都直通设备,
     不经过任何缓存.
@@ -153,8 +148,8 @@ class DirectRam:
     """RAM 缓冲区及其内存范围, 提供绕过 L2 缓存的读写.
 
     L2 缓存以本对象的方法作为 RAM 后端, Bus 以本对象的方法作为与设备无关的直接
-    访问入口. 本对象只持有 bytearray 与内存范围, 不持有 Bus 与任何设备, 故上述
-    两处持有本对象的方法时不会与 Bus 之间形成环形引用.
+    访问入口. 本对象只持有 bytearray、内存范围与加速执行引擎一侧的视图, 不持有
+    Bus 与任何设备, 故上述两处持有本对象的方法时不会与 Bus 之间形成环形引用.
     """
 
     def __init__(
@@ -165,11 +160,16 @@ class DirectRam:
         try:
             self._ram = bytearray(ram_size)
         except MemoryError:
-            print("check ulimit in current shell environment.")
+            print("OOM. Check hardware limit or ulimit in current environment.")
             sys.exit(1)
         self._ram_base = ram_base
         self._ram_end = ram_base + ram_size
         self._ram_size = ram_size
+        self._ram_view = RamView(
+            self._ram,
+            ram_size,
+            ram_base,
+        )
 
         # PIE 装载偏移 — 固件按链接地址给出的取值落在 [pie_ofs_base,
         # pie_ofs_base + pie_ofs_size) 内的部分, 经 _pie_ofs_to_ram 换算为
@@ -179,32 +179,15 @@ class DirectRam:
         self._pie_ofs_base: int = 0
         self._pie_ofs_size: int = 0
 
-        self._ram_native_ptr: int = 0
-        self._read_out_ptr: int = 0
-        # 直读RAM, 供 bus_read_ram / bus_write_ram 一次性传入
-        self._ram_win: tuple[int, int, int, int, int] = (
-            0,
-            self._ram_size,
-            self._ram_base,
-            0,
-            0,
-        )
-        self._use_native: bool = generic_ops.native_available()
-        if self._use_native:
-            # 两处地址用 ctypes.addressof 取得;
-            # 取地址不用 ctypes.cast, 后者会与所转换的对象构成引用环.
-            self._ram_native_ptr = ctypes.addressof(
-                ctypes.c_uint8.from_buffer(self._ram)
-            )
-            self._read_out = ctypes.c_uint64(0)
-            self._read_out_ptr = ctypes.addressof(self._read_out)
-            self._ram_win = (
-                self._ram_native_ptr,
-                self._ram_size,
-                self._ram_base,
-                0,
-                0,
-            )
+    @property
+    def ram_buffer(self) -> bytearray:
+        """RAM 缓冲区; 批量加载与调试器按同一缓冲区直接读写."""
+        return self._ram
+
+    @property
+    def native_ptr(self) -> int:
+        """RAM 缓冲区首地址; 未装载动态链接库时为 0."""
+        return self._ram_view.native_ptr
 
     def apply_pie_ofs(self, link_base: int, link_size: int) -> None:
         """登记 PIE 固件的链接地址区间 [link_base, link_base + link_size).
@@ -217,13 +200,7 @@ class DirectRam:
         """
         self._pie_ofs_base = link_base
         self._pie_ofs_size = link_size
-        self._ram_win = (
-            self._ram_native_ptr,
-            self._ram_size,
-            self._ram_base,
-            link_base,
-            link_size,
-        )
+        self._ram_view.set_pie_ofs(link_base, link_size)
 
     def _pie_ofs_to_ram(self, addr: int, size: int) -> int | None:
         """把落在 PIE 链接地址区间内的 [addr, addr + size) 换算为 RAM 偏移.
@@ -277,19 +254,9 @@ class DirectRam:
         if off is None:
             return b"\x00" * size
 
-        # Rust native fast path: only for regular access sizes (1/2/4/8).
-        # L2 cache line fills (64 B) would overflow the 8-byte read-out buffer.
-        if (
-            self._ram_native_ptr
-            and size in (1, 2, 4, 8)
-            and generic_ops.mem.bus_read_ram(
-                self._ram_win,
-                addr,
-                size,
-                self._read_out_ptr,
-            )
-        ):
-            return ctypes.string_at(self._read_out_ptr, size)
+        data = self._ram_view.read(addr, size)
+        if data is not None:
+            return data
 
         return bytes(self._ram[off : off + size])
 
@@ -299,23 +266,11 @@ class DirectRam:
         *addr* 超出 RAM 范围时静默丢弃 (由上层 PMA 检查保证不会发生).
         """
         data_len = len(data)
-        # 越界地址不进入 Rust 快路径, 理由同 read
         ofs = self._ram_offset(addr, data_len)
         if ofs is None:
             return
 
-        # Rust native fast path: only for regular access sizes (1/2/4/8).
-        # L2 cache line fills produce larger writes via the Python path.
-        if (
-            self._ram_native_ptr
-            and data_len in (1, 2, 4, 8)
-            and generic_ops.mem.bus_write_ram(
-                self._ram_win,
-                addr,
-                data,
-                data_len,
-            )
-        ):
+        if self._ram_view.write(addr, data):
             return
 
         self._ram[ofs : ofs + data_len] = data
@@ -410,7 +365,7 @@ class Bus:
         self._ram_direct = DirectRam(ram_size=ram_size, ram_base=ram_base)
         # RAM 缓冲区别名 — 调试器、批量加载与加速执行引擎按同一 bytearray
         # 直接读写
-        self._ram = self._ram_direct._ram
+        self._ram = self._ram_direct.ram_buffer
         self._l2 = l2_cache
         self._mem = MainMem(self._ram_direct, l2_cache)
         self._devices: dict[int, Device] = {}  # base_addr -> device
@@ -419,7 +374,7 @@ class Bus:
         # 动作的一方经 note_tlb_flush 加一. 加速执行引擎在两次调用之间保留该
         # 取值, 故引擎之外发生的刷新对引擎内既有的条目同样生效; 反过来,
         # 引擎内发生的刷新经每轮结束时的写回使 Python 侧的两个 TLB 作废.
-        self.tlb_flush_cnt = ctypes.c_uint64(0)
+        self.tlb_flush_cnt = TlbFlushCounter()
 
         # 设备查找缓存 — 按基址排序的 (base, end, device) 列表, 用于二分查找.
         # add_device 后置 None, 首次 _find_device 时重建.
@@ -430,8 +385,8 @@ class Bus:
         self._boot_rom: BootRom | None = None
 
         # 存放映像的存储区间 — 每项为 (名称, 起址, 字节数). 主存在构造时登记,
-        # 引导只读存储器由 add_boot_rom 登记; 其余存储器 (例如静态随机存取存储器
-        # 与闪存) 注册时按同一形式登记. 调试器按这些区间判定符号文件能否部署到
+        # 引导只读存储器由 add_boot_rom 登记; 其余存储器，例如静态随机存取存储器
+        # 与闪存，注册时按同一形式登记. 调试器按这些区间判定符号文件能否部署到
         # 给定的物理地址.
         self._storage_intervals: list[tuple[str, int, int]] = [
             ("主存", ram_base, ram_size),
@@ -440,8 +395,8 @@ class Bus:
         # 若 L2 缓存存在, 注入 RAM 后端回调. L2 缓存只缓存 RAM, 不缓存设备.
         # 后端取 DirectRam 的方法而不取 Bus 的: Bus 持有 L2 缓存并按主存访问路径
         # 调用它, 后端再持有 Bus 的方法会使二者之间形成环形引用.
-        # 判定用 None 比较: CacheBase 定义了 __len__ (返回有效条目数), 空缓存的
-        # 真值为假, 用真值判定会使后端回调在本处被跳过.
+        # 判定用 None 比较: CacheBase 定义了 __len__, 空缓存的真值为假,
+        # 用真值判定会使后端回调在本处被跳过.
         if self._l2 is not None:
             self._l2.set_ram_backend(
                 read_fn=self._ram_direct.read,
@@ -454,7 +409,7 @@ class Bus:
         取自增不减的计数而不是一个"已失效"标志: 标志上的清除与置位并发时, 清除
         可能覆盖紧随其后的置位, 使某个 hart 漏掉一次失效.
         """
-        self.tlb_flush_cnt.value += 1
+        self.tlb_flush_cnt.note()
 
     # ----------------------------------------------------------
     #  设备管理
@@ -523,10 +478,6 @@ class Bus:
             if addr < end:
                 return dev, addr - base
         return None, 0
-
-    # ----------------------------------------------------------
-    #  PMA 检查
-    # ----------------------------------------------------------
 
     def apply_pie_ofs(self, link_base: int, link_size: int) -> None:
         """登记 PIE 固件的链接地址区间; 见 DirectRam.apply_pie_ofs."""
@@ -607,6 +558,16 @@ class Bus:
         )
 
     @property
+    def ram_buffer(self) -> bytearray:
+        """RAM 缓冲区; 批量加载与加速执行引擎按同一缓冲区直接读写."""
+        return self._ram
+
+    @property
+    def ram_native_ptr(self) -> int:
+        """RAM 缓冲区首地址; 未装载动态链接库时为 0."""
+        return self._ram_direct.native_ptr
+
+    @property
     def ram_base(self) -> int:
         return self._ram_direct._ram_base
 
@@ -637,12 +598,12 @@ class Bus:
         """返回已注册的引导只读存储器; 未注册时为 None."""
         return self._boot_rom
 
-    # ----------------------------------------------------------
-    #  RAM 直接访问, 绕过 L2 缓存, 供 L2 回退和调试使用
-    # ----------------------------------------------------------
+    def read_ram_direct(self, addr: int, size: int) -> bytes:
+        """直接从 RAM 读取 (绕过 L2 缓存与设备 MMIO).
 
-    def _ram_read_direct(self, addr: int, size: int) -> bytes:
-        """直接从 RAM 读取 (绕过 L2 缓存)."""
+        地址落在 PIE 链接地址区间内时按同一段字节读取; 超出 RAM 范围返回
+        *size* 个零字节.
+        """
         return self._ram_direct.read(addr, size)
 
     def _ram_write_direct(self, addr: int, data: bytes) -> None:
@@ -684,10 +645,6 @@ class Bus:
         """
         return self._l2.invalidate_all() if self._l2 is not None else 0
 
-    # ----------------------------------------------------------
-    #  总线读写 (外部接口 — Hart 的 mem_read_phy / mem_write_phy 使用)
-    # ----------------------------------------------------------
-
     def read(self, addr: int, size: int) -> bytes:
         """总线读: 设备 MMIO 直通优先, 其余地址交给主存访问路径."""
         dev, offset = self._find_device(addr)
@@ -709,7 +666,7 @@ class Bus:
         """安全读取物理内存 — 读取不产生异常.
 
         本函数与 read() 是同一入口, 自身不捕获异常.
-        未落入任何设备与 RAM 的地址由 _ram_read_direct
+        未落入任何设备与 RAM 的地址由 read_ram_direct
         返回 size 个零字节;
         设备读实现抛出的异常沿 read() 向上传播.
         适用于调试器、内存 dump 等尽力而为的场景.
@@ -741,10 +698,6 @@ class Bus:
         except Exception:
             return False
         return True
-
-    # ----------------------------------------------------------
-    #  属性
-    # ----------------------------------------------------------
 
     @property
     def l2(self):

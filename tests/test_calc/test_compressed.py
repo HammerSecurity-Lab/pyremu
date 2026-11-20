@@ -7,7 +7,7 @@
 
 import pytest
 
-from pyremu.core.decoder import Hart
+from pyremu.emu.hart import Hart
 from tests.conftest import make_test_ram
 
 

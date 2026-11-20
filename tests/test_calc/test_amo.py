@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.disasm import AmoFunct5, AmoWidth
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.utils.mask import mask64
 from tests.conftest import make_test_ram

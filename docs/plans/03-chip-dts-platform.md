@@ -67,7 +67,7 @@
 | pyremu/peripheral/termio.py | 归档路径按整行提交 |
 | pyremu/_native/cpu/src/peripheral/uart.rs | 直写路径改经行缓冲 |
 | pyremu/peripheral/boot_addr.py | 新增启动地址寄存器 |
-| pyremu/platform.py | 新增字段与窗口不重叠断言 |
+| pyremu/platform/ | 新增字段与窗口不重叠断言 |
 | pyremu/emu/setup.py | 注册启动地址寄存器 |
 | pyremu/utils/dev_tree/ | 新增 DTB 读取 |
 | pyremu/debug/cli.py | `--chip-dts`、互斥组、取值优先级 |

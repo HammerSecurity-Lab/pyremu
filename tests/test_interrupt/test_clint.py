@@ -7,11 +7,11 @@
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
 from pyremu.core.priv_defs import (
     MSTATUS_MIE,
 )
+from pyremu.emu.hart import Hart
 from pyremu.interrupt.clint import (
     CLINT,
     CLINT_BASE,

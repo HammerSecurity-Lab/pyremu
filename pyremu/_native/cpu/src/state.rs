@@ -103,13 +103,7 @@ impl ImsicFile {
 	}
 }
 
-//  扩展开关
-
 /// 本 hart 声明的扩展开关, 每项一个布尔字段.
-///
-/// 由 Python 侧按平台 ISA 字符串编组, 引擎只读. 字段名与顺序必须与
-/// ``pyremu._native._ctypes.IsaExtsC`` 及 ``pyremu.utils.isa.ISA_EXT_FIELDS``
-/// 一致.
 #[repr(C)]
 pub struct IsaExts {
 	pub is_i: bool,

@@ -15,7 +15,7 @@ import importlib
 
 import pytest
 
-from pyremu.core.hart_ffi import EXIT_ECALL, EXIT_MMIO, EXIT_WFI_WAIT
+from pyremu.generic_ops.hart_ffi import EXIT_ECALL, EXIT_MMIO, EXIT_WFI_WAIT
 from pyremu.stat import recording
 from pyremu.stat.batch import (
     BatchStats,

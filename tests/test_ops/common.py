@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from pyremu import generic_ops
-from pyremu.core.decoder import Hart
+from pyremu.emu.hart import Hart
 from pyremu.utils.mask import mask64, sext12
 
 OP_ALU = 0b0110011

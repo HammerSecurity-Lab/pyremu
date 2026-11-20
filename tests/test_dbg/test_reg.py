@@ -10,6 +10,7 @@ import pytest
 from rich.console import Console
 
 from pyremu.core.registers import csr_bank, gpr_alias
+from pyremu.debug.addr import AddrOps
 from pyremu.debug.reg import RegisterOps
 from pyremu.debugger import (
     Debugger,
@@ -27,7 +28,7 @@ from tests.conftest import (
 # ============================================================
 
 
-class _TestRegDbg(DbgTestBase, RegisterOps):
+class _TestRegDbg(DbgTestBase, AddrOps, RegisterOps):
     """最小聚合类供 RegisterOps 命令测试."""
 
 

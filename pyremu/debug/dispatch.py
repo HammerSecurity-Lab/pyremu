@@ -14,7 +14,7 @@ from rich.table import Table
 
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.exception import UsageError
-from pyremu.debug.utils import fmt_size
+from pyremu.utils.str_aux import fmt_size
 from pyremu.utils.tick import fmt_now_ms
 
 CSR_USAGE = (
@@ -81,8 +81,6 @@ class DispatchOps(SharedAttrs):
             return cmds[threshold]
         return default_ans
 
-    # 命令名到处理函数的映射. 调用时传入调试器对象与切分后的参数,
-    # 返回的布尔值不使用; 参数个数不足时 _require_args 报告用法, 命令不执行.
     _DISPATCH_HANDLERS: dict[
         str, Callable[[DispatchOps, list[str]], object]
     ] = {
@@ -244,10 +242,6 @@ class DispatchOps(SharedAttrs):
             return True
         self._warn(usage)
         return False
-
-    # ----------------------------------------------------------
-    #  REPL 主循环
-    # ----------------------------------------------------------
 
     def repl(self) -> None:
         """主交互循环."""
@@ -425,7 +419,7 @@ class DispatchOps(SharedAttrs):
                     ("sym ls", "列出候选目录中的普通文件"),
                     (
                         "sym load <#n|文件名> [pa:<addr>|va:<addr>]",
-                        "加载符号文件并校验内容",
+                        "按自然数序号或符号文件名载入符号到指定地址并尝试检验",
                     ),
                     (
                         "sym detail [地址|pc|符号名]",
@@ -438,17 +432,12 @@ class DispatchOps(SharedAttrs):
                 ],
             ),
             self._section(
-                "设备与地址",
+                "设备与映像",
                 [
                     (
                         "devices/dev",
                         "列出主存、存储区间与全部虚拟设备的总线区间",
                     ),
-                ],
-            ),
-            self._section(
-                "映像与磁盘",
-                [
                     ("bins-info", "列出命令行传入的映像及其物理地址范围"),
                     ("disk-info [<映像路径>]", "显示磁盘映像的格式摘要与布局"),
                 ],
@@ -457,11 +446,11 @@ class DispatchOps(SharedAttrs):
                 "状态",
                 [
                     ("status/info [hart]", "全部 hart 概览, 或指定 hart 详情"),
-                    ("stack/bt", "栈帧情况"),
+                    ("stack/bt", "当前hart的栈帧情况"),
                     ("frame/f <N>", "切换到第 N 帧"),
                 ],
             ),
-            self._section("配置", [("hart <id>", "切换活跃 hart")]),
+            self._section("配置", [("hart <id>", "切换 hart")]),
             self._section(
                 "其他",
                 [

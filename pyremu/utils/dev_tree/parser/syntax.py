@@ -839,13 +839,13 @@ class DT(LexerOps):
     def _eval_or(self):
         val = self._eval_and()
         while self._check_token("||"):
-            val = 1 if self._eval_and() or val else 0
+            val = int(self._eval_and() or val)
         return val
 
     def _eval_and(self):
         val = self._eval_bitor()
         while self._check_token("&&"):
-            val = 1 if self._eval_bitor() and val else 0
+            val = int(self._eval_bitor() and val)
         return val
 
     def _eval_bitor(self):
@@ -870,9 +870,9 @@ class DT(LexerOps):
         val = self._eval_rela()
         while True:
             if self._check_token("=="):
-                val = 1 if val == self._eval_rela() else 0
+                val = int(val == self._eval_rela())
             elif self._check_token("!="):
-                val = 1 if val != self._eval_rela() else 0
+                val = int(val != self._eval_rela())
             else:
                 return val
 
@@ -880,13 +880,13 @@ class DT(LexerOps):
         val = self._eval_shift()
         while True:
             if self._check_token("<"):
-                val = 1 if val < self._eval_shift() else 0
+                val = int(val < self._eval_shift())
             elif self._check_token(">"):
-                val = 1 if val > self._eval_shift() else 0
+                val = int(val > self._eval_shift())
             elif self._check_token("<="):
-                val = 1 if val <= self._eval_shift() else 0
+                val = int(val <= self._eval_shift())
             elif self._check_token(">="):
-                val = 1 if val >= self._eval_shift() else 0
+                val = int(val >= self._eval_shift())
             else:
                 return val
 

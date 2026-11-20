@@ -316,7 +316,7 @@ class TlbCacheOps(SharedAttrs):
                 continue
             valid_count += 1
             mesi_counts[e.mesi.name] += 1
-            dirty_count += 1 if e.dirty else 0
+            dirty_count += int(e.dirty) & 1
 
         header = (
             f"[bold]L2 Cache[/]: {valid_count}/{len(entries)} valid, "

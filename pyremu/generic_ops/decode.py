@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from pyremu._native import CompressedFields, DecodedFields, loaded_lib
-from pyremu.core.decoder import compressed_imm
+from pyremu.decoder import compressed_imm
 from pyremu.utils.mask import (
     creg,
     mask08,
@@ -33,7 +33,7 @@ def _decode_fields_py(instr: int) -> DecodedFields:
     f.rs2 = (instr >> 20) & 0x1F
     f.func7 = (instr >> 25) & 0x7F
     f.func12 = mask12(instr >> 20)
-    f.is_compressed = 1 if (instr & 0x3) != 3 else 0
+    f.is_compressed = int((instr & 0x3) != 3)
     # F/D: rs3 = bits[31:27], fmt = bits[26:25]
     f.rs3 = (instr >> 27) & 0x1F
     f.fmt = (instr >> 25) & 0x3

@@ -6,17 +6,16 @@
 """PMP (Physical Memory Protection) 测试: 地址匹配、权限控制、CSR 范围."""
 
 import ctypes
-from unittest import mock
 
 import pytest
 
 from pyremu import configs_gen
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
     MemoryAccessError,
 )
 from pyremu.core.registers import CSR, CsrAccess, register_csr
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.memory.pmp import (
@@ -68,11 +67,6 @@ class TestPmpCheck:
     @pytest.fixture(params=["native", "pure_python"])
     def pmp(self, request) -> Pmp:
         """返回一个空的 Pmp (0 条目), 覆盖加速库与纯 Python 两条检查路径."""
-        if request.param == "pure_python":
-            with mock.patch(
-                "pyremu.memory.pmp.native_available", return_value=False
-            ):
-                return Pmp({}, num_entries=0)
         return Pmp({}, num_entries=0)
 
     def _set_csrs(self, pmp: Pmp, entries: list[tuple[int, int]]):

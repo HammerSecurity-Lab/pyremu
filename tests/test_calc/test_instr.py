@@ -6,8 +6,8 @@
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.utils.mask import mask64

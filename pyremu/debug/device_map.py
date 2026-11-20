@@ -8,7 +8,7 @@
 from rich.table import Table
 
 from pyremu.debug.attrs import SharedAttrs
-from pyremu.debug.utils import fmt_size, hex_addr
+from pyremu.utils.str_aux import fmt_size, hex_addr
 
 
 class DeviceMapOps(SharedAttrs):
@@ -19,6 +19,7 @@ class DeviceMapOps(SharedAttrs):
 
         区间按基址升序排列; 基址取 0 而未注册的设备不出现. 设备持有公开的
         ``irq`` 属性时在中断源一列给出其编号, 未持有者写 ``-``.
+        芯片设备树中声明、但本模拟器未提供模型的设备按 ``未支持`` 类别列出.
 
         引导只读存储器同时属于存储区间与设备表, 只按存储区间列出一次.
         """
@@ -40,11 +41,17 @@ class DeviceMapOps(SharedAttrs):
                     str(irq) if irq else "-",
                 )
             )
+        config = getattr(self._emu, "config", None)
+        periph = getattr(config, "periph", None)
+        for path, _compat, base, size in getattr(
+            periph, "unsupported_devices", ()
+        ):
+            rows.append((path, "未支持", base, size, "-"))
         rows.sort(key=lambda row: row[2])
 
         tbl = Table(title="物理地址区间", border_style="blue")
         tbl.add_column("名称", style="cyan")
-        tbl.add_column("类别", style="dim", width=4)
+        tbl.add_column("类别", style="dim", width=6)
         tbl.add_column("基址", style="green")
         tbl.add_column("字节数", justify="right")
         tbl.add_column("上界", style="yellow")

@@ -23,3 +23,4 @@
 | 计划六 | 以 hart 为首个参数的独立函数改为 hart 的方法 | 待确认, [06-hart-methods.md](06-hart-methods.md) |
 | 计划七 | 以 `--chip-dts` 启动时飞地无法运行 | 待复现, [07-chip-dts-enclave.md](07-chip-dts-enclave.md) |
 | 计划八 | H 扩展与两阶段地址翻译 | 待确认, [08-hypervisor-extension.md](08-hypervisor-extension.md) |
+| 计划十 | 多串口支持 | 待确认, [10-multi-uart.md](10-multi-uart.md) |

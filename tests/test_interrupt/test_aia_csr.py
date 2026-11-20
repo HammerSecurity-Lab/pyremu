@@ -18,9 +18,9 @@ from __future__ import annotations
 import pytest
 
 from pyremu.configs_gen import PYREMU_AIA
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
 from pyremu.core.registers import check_csr_access, csr_bank, CsrAccessError
+from pyremu.emu.hart import Hart
 from pyremu.memory.bus import Bus
 from pyremu.utils.mask import mask32
 

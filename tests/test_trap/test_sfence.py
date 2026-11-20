@@ -5,8 +5,8 @@
 
 """SFENCE.VMA 的编码、全部 hart 的 TLB 刷新与地址翻译模式切换."""
 
-from pyremu.core.decoder import Hart
 from pyremu.disasm import Opc
+from pyremu.emu.hart import Hart
 
 
 class TestSfenceVma:

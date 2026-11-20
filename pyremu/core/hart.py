@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 import weakref
 
 from pyremu.configs_gen import ISA, PMP_ENTRIES
-from pyremu.core.hart_ffi import HartFfiOps
 from pyremu.core.mem_check_aux import MemoryAccessOps
 from pyremu.core.priv_defs import (
     MSTATUS_FS,
@@ -224,16 +223,16 @@ class RatifiedHartAttrs:
         )
 
 
-class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
+class HartWithRegs(MemoryAccessOps, TrapOps):
     """硬件线程的寄存器文件。
 
     每个 hart 拥有独立的 GPR、FPR、CSR 以及指令/数据 TLB。
     本类提供寄存器读写方法以及 mstatus/mtvec 等关键 CSR 的
     快捷属性访问。
 
-    与加速执行引擎的状态编组来自 hart_ffi 的 HartFfiOps, 访存与陷态处理
-    分别来自 mem_check_aux 的 MemoryAccessOps 与 trap_handler 的 TrapOps,
-    均以 hart 自身为接收者。
+    访存与陷态处理分别来自 mem_check_aux 的 MemoryAccessOps 与
+    trap_handler 的 TrapOps, 均以 hart 自身为接收者; 与加速执行引擎的状态
+    编组由 ``pyremu.emu.hart`` 组合的 HartFfiOps 提供.
     """
 
     def __init__(
@@ -903,7 +902,7 @@ class HartWithRegs(HartFfiOps, MemoryAccessOps, TrapOps):
 
     @property
     def interrupt_ctrl(self):
-        """中断控制器 (CLINT / 未来 IMSIC 等)."""
+        """中断控制器 CLINT / 未来 IMSIC 等."""
         return self._interrupt_ctrl
 
     @interrupt_ctrl.setter

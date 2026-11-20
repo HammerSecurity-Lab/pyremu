@@ -4,7 +4,7 @@
 
 op / op_imm / op32 / op_imm32 四类指令各有一张以 funct3 为索引的函数表, 对外只
 暴露 exec_alu / exec_op_imm / exec_op32 / exec_op_imm32 四个入口. 后端选择在
-``pyremu.generic_ops`` 内完成, 本模块只给出纯 Python 的计算.
+本模块只给出纯 Python 的计算.
 """
 
 from pyremu.utils.mask import (
@@ -144,7 +144,7 @@ def _alu_py_001(funct7: int, v1: int, v2: int) -> int:
 def _alu_py_010(funct7: int, v1: int, v2: int) -> int:
     """funct3=010: slt / mulhsu / sh1add."""
     if funct7 == 0:
-        return 1 if sint64(v1) < sint64(v2) else 0
+        return int(sint64(v1) < sint64(v2))
     if funct7 == 1:
         s1 = sint64(v1)
         u2 = mask64(v2)
@@ -157,7 +157,7 @@ def _alu_py_010(funct7: int, v1: int, v2: int) -> int:
 def _alu_py_011(funct7: int, v1: int, v2: int) -> int:
     """funct3=011: sltu / mulhu."""
     if funct7 == 0:
-        return 1 if mask64(v1) < mask64(v2) else 0
+        return int(mask64(v1) < mask64(v2))
     if funct7 == 1:
         u1 = mask64(v1)
         u2 = mask64(v2)
@@ -265,12 +265,12 @@ def _op_imm_py_001(funct6: int, v1: int, imm: int, shamt: int) -> int:
 
 def _op_imm_py_010(funct6: int, v1: int, imm: int, shamt: int) -> int:
     """funct3=010: slti."""
-    return 1 if sint64(v1) < sint64(imm) else 0
+    return int(sint64(v1) < sint64(imm))
 
 
 def _op_imm_py_011(funct6: int, v1: int, imm: int, shamt: int) -> int:
     """funct3=011: sltiu."""
-    return 1 if mask64(v1) < mask64(imm) else 0
+    return int(mask64(v1) < mask64(imm))
 
 
 def _op_imm_py_100(funct6: int, v1: int, imm: int, shamt: int) -> int:

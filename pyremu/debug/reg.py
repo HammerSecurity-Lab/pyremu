@@ -13,34 +13,13 @@ from rich.table import Table
 from pyremu.core.registers import gpr_alias, gpr_name
 from pyremu.core.trap_def import trap_cause_name
 from pyremu.debug.attrs import SharedAttrs
-from pyremu.debug.utils import hex_addr
 from pyremu.utils.mask import mask64
+from pyremu.utils.str_aux import hex_addr
 from pyremu.utils.wrapper import seize_val_err
 
 
 class RegisterOps(SharedAttrs):
     """GPR 和 CSR 读写."""
-
-    # ----------------------------------------------------------
-    #  GPR 查找
-    # ----------------------------------------------------------
-
-    @seize_val_err("无效的gpr索引值")
-    def _find_gpr(self, name: str) -> int | None:
-        """按 xN 或 ABI 名查找 GPR 索引 (0-31)."""
-        if name.startswith("x"):
-            idx = int(name[1:])
-            if 0 <= idx <= 31:
-                return idx
-        # 按 ABI 名查找
-        for i in range(32):
-            if gpr_alias(i).lower() == name.lower():
-                return i
-        return None
-
-    # ----------------------------------------------------------
-    #  GPR 命令
-    # ----------------------------------------------------------
 
     def cmd_regs(self) -> None:
         """显示全部 GPR (两列布局)."""

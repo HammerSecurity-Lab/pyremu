@@ -723,8 +723,6 @@ pub extern "C" fn terminal_io_is_running() -> i32 {
 	}
 }
 
-//  测试
-
 #[cfg(test)]
 mod tests {
 	use super::*;

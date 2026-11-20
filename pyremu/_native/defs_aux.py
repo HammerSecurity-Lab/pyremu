@@ -24,10 +24,10 @@ import re
 import subprocess
 import tempfile
 
-from pyremu.utils.file_ops import abs_dir
+NATIVE_DIR = Path(__file__).resolve().parent
 
-SPEC_PATH = abs_dir(__file__) / "ffi_spec.json"
-DEFS_PATH = abs_dir(__file__) / "defs_gen.py"
+SPEC_PATH = NATIVE_DIR / "ffi_spec.json"
+DEFS_PATH = NATIVE_DIR / "defs_gen.py"
 
 # 库名到 cargo 包名与 crate 根命名空间的映射.
 # crate 根命名空间用于区分本 crate 的结构体与内联进来的 std 类型.
@@ -333,7 +333,7 @@ def collect_library(
                 "-C",
                 "debuginfo=2",
             ],
-            cwd=abs_dir(__file__),
+            cwd=NATIVE_DIR,
             check=True,
         )
         ir_text = ir_path.read_text(encoding="utf-8")

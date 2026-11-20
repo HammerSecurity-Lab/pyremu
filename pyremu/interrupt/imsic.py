@@ -535,7 +535,7 @@ class IMSIC(Device):
             mirror.eip[i] = file.eip[i]
         # 仅外部中断门控位; 软件中断 (IID 1/3) 由 Rust 侧 IPI 快路径覆盖,
         # 不看该标志. 取"任一位非零"这一保守上界即可, 宁多扫不得漏判.
-        mirror.eip_ext_any = 1 if file._any_ext else 0
+        mirror.eip_ext_any = int(file._any_ext)
 
     def reset(self) -> None:
         """恢复上电复位状态: 清空每个 hart 的 M 文件与 S 文件."""

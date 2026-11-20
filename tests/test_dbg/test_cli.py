@@ -19,7 +19,7 @@ from pyremu.interrupt.plic import PLIC_PENDING_BASE
 from pyremu.peripheral.uart import IP_RXWM, REG_IE, UART_IRQ
 from pyremu.peripheral.virtio_mmio import VIRTIO_MMIO_SIZE
 from pyremu.peripheral.watchdog import WATCHDOG_IRQ
-from pyremu.platform import PlatformConfig
+from pyremu.platform import periph_from_chip, PlatformConfig
 from pyremu.utils.isa import isa_ext_list
 from pyremu.utils.parse_bin import FirmwareImage, FirmwareSegment
 from tests.conftest import (
@@ -642,19 +642,91 @@ class TestEnableChipBlockDevice:
 
     def test_free_window_and_irq_are_assigned(self):
         chip = cli.dev_tree.parse_chip_dts_text(CHIP_DTS)
-        periph = cli._periph_from_chip(chip)
+        periph = periph_from_chip(chip)
         assert periph.virtio_blk_base == 0
         cli._enable_chip_block_device(periph, chip, self.PLATFORM)
-        # 树中串口占用中断源 1, 区间占用的最低地址段为 0x1000.
-        assert periph.virtio_blk_base == 0x1000
+        # 树中没有 CLINT 节点, 模拟的 CLINT 占 [0x1000, 0xd000);
+        # 串口占用中断源 1, 块设备取下一段空闲区间与下一个编号.
+        assert periph.virtio_blk_base == 0xD000
         assert periph.virtio_blk_irq == 2
 
     def test_declared_node_is_not_overridden(self):
         chip = cli.dev_tree.parse_chip_dts_text(CHIP_DTS_WITH_BLK)
-        periph = cli._periph_from_chip(chip)
+        periph = periph_from_chip(chip)
         cli._enable_chip_block_device(periph, chip, self.PLATFORM)
         assert periph.virtio_blk_base == 0x1000
         assert periph.virtio_blk_irq == 5
+
+
+class TestUnsupportedChipDevices:
+    """树中声明、但本模拟器未提供模型的设备."""
+
+    def test_unsupported_device_is_recorded(self):
+        tree = CHIP_DTS.replace(
+            "\t\tinterrupt-controller@c000000 {",
+            "\t\tfoo@1c000000 {\n"
+            '\t\t\tcompatible = "vendor,foo";\n'
+            "\t\t\treg = <0x1c000000 0x1000>;\n"
+            "\t\t};\n"
+            "\t\tinterrupt-controller@c000000 {",
+        )
+        chip = cli.dev_tree.parse_chip_dts_text(tree)
+
+        periph = periph_from_chip(chip)
+
+        assert periph.unsupported_devices == (
+            ("/soc/foo@1c000000", "vendor,foo", 0x1C000000, 0x1000),
+        )
+
+
+_NO_PLIC_TREE = """
+{
+	#address-cells = <1>;
+	#size-cells = <1>;
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x20000000>;
+	};
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+		clint@2000000 {
+			compatible = "riscv,clint0";
+			reg = <0x2000000 0x10000>;
+		};
+	};
+};
+"""
+
+
+class TestAiaChipControllers:
+    """AIA 模式不放置 PLIC, 缺失的 CLINT 仍以空闲区间补齐."""
+
+    def test_plic_is_not_placed_in_aia_mode(self):
+        chip = cli.dev_tree.parse_chip_dts_text(_NO_PLIC_TREE)
+
+        periph = periph_from_chip(chip, is_aia=True)
+
+        assert periph.clint_base == 0x2000000
+        assert periph.plic_base == 0
+
+    def test_plic_is_placed_in_legacy_mode(self):
+        chip = cli.dev_tree.parse_chip_dts_text(_NO_PLIC_TREE)
+
+        periph = periph_from_chip(chip, is_aia=False)
+
+        assert periph.clint_base == 0x2000000
+        assert periph.plic_base == 0x1000
+
+    def test_missing_clint_is_placed_in_aia_mode(self):
+        chip = cli.dev_tree.parse_chip_dts_text(CHIP_DTS)
+
+        periph = periph_from_chip(chip, is_aia=True)
+
+        assert periph.clint_base == 0x1000
+        # 树中已声明 PLIC, 其基址照原样保留.
+        assert periph.plic_base == 0xC000000
 
 
 class TestPeriphIrqFromChip:
@@ -663,7 +735,7 @@ class TestPeriphIrqFromChip:
     def test_declared_sources_are_used(self):
         chip = cli.dev_tree.parse_chip_dts_text(CHIP_DTS_WITH_BLK)
 
-        periph = cli._periph_from_chip(chip)
+        periph = periph_from_chip(chip)
 
         assert periph.uart_irq == 1
         assert periph.virtio_blk_irq == 5
@@ -674,7 +746,7 @@ class TestPeriphIrqFromChip:
         tree = CHIP_DTS.replace("\t\t\tinterrupts = <1>;\n", "")
         chip = cli.dev_tree.parse_chip_dts_text(tree)
 
-        periph = cli._periph_from_chip(chip)
+        periph = periph_from_chip(chip)
 
         assert periph.uart_irq == UART_IRQ
 
@@ -685,7 +757,7 @@ class TestUartIrqWiring:
     def test_declared_source_reaches_plic(self):
         chip = cli.dev_tree.parse_chip_dts_text(CHIP_DTS_WITH_CLINT)
         cfg = PlatformConfig(num_harts=1, ram_size=0x40000, ram_base=RAM_BASE)
-        cfg.periph = cli._periph_from_chip(chip)
+        cfg.periph = periph_from_chip(chip)
         emu = Emulator(cfg)
         emu._termio = None
 

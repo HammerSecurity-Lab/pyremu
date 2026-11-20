@@ -16,8 +16,8 @@ from rich.text import Text
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.exception import UsageError
 from pyremu.debug.sym.cmd_files import parse_name_arg
-from pyremu.debug.utils import fmt_display_name, fmt_size
 from pyremu.disk import DiskFormatError, DiskLayout, ext4, probe_image
+from pyremu.utils.str_aux import fmt_display_name, fmt_size
 
 DISK_USAGE = "用法: disk-info [<映像路径>]"
 GROUP_ROWS_LIMIT = 128

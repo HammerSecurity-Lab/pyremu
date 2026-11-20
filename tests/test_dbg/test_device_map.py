@@ -10,9 +10,9 @@ from types import SimpleNamespace
 from rich.console import Console
 
 from pyremu.debug.device_map import DeviceMapOps
-from pyremu.debug.utils import hex_addr
 from pyremu.memory.bus import Bus
 from pyremu.peripheral.virtio_net import VirtIONet
+from pyremu.utils.str_aux import hex_addr
 from tests.conftest import DbgTestBase, make_test_dbg_buffered, make_test_emu
 
 
@@ -29,6 +29,19 @@ def _capture(dbg) -> str:
 
 def _make_dbg(**periph):
     return _TestDeviceDbg(make_test_emu(**periph))
+
+
+class TestUnsupportedDevices:
+    """芯片设备树声明的未支持设备按区间列出."""
+
+    def test_unsupported_declared_device_is_listed(self):
+        emu = make_test_emu()
+        emu.config.periph.unsupported_devices = (
+            ("/foo@1c000000", "vendor,foo", 0x1C000000, 0x1000),
+        )
+        out = _capture(_TestDeviceDbg(emu))
+        assert "未支持" in out
+        assert "/foo@1c000000" in out
 
 
 class TestCmdDevices:

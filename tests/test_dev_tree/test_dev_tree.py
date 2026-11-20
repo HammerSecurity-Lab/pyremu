@@ -19,6 +19,7 @@
 
 import libfdt
 
+from pyremu import configs_gen
 from pyremu.utils import dev_tree
 from pyremu.utils.dev_tree import fdt_node
 
@@ -345,6 +346,19 @@ class TestChipDtsRead:
         chip = dev_tree.parse_chip_dts(path)
 
         assert chip.ram == dev_tree.DtRegion(RAM_BASE, 0x2000_0000)
+
+    def test_missing_memory_takes_build_defaults(self):
+        """树中没有主存与引导只读存储器节点时取 mk/ 生成的默认区间."""
+        text = "{\n\t#address-cells = <1>;\n\t#size-cells = <1>;\n};\n"
+
+        chip = dev_tree.parse_chip_dts_text(text)
+
+        assert chip.ram == dev_tree.DtRegion(
+            configs_gen.RAM_BASE, configs_gen.RAM_SIZE
+        )
+        assert chip.rom == dev_tree.DtRegion(
+            configs_gen.ROM_BASE, configs_gen.ROM_SIZE
+        )
 
     def test_bare_root_after_comment_parses(self):
         text = "/dts-v1/;\n/* 芯片设备树 */\n" + TREE_1_1.lstrip()

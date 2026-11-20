@@ -80,11 +80,6 @@ def ror32(val: int, shamt: int) -> int:
     return mask32((v >> s) | (v << (32 - s))) if s else v
 
 
-# ---------------------------------------------------------------
-#  符号扩展辅助, 由反汇编与执行路径共用
-# ---------------------------------------------------------------
-
-
 def sext(val: int, bits: int) -> int:
     """Sign-extend *val* from *bits* width to a canonical 64-bit unsigned
     Python int.

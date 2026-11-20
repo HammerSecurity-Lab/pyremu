@@ -16,7 +16,7 @@ from pyremu.debug import base
 from pyremu.debug.exception import UsageError
 from pyremu.debug.sym import cmd_files, cmd_modules, registry
 from pyremu.debug.sym.model import SymAvailItem, SymMod
-from pyremu.debug.utils import fmt_display_name
+from pyremu.utils.str_aux import fmt_display_name
 from tests.conftest import make_test_dbg_buffered
 
 RAM_BASE = 0x8000_0000

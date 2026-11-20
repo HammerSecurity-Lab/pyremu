@@ -5,13 +5,13 @@
 import pytest
 
 from pyremu.configs_aux import cfg_bool
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.mem_check_aux import (
     AccessFaultError,
     MemoryAccessError,
 )
 from pyremu.core.trap_def import trap_cause_code, TrapType
+from pyremu.emu.hart import Hart
 from pyremu.memory.bus import Bus
 from pyremu.memory.l2cache import L2CacheLine
 from pyremu.memory.pmp import Pmp, PmpAccessInfo

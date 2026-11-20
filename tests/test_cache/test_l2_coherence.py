@@ -21,7 +21,7 @@ def test_python_write_visible_to_native_read():
     emu.bus.flush_l2()
 
     # Verify via Python direct read (bypasses L2)
-    direct = emu.bus._ram_read_direct(test_pa, 8)
+    direct = emu.bus.read_ram_direct(test_pa, 8)
     assert direct == test_val.to_bytes(8, byteorder="little"), (
         f"Direct read after flush: expected {test_val:#018x},"
         + f"got {int.from_bytes(direct, 'little'):#018x}"
@@ -59,7 +59,7 @@ def test_l2_flush_preserves_full_64bit_pointer():
         emu.bus.invalidate_l2()
 
         # Read back directly from bytearray
-        direct = emu.bus._ram_read_direct(pa, 8)
+        direct = emu.bus.read_ram_direct(pa, 8)
         assert direct == data, (
             f"Ptr {ptr:#018x} corrupted after flush/invalidate: "
             f"expected {data.hex()}, got {direct.hex()}"
@@ -80,13 +80,13 @@ def test_multiple_flush_invalidate_cycles():
         emu.bus.flush_l2()
 
         # Verify direct read
-        direct = emu.bus._ram_read_direct(pa, 8)
+        direct = emu.bus.read_ram_direct(pa, 8)
         assert direct == data, f"Cycle {cycle}: flush corrupted data"
 
         emu.bus.invalidate_l2()
 
         # Verify after invalidate (should still be correct)
-        direct = emu.bus._ram_read_direct(pa, 8)
+        direct = emu.bus.read_ram_direct(pa, 8)
         assert direct == data, f"Cycle {cycle}: invalidate corrupted data"
 
 
@@ -102,5 +102,5 @@ def test_l2_write_straddling_cache_lines():
     emu.bus.write(pa, data)
     emu.bus.flush_l2()
 
-    direct = emu.bus._ram_read_direct(pa, 8)
+    direct = emu.bus.read_ram_direct(pa, 8)
     assert direct == data, f"Cross-line write corrupted: got {direct.hex()}"

@@ -339,19 +339,20 @@ pub(crate) fn hart_worker(
 
 	loop {
 		// ---- 停机与外部信号检查 ----
-		if module.stop_flag.load(Ordering::Acquire) {
-			return;
-		}
-		if !stop_flag.is_null() && (unsafe { *stop_flag != 0 }) {
+		if module.stop_flag.load(Ordering::Acquire)
+			|| (!stop_flag.is_null() && (unsafe { *stop_flag != 0 }))
+		{
 			return;
 		}
 		// mtime 按本 hart 的指令条数增量推进.
 		// 执行循环持续运行, 仅由外部信号暂停, 即 Ctrl+Q 置位 stop_flag.
 		advance_clock_source(module, clint, state);
-		// 外部中断 (UART, VirtIO 等): 守护线程把数据写入 UART 接收 FIFO 后置位挂起,
-		// 此处就地置位 SEIP 与 MEIP, 使受调试程序在本次加速执行内处理该中断.
-		// 仅对未被 IMSIC 占用的线路置位; 无条件置位
-		// 会使 AIA 模式的指令吞吐量下降到约 1/22.
+		/*
+			外部中断 (UART, VirtIO 等): 守护线程把数据写入 UART 接收 FIFO 后置位挂起,
+			此处就地置位 SEIP 与 MEIP, 使受调试程序在本次加速执行内处理该中断.
+			仅对未被 IMSIC 占用的线路置位; 无条件置位
+			会使 AIA 模式的指令吞吐量下降到约 1/22.
+		*/
 		sync_ext_irq_mip(state, ext_irq);
 		/*
 			TermIO RX 通知: termio 线程已把标准输入的新字节写入 RX 环形缓冲区.
@@ -476,8 +477,6 @@ pub(crate) fn hart_worker(
 		}
 	}
 }
-
-//  测试
 
 #[cfg(test)]
 mod tests {

@@ -12,32 +12,19 @@ from rich.table import Table
 
 from pyremu.core.trap_def import trap_cause_name
 from pyremu.debug.attrs import SharedAttrs
-from pyremu.debug.utils import (
-    EXC_NAMES,
-    fmt_instr_count,
-    hex_addr,
-    ip_bits,
-    IRQ_NAMES,
-)
+from pyremu.debug.utils import EXC_NAMES, ip_bits, IRQ_NAMES
 from pyremu.peripheral.power_ctrl import PowerRequest
+from pyremu.utils.str_aux import fmt_instr_count, hex_addr
 
 
 class StatusOps(SharedAttrs):
     """状态和 CSR bitfield 命令."""
-
-    # ----------------------------------------------------------
-    #  模式
-    # ----------------------------------------------------------
 
     def cmd_mode(self) -> None:
         h = self.hart
         self._console.print(
             f"Mode = [bold cyan]{h.mode.name}[/] ({h.mode.value})"
         )
-
-    # ----------------------------------------------------------
-    #  mstatus
-    # ----------------------------------------------------------
 
     def cmd_mstatus(self) -> None:
         h = self.hart
@@ -67,10 +54,6 @@ class StatusOps(SharedAttrs):
             tbl.add_row(fname, str(fval))
         self._console.print(tbl)
 
-    # ----------------------------------------------------------
-    #  mcause / scause
-    # ----------------------------------------------------------
-
     def cmd_mcause(self) -> None:
         self._show_cause("mcause", self.hart.mcause_val)
 
@@ -91,10 +74,6 @@ class StatusOps(SharedAttrs):
         tbl.add_row("Interrupt", str(is_irq), "中断" if is_irq else "异常")
         tbl.add_row("Code", str(code), cause_name)
         self._console.print(tbl)
-
-    # ----------------------------------------------------------
-    #  mtvec / stvec
-    # ----------------------------------------------------------
 
     def cmd_mtvec(self) -> None:
         self._show_tvec("mtvec", self.hart.mtvec_val)
@@ -142,10 +121,6 @@ class StatusOps(SharedAttrs):
             tbl.add_row(bit_name, str(bit), str(val), desc)
         self._console.print(tbl)
 
-    # ----------------------------------------------------------
-    #  medeleg / mideleg
-    # ----------------------------------------------------------
-
     def cmd_medeleg(self) -> None:
         self._show_deleg("medeleg", self.hart.csrs["medeleg"].val, EXC_NAMES)
 
@@ -167,10 +142,6 @@ class StatusOps(SharedAttrs):
             val = (v >> bit) & 1
             tbl.add_row(f"bit{bit:02d}", str(bit), str(val), names[bit])
         self._console.print(tbl)
-
-    # ----------------------------------------------------------
-    #  status 命令: 概览与详情
-    # ----------------------------------------------------------
 
     def cmd_status(self, hart_id_str: str | None = None) -> None:
         """显示 hart 状态. 无参数=概览, 带 hart ID=详情."""
@@ -211,12 +182,9 @@ class StatusOps(SharedAttrs):
             elif h._halted:
                 state = "[red]halted[/]"
             elif h._waiting:
-                state = "[dim]pending[/]"  # waiting 也行
+                state = "[dim]pending[/]"
             else:
                 state = "[green]running[/]"
-            # Per-hart instruction count — WFI-waiting harts don't
-            # execute, so their count stays unchanged while running
-            # harts advance.
             instr_fmt = fmt_instr_count(h._total_instrs)
             tbl.add_row(
                 mark,

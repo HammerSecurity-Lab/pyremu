@@ -3,7 +3,23 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 # (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
 
-"""字符串格式化辅助 — 地址、hexdump 等可复用输出格式."""
+"""字符串格式化与解析辅助 — 地址、尺寸、文件名、hexdump 等可复用文本格式."""
+
+import unicodedata
+
+from pyremu.utils.mask import mask64
+
+_TRI_SPLIT = ["", "K", "M", "B", "T", "P", "E"]
+
+SIZE_UNITS: tuple[tuple[str, int], ...] = (
+    ("EB", 1 << 60),
+    ("PB", 1 << 50),
+    ("TB", 1 << 40),
+    ("GB", 1 << 30),
+    ("MB", 1 << 20),
+    ("KB", 1 << 10),
+    ("B", 1),
+)
 
 
 def join_names(names: list[str], *, empty: str = "-") -> str:
@@ -41,6 +57,97 @@ def fmt_addr(addr: int) -> str:
     故仅固定 16 位并返回带 0x 前缀的十六进制字符串.
     """
     return f"0x{addr:016x}"
+
+
+def hex_addr(v: int, styled: bool = True) -> str:
+    """格式化为 16 位 hex: ``0x0000000080000000``.
+
+    *styled* 为 True 时, 虚地址以蓝色高亮 (Rich tag).
+    """
+    raw = f"0x{mask64(v):016x}"
+    if styled:
+        return f"[bright_blue]{raw}[/]"
+    return raw
+
+
+def fmt_size(n: int) -> str:
+    """human-readable 尺寸, 超出最大单位时落到最远单位."""
+    for name, threshold in SIZE_UNITS:
+        if n >= threshold:
+            return f"{n / threshold:.3f} {name}"
+    return f"{n} B"
+
+
+def parse_size(text: str) -> int:
+    """解析带单位的大小, 返回字节数.
+
+    单位取 SIZE_UNITS 的写法或其中单个字母, 单位后的 B 可省略; 无单位时按字节计,
+    如 ``128M`` 与 ``128MB`` 都表示 128 MiB.
+
+    Raises:
+        ValueError: 内容不是整数与单位的组合.
+    """
+    s = text.upper().rstrip("B")
+    for name, mul in SIZE_UNITS:
+        # 多字母单位写作字母加 B, 去掉 B 后按该字母匹配.
+        if len(name) > 1 and s.endswith(name[0]):
+            return int(s[:-1]) * mul
+    return int(s)
+
+
+def fmt_instr_count(n: int) -> str:
+    """把指令条数写成带 K/M/B 等后缀的三位小数形式."""
+    nn = float(n)
+    for idx, val in enumerate(_TRI_SPLIT):
+        if nn < 1000:
+            return f"{nn:.3f}{val}"
+        nn /= 1000.0
+    return f"{n:.3f}?"
+
+
+def _escape_nonprintable(ch: str) -> str:
+    """把控制字符、格式字符与代理字符写成反斜杠转义形式."""
+    code = ord(ch)
+    if code <= 0xFF:
+        return f"\\x{code:02x}"
+    if code <= 0xFFFF:
+        return f"\\u{code:04x}"
+    return f"\\U{code:08x}"
+
+
+def fmt_display_name(text: str) -> str:
+    """把文件名或路径写成可直接复制的形式.
+
+    不可打印的字符写成转义形式; 结果含空白或已发生转义时用引号包围,
+    使含空白的文件名在 ``sym load`` 中仍可作为单个参数给出.
+    """
+    escaped = "".join(
+        _escape_nonprintable(ch)
+        if unicodedata.category(ch).startswith("C")
+        else ch
+        for ch in text
+    )
+    if escaped == text and not any(ch.isspace() for ch in text):
+        return text
+    if '"' not in escaped:
+        return f'"{escaped}"'
+    if "'" not in escaped:
+        return f"'{escaped}'"
+    return '"' + escaped.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def group_order(key: str) -> tuple[int, str]:
+    """字典序排序: 字母先 (a-z), 再数字, 再下划线, 再点, 最后其他."""
+    c = key.lower()
+    if "a" <= c <= "z":
+        return (0, c)
+    if "0" <= c <= "9":
+        return (1, c)
+    if c == "_":
+        return (2, c)
+    if c == ".":
+        return (3, c)
+    return (4, c)
 
 
 def fmt_hexdump(data: bytes, addr: int = 0, *, columns: int = 16) -> str:

@@ -8,13 +8,13 @@
 import pytest
 
 from pyremu.configs_aux import examed_elf_dir, path_join
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import (
     RiscvMode,
 )
 from pyremu.core.mem_check_aux import (
     MemoryAccessError,
 )
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.platform import PlatformConfig

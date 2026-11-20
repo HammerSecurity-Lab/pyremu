@@ -13,18 +13,9 @@ hart、PMP、CLINT、PLIC、UART 与 virtio-blk 的状态在每轮加速执行�
 import ctypes
 
 from pyremu.configs_aux import cfg_int
-from pyremu.core.decoder import Hart
-from pyremu.core.hart_ffi import (
-    EXIT_BREAKPOINT,
-    EXIT_EBREAK,
-    EXIT_ECALL,
-    EXIT_MMIO,
-    EXIT_NOT_MAINRAM,
-    EXIT_TIMEOUT,
-    EXIT_TRAP,
-)
 from pyremu.core.mem_check_aux import MemoryAccessError
 from pyremu.core.trap_def import TrapType
+from pyremu.emu.hart import Hart
 from pyremu.emu.run import RunStopReason
 from pyremu.generic_ops import (
     ClintInfo,
@@ -36,6 +27,15 @@ from pyremu.generic_ops import (
     RunConfig,
     UartInfo,
     VirtIOInfo,
+)
+from pyremu.generic_ops.hart_ffi import (
+    EXIT_BREAKPOINT,
+    EXIT_EBREAK,
+    EXIT_ECALL,
+    EXIT_MMIO,
+    EXIT_NOT_MAINRAM,
+    EXIT_TIMEOUT,
+    EXIT_TRAP,
 )
 from pyremu.stat import recording
 from pyremu.utils.mask import mask64
@@ -150,7 +150,7 @@ class NativeOps:
                 bp_addrs=self._bp_addrs if self._bp_addrs else None,
                 stop_flag=self._native_stop_flag,
                 ext_irq=self._native_ext_irq,
-                flush_cnt=self.bus.tlb_flush_cnt,
+                flush_cnt=self.bus.tlb_flush_cnt.cell,
                 flush_cnt_per_hart=self._tlb_flush_cnt_per_hart,
             )
         )

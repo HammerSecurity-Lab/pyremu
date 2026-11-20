@@ -1,6 +1,4 @@
 
-#  pyremu/makefile — 从 mk/ 下的配置生成 pyremu/configs_gen.py
-
 CONFIG_GEN = configs_gen.py
 
 $(CONFIG_GEN): $(wildcard ../mk/*.mk) FORCE
@@ -42,16 +40,13 @@ $(CONFIG_GEN): $(wildcard ../mk/*.mk) FORCE
 	@echo '# arguments for emulator' >> $@.tmp
 	@echo 'TLB_ENTRIES = $(TLB_ENTRIES)' >> $@.tmp
 	@echo 'PMP_ENTRIES = $(PMP_ENTRIES)' >> $@.tmp
-# mcycle 计数频率
 	@echo 'CPU_FREQ_HZ = $(CPU_FREQ_HZ)' >> $@.tmp
-# 时钟源频率
 	@echo 'TIMER_FREQ = $(TIMER_FREQ)' >> $@.tmp
 	@echo 'DEFAULT_TIMEOUT = $(DEFAULT_TIMEOUT)' >> $@.tmp
 	@echo 'VIRTIO_PROCESS_BATCH = $(VIRTIO_PROCESS_BATCH)' >> $@.tmp
 	@echo 'FAST_LOAD_THRESHOLD = $(FAST_LOAD_THRESHOLD)' >> $@.tmp
 	@echo 'NS_PER_INSTR = $(NS_PER_INSTR)' >> $@.tmp
 	@echo '' >> $@.tmp
-# 中断子系统与虚拟机扩展相关
 	@echo '' >> $@.tmp
 	@echo 'PYREMU_AIA = $(PYREMU_AIA)' >> $@.tmp
 	@echo 'IMSIC_M_BASE = $(IMSIC_M_BASE)' >> $@.tmp
@@ -62,12 +57,10 @@ $(CONFIG_GEN): $(wildcard ../mk/*.mk) FORCE
 	@echo 'PYREMU_NO_L2 = $(PYREMU_NO_L2)' >> $@.tmp
 	@echo 'PYREMU_NO_TLB = $(PYREMU_NO_TLB)' >> $@.tmp
 	@echo 'PYREMU_HAS_SEMIHOSTING = $(PYREMU_HAS_SEMIHOSTING)' >> $@.tmp
-# 启动所需二进制相关路径
 	@echo '' >> $@.tmp
 	@echo 'BINS_DIR = "$(bins_dir)"' >> $@.tmp
 	@echo 'ELF_DIR = "$(elf_dir)"' >> $@.tmp
 	@echo 'FIRM_DIR = "$(firm_dir)"' >> $@.tmp
-# 调试器
 	@echo '' >> $@.tmp
 	@echo 'PYREMU_HISTORY_FILE = "$(PYREMU_HISTORY_FILE)"' >> $@.tmp
 	@cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@

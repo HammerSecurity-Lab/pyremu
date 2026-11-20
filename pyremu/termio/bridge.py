@@ -63,7 +63,7 @@ class TerminalIO:
     # 环形缓冲容量必须为 2 的幂: 索引按 u32 单调环绕, 槽位 = 索引 % 容量,
     # 容量需整除 2^32, 否则索引跨 u32 环绕时槽位错位。
     RX_CAP = 0x10000  # 64 KiB — 容纳批量粘贴/快速输入突发
-    TX_CAP = 0x40000  # 256 KiB 字节容量 (条目容量 = TX_CAP // 2)
+    TX_CAP = 0x40000  # 256 KiB 字节容量
 
     def __init__(
         self,
@@ -98,9 +98,6 @@ class TerminalIO:
         self._rx_wr = ctypes.c_uint32(0)  # 写索引, 由 Rust termio 线程独占
         # 读索引, 由 Python 独占, Rust 读取该索引做容量控制
         self._rx_rd = ctypes.c_uint32(0)
-        # drain_rx 由 RX daemon 线程与主线程 (_feed_uart_stdin) 并发调用,
-        # 串行化读-改-写 _rx_rd 以免两个消费者读到同一 rd 值
-        # 重复 preload 同批字节.
         self._rx_drain_lock = threading.Lock()
 
         # 共享停止标志 — Python 置 1 后 Rust 线程退出
@@ -117,7 +114,7 @@ class TerminalIO:
         self._fallback_thread: threading.Thread | None = None
         self._fallback_running = False
 
-        # 三对管道: tx_notify, rx_notify, rx_drain.
+        # tx_notify, rx_notify, rx_drain所使用的并发通信管道
         self._create_pipes()
         self._tx_drain_lock = threading.Lock()
         self._tx_drain_running = False
@@ -128,8 +125,8 @@ class TerminalIO:
         self._tx_archive_running = False
         self._tx_archive_thread: threading.Thread | None = None
 
-        # RX daemon — 独立线程持续把 ring buffer 的字节写入 UART FIFO,
-        # 与指令执行完全解耦
+        # RX daemon — 独立线程持续把 ring buffer 的字节
+        # 写入 UART FIFO与指令执行完全解耦
         self._rx_daemon_running = False
         self._rx_daemon_thread: threading.Thread | None = None
 
@@ -141,10 +138,6 @@ class TerminalIO:
         接口形态; 后台线程在 poll 超时后无条件读出一次, 详见 _tx_archive_loop.
         """
         return self._tx_notify_w
-
-    # ----------------------------------------------------------
-    #  公开接口
-    # ----------------------------------------------------------
 
     @property
     def tx_buf(self):
@@ -197,19 +190,18 @@ class TerminalIO:
 
         self._stop_flag.value = 0
         self._pause_flag.value = 0
-        if termio_available() and termio_attach(self._build_handle()) == 0:
-            self._native_active = True
-            self._uart.set_console_echo(False)
-            if not self._atexit_registered:
-                # 进程异常退出时恢复终端
-                atexit.register(self.stop)
-                self._atexit_registered = True
-            self.start_tx_archive_thread()
-            self.start_rx_daemon()
-            return True
-
-        self._start_fallback()
-        return False
+        if not termio_available() or termio_attach(self._build_handle()) != 0:
+            self._start_fallback()
+            return False
+        self._native_active = True
+        self._uart.set_console_echo(False)
+        if not self._atexit_registered:
+            # 进程异常退出时恢复终端
+            atexit.register(self.stop)
+            self._atexit_registered = True
+        self.start_tx_archive_thread()
+        self.start_rx_daemon()
+        return True
 
     def stop(self) -> None:
         """停止后台 I/O 线程, 恢复终端属性, 读出残留数据.
@@ -242,17 +234,14 @@ class TerminalIO:
         # 读出 RX 与 TX 日志中尚未处理的数据
         self.drain_rx()
         if self._native_active:
-            # native 模式: CPU 引擎内联 try_write_fd 已即时输出 stdout, ring
-            # 仅作 hart 日志归档 — 这里只归档不回显, 否则 REPL 返回时会把这
-            # 一段 ring 积压重放到控制台 (与键盘输入唤醒重放同一缺陷).
             self.drain_tx_logs_archive_only()
         else:
             self.drain_tx_logs()
         if self._native_active:
             self._native_active = False
             self._uart.set_console_echo(True)
-        # 显式关闭全部管道 fd — 否则每实例泄漏 6 个 fd (3 pipe × 2 端),
-        # 长进程/测试套件中积累到 3k+ fd, 触发 select() fd>=1024 上限.
+        # 显式关闭全部管道 fd — 否则长进程/测试套件中会积累到 3k+ fd,
+        # 触发 select() fd>=1024.
         self._close_pipes()
 
     def _close_pipes(self) -> None:
@@ -301,12 +290,12 @@ class TerminalIO:
 
     def __del__(self) -> None:
         """对象回收时释放 fd: 未显式 stop() 的实例也在此关闭管道,
-        避免测试或长进程泄漏 fd."""
+        避免测试或进程泄漏 fd."""
         with suppress(Exception):
             self._close_pipes()
 
     def pause(self) -> None:
-        """暂停 I/O 线程 (调试器断点)."""
+        """暂停 I/O 线程."""
         if self._native_active:
             self._pause_flag.value = 1
 
@@ -630,15 +619,15 @@ class TerminalIO:
         poll: select.poll,
         timeout_ms: int = 500,
     ) -> bool:
-        """单次接收守护线程迭代: 等待通知 (最多 timeout_ms), 随后写入 UART FIFO.
+        """单次接收守护线程迭代: 等待通知, 随后写入 UART FIFO.
 
         写入在每次迭代都执行, 通知只用来缩短等待:
         - 通知到达时 poll 立即返回, 随后写入, 并置位唤醒事件.
         - 通知字节可能丢失: Rust termio 线程的写端非阻塞, 突发输入时管道已满,
           该次写返回 EAGAIN, 通知未发出; 或守护线程恰好读完管道后新数据在轮询
           间隔内到达, 通知写在 poll 返回之前完成, 字节留在管道中而管道已不可读.
-          仅靠通知唤醒会让输入留在接收环形缓冲区, 键入速度较快时回显停滞
-          (用户报告). 输入由 poll 超时后的那一次写入 UART FIFO,
+          仅靠通知唤醒会让输入留在接收环形缓冲区, 键入速度较快时回显停滞.
+          输入由 poll 超时后的那一次写入 UART FIFO,
           最迟时刻为 timeout_ms.
         - 接收环形缓冲区为空时 drain_rx 不写入任何字节.
         - Rust termio 线程识别 Ctrl+Q 时同样向该管道写 1 字节,
@@ -659,10 +648,6 @@ class TerminalIO:
         if ready:
             if not self._drain_notify_pipe(notify_r):
                 return False  # 管道已失效: 停止 poll 该 fd
-            # 通知字节由 Rust termio 线程在写入接收环形缓冲区之后与识别到
-            # Ctrl+Q 时写入. 后一种情形不写入环形缓冲区, drain_rx 因而不置位
-            # 唤醒事件; 全部 hart 处于 WFI 时引擎不执行指令, 主线程正阻塞在
-            # 该事件上, 故在此置位.
             self._wake_event.set()
         # 无论有无通知都写入一次 — 通知字节可能丢失, 写入不依赖它.
         self.drain_rx()
@@ -686,10 +671,6 @@ class TerminalIO:
         while self._rx_daemon_running:
             if not self._rx_daemon_tick(notify_r, poll):
                 break
-
-    # ----------------------------------------------------------
-    #  Rust native 路径
-    # ----------------------------------------------------------
 
     def _build_handle(self) -> TermIoHandle:
         """构建传给 ``terminal_io_start`` 的 FFI 结构体.

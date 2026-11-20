@@ -12,7 +12,7 @@
 - PlatformConfig.reserved_memory_ranges 非空时生成 /reserved-memory 的 no-map
   子节点, 供 Linux 内核从 enclave 池与固件映像区中排除物理内存区域.
 
-注意: 必须通过 Emulator 导入链以规避 core.decoder ⟷ disasm 循环导入.
+注意: 必须通过 Emulator 导入链以规避 decoder ⟷ disasm 循环导入.
 """
 
 import struct

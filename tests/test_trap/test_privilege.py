@@ -7,7 +7,6 @@
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.priv_defs import (
     MSTATUS_FS,
@@ -27,6 +26,7 @@ from pyremu.core.priv_defs import (
 )
 from pyremu.core.trap_def import TrapType
 from pyremu.disasm import Opc
+from pyremu.emu.hart import Hart
 from pyremu.memory.bus import Bus
 from tests.test_trap.support import (
     MTVEC,

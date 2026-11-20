@@ -10,10 +10,10 @@ import struct
 import pytest
 
 from pyremu.core import trap_def, trap_handler
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import (
     RiscvMode,
 )
+from pyremu.emu.hart import Hart
 from pyremu.memory.bus import Bus
 from tests.test_trap.support import (
     MTVEC,
@@ -87,7 +87,7 @@ class TestSemihostingEbreak:
     @staticmethod
     def _put(bus: Bus, addr: int, data: bytes) -> None:
         off = addr - bus.ram_base
-        bus._ram[off : off + len(data)] = data
+        bus.ram_buffer[off : off + len(data)] = data
 
     def _place_ebreak(self, bus: Bus) -> None:
         """在 hart.pc 两侧写入 semihosting marker (中段 4 字节内容不限)."""
@@ -117,6 +117,29 @@ class TestSemihostingEbreak:
         assert hart.gprs[10] == 0, "SYS_WRITE 成功 -> a0=0"
         assert hart.pc == self._EBREAK_PC + 8, "越过 ebreak + 退出 marker"
         assert hart.mcause_val == 0, "不得投递断点 trap"
+
+    def test_sys_write_reads_pie_shadow_address(self, sh, capfd):
+        """PIE 链接地址区间内的参数与缓冲按同一段字节读取."""
+        hart, bus = sh
+        link_base = 0x0000_1000
+        bus.apply_pie_ofs(link_base, 0x0001_0000)
+        self._place_ebreak(bus)
+        param, buf = 0x0000_5000, 0x0000_6000
+        text = b"pie shadow\n"
+        # 影子地址 addr 与物理地址 ram_base + (addr - link_base) 指同一段字节
+        self._put(bus, buf - link_base + bus.ram_base, text)
+        self._put(
+            bus,
+            param - link_base + bus.ram_base,
+            struct.pack("<QQQ", 1, buf, len(text)),
+        )
+        hart.pc = self._EBREAK_PC
+        hart.gprs[10] = 0x05
+        hart.gprs[11] = param
+        hart.trap_ebreak()
+        assert text in capfd.readouterr().err.encode()
+        assert hart.gprs[10] == 0, "SYS_WRITE 成功 -> a0=0"
+        assert hart.pc == self._EBREAK_PC + 8
 
     def test_sys_write_oob_buffer_returns_minus1(self, sh, capfd):
         """缓冲为 S-mode VA (超出 RAM) -> -1, 不输出 —

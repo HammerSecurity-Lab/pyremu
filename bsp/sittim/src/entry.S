@@ -69,17 +69,18 @@
     addi sp, sp, 264
 .endm
 
-/*
-	入口
-	
-	PIE 寻址约定: 全部使用显式 %pcrel_hi / %pcrel_lo
-	二进制链接在 0x0, 运行时可在任意物理地址正常工作.
-*/
 
 .align 4
 .section ".text.init"
 .global _start
 _start:
+    /*
+		入口
+		PIE 寻址约定: 全部使用显式 %pcrel_hi / %pcrel_lo
+		二进制链接在 0x0, 运行时可在任意物理地址正常工作.
+		设置本级 stvec 前，屏蔽全部 S 级中断源, 使入口不依赖启动方的初始 sie
+	*/
+    csrw sie, zero
     // 保存 M-mode 传入的参数, 即 callee-saved 寄存器
     // M-mode 在 CREATE ecall 返回前设置:
     mv   s0, a0 // s0 = enclave_id
@@ -109,18 +110,20 @@ _setup_tmp_stk:
     addi  t1, t1, %pcrel_lo(.L0_reloc_e)
     beq   t0, t1, .L_reloc_done
 .L_reloc_loop:
-    ld    t2, 0(t0)                // r_offset
-    ld    t3, 16(t0)               // r_addend (跳过 8 字节 r_info)
-    add   t2, s1, t2               // 目标地址 = base_pa + r_offset
-    add   t3, s1, t3               // 重定位值 = base_pa + r_addend
-    sd    t3, 0(t2)                // *(base_pa + r_offset) = base_pa + r_addend
-    addi  t0, t0, 24               // sizeof(Elf64_Rela) = 24
+    ld    t2, 0(t0)  // r_offset
+    ld    t3, 16(t0) // r_addend (跳过 8 字节 r_info)
+    add   t2, s1, t2 // 目标地址 = base_pa + r_offset
+    add   t3, s1, t3 // 重定位值 = base_pa + r_addend
+    sd    t3, 0(t2)  // *(base_pa + r_offset) = base_pa + r_addend
+    addi  t0, t0, 24 // sizeof(Elf64_Rela) = 24
     bltu  t0, t1, .L_reloc_loop
 .L_reloc_done:
 .L0_bss_s:
-	// MMU使能前让 BSS 清零
-    // PIE 重定位后, _bss_start / _bss_end 的地址为运行时 PA.
-    // 含 page_table_root的EnclaveContext位于 BSS 内, 必须初始化为零.
+	/*
+		MMU使能前让 BSS 清零
+		PIE 重定位后, _bss_start / _bss_end 的地址为运行时 PA.
+		含 page_table_root的EnclaveContext位于 BSS 内, 必须初始化为零.
+    */
     auipc t0, %pcrel_hi(_bss_start)
     addi  t0, t0, %pcrel_lo(.L0_bss_s)
 .L0_bss_e:
@@ -132,13 +135,15 @@ _setup_tmp_stk:
     addi  t0, t0, 8
     bltu  t0, t1, .L_bss_loop
 _bss_reset_done:
-    // 设置 main_before_mmu 参数
-    // 	out: *mut BootInfo,
-	//   enclave_id: u64,
-	//   base_pa: u64,
-	//   payload_size: u64,
-    //   partition_num: u64,
-    //   features: u64
+    /*
+		设置 main_before_mmu 参数
+			out: *mut BootInfo,
+			enclave_id: u64,
+			base_pa: u64,
+			payload_size: u64,
+			partition_num: u64,
+			features: u64
+    */
     mv   a0, sp                 // a0 = &BootInfo
     mv   a1, s0                 // a1 = enclave_id
     mv   a2, s1                 // a2 = base_pa
@@ -185,8 +190,7 @@ temp_stvec:
 
 .align 2
 early_trap:
-	//  Bare 模式下的陷态向量
-    wfi
+    wfi //  Bare 模式下的陷态向量
     j   early_trap
 
 .align 4
@@ -216,10 +220,10 @@ save_kern_ctx:
 	/*
 		内核陷态的帧存放于临时栈之内: 帧的起始地址不低于 tmp_stack, 末端不高于 tmp_stack_top,
     	整帧因而落在临时栈之内, 与陷入前的 sp 的取值无关.
-    	
+
     	帧的末端按下列取值: 陷入前的 sp 处于区间 [tmp_stack + 264, tmp_stack_top) 时取该值,
     	帧自该值向低地址生长; 该值不在此区间之内时取 tmp_stack_top, 帧自栈顶向低地址生长.
-    	
+
     	进入本段时 sp 为 0, 陷入前的 sp 存放在 sscratch 内. 本段借用 t1 存放它: 与 sscratch 交换
     	后 t1 取得陷入前的 sp, 其原值暂存于 sscratch, 在 SAVE_CONTEXT 之前换回, 故帧内记录的仍是
     	本段之前的 t1 取值. 其余寄存器一律不改动.

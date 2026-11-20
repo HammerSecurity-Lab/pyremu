@@ -2,7 +2,6 @@
 """压缩指令的立即数解码.
 
 按象限解出 16 位压缩指令的偏移; 第二个分量只用于象限 2 的存储类指令. 本模块
-只依赖位宽掩码, 由 ``pyremu.generic_ops.decode`` 的纯实现调用.
 """
 
 from __future__ import annotations
@@ -62,6 +61,14 @@ def imm_q1_lui(h: int, bit12: int, bits_6_2: int) -> int:
     return (nz & 0x1F) - (nz & 0x20) & 0xFFFF_FFFF_FFFF_FFFF
 
 
+def imm_q1_shamt(bit12: int, bits_6_2: int) -> int:
+    """C.SRLI/C.SRAI/C.ANDI 的 6 位立即数, 由 bit12 与 bits[6:2] 组成.
+
+    funct3=100 的立即数不参与 ``immediates`` 的按象限取值, 故单独给出.
+    """
+    return (bit12 << 5) | (bits_6_2 & 0x1F)
+
+
 def imm_q1(h: int, funct3: int) -> int:
     """象限 1 的立即数: 立即数算术、C.ADDI16SP / C.LUI、跳转与分支."""
     bit12 = (h >> 12) & 0x1
@@ -111,6 +118,3 @@ def imm_q2(h: int, funct3: int) -> tuple[int, int]:
         # C.FSDSP / C.SDSP: uimm[5:3|8:6]
         return 0, ((h >> 7) & 0x7) << 6 | ((h >> 10) & 0x7) << 3
     return 0, 0
-
-
-# PMP check

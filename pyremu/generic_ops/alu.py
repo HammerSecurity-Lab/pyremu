@@ -1,7 +1,7 @@
 # SPDX-LICENSE-IDENTIFIER: MIT
 """算术指令的入口 — 有动态链接库时经加速执行引擎, 否则走纯 Python 实现.
 
-纯 Python 实现在 ``pyremu.core.decoder.alu``; 本模块只负责选择与把 Ops 返回的
+纯 Python 实现在 ``pyremu.decoder.alu``; 本模块只负责选择与把 Ops 返回的
 陷态标记换算为 ``ValueError``, 由 ``Hart.exec_instr`` 统一转为 IllInstr 陷态.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pyremu import _native
 from pyremu._native import loaded_lib
-from pyremu.core.decoder import alu
+from pyremu.decoder import alu
 
 
 def _value_or_raise(result, func3: int, func7: int) -> int:

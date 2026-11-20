@@ -18,8 +18,8 @@ import threading
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pyremu.core.decoder import Hart
     from pyremu.debug.sym.model import SymAvailItem, SymMod
+    from pyremu.emu.hart import Hart
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -43,9 +43,9 @@ from pyremu.debug.types import (
     MemoryChange,
     StackFrame,
 )
-from pyremu.debug.utils import hex_addr
 from pyremu.emulator import Emulator
 from pyremu.utils.parse_bin import FirmwareImage
+from pyremu.utils.str_aux import hex_addr
 
 
 def init_sym_mod_dir() -> str | None:
@@ -385,7 +385,7 @@ class DebuggerBase(SharedAttrs):
         daemon 线程已在后台 select(stdin)->os.read->uart.preload,
         此处仍保留原有 select+os.read 路径 — daemon 作为加速补充而非替代.
         """
-        # 守护线程活跃时也走到这里: 原有 select+os.read 路径不受影响
+        # 原有 select+os.read 路径不受影响
         # 守护线程读出后 select 返回空, 此时不进行任何操作
 
         if self._emu._termio and self._emu._termio.native_active:

@@ -19,11 +19,11 @@ from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.types import Breakpoint
 from pyremu.debug.utils import (
     check_rv64_addr,
-    hex_addr,
     INSTR_BP_NAMES,
     KNOWN_OPCODES,
 )
 from pyremu.generic_ops import decode_fields
+from pyremu.utils.str_aux import hex_addr
 from pyremu.utils.wrapper import seize_val_err
 
 # 条件断点的比较符到比较函数

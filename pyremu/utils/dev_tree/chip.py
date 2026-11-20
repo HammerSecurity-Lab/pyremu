@@ -11,9 +11,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from pyremu import configs_gen
 from pyremu.utils.dev_tree.dts_props import (
     base_name,
     cell_count,
@@ -109,6 +110,15 @@ class DtDeviceNode:
     irq: int
 
 
+@dataclass(frozen=True)
+class DtUnsupportedDevice:
+    """树中声明了 reg、但本模拟器未提供模型的设备."""
+
+    path: str
+    compatible: str
+    region: DtRegion
+
+
 @dataclass
 class ChipPeriph:
     """树中各外设的区间; 树中没有对应节点时取 None."""
@@ -145,12 +155,14 @@ class ChipIrq:
 
 @dataclass
 class ChipDt:
-    """从芯片设备树读出的平台参数; 树中没有的项取 None."""
+    """从芯片设备树读出的平台参数; 主存与引导只读存储器取树中声明或 mk/ 默认值,
+    其余项树中没有时取 None."""
 
     tree: DT
     num_harts: int
     periph: ChipPeriph
     irq_vec: ChipIrq
+    # 树中没有 /memory 或引导只读存储器节点时取 mk/ 生成的默认区间.
     ram: DtRegion | None = None
     rom: DtRegion | None = None
     boot_addr: DtRegion | None = None
@@ -162,6 +174,8 @@ class ChipDt:
     # 各 CPU 节点逐属性声明的取值: 属性名 -> {hart 编号: 取值}.
     # 各项属性在 hart 之间是否一致, 经 differing_attrs() 读出.
     per_hart: dict[str, dict[int, int | str]] = field(default_factory=dict)
+    # 树中声明、但本模拟器未提供模型的设备区间.
+    unsupported_devices: list[DtUnsupportedDevice] = field(default_factory=list)
 
     @classmethod
     def from_tree(
@@ -204,6 +218,11 @@ class ChipDt:
             boot_addr=_first_region(nodes, name=_NODE_BOOT_ADDR),
             timebase_freq=_timebase_freq(cpus, cpu_nodes),
         )
+        chip.unsupported_devices = _unsupported_devices(nodes, chip)
+        if chip.ram is None:
+            chip.ram = DtRegion(configs_gen.RAM_BASE, configs_gen.RAM_SIZE)
+        if chip.rom is None:
+            chip.rom = DtRegion(configs_gen.ROM_BASE, configs_gen.ROM_SIZE)
         if len(cpu_nodes) == 0:
             return chip
         for hid, node in enumerate(cpu_nodes):
@@ -440,6 +459,41 @@ def _virtio_irqs(
         irq = first_cell(node, "interrupts")
         irqs.extend(irq for _ in _regions(node))
     return irqs
+
+
+def _unsupported_devices(
+    nodes: list[Node],
+    chip: ChipDt,
+) -> list[DtUnsupportedDevice]:
+    """树中声明、但未被平台参数认领的设备区间.
+
+    CPU 节点与保留内存节点不参与: 前者的 reg 是 hart 编号, 后者是地址预留.
+    """
+    claimed: set[tuple[int, int]] = set()
+    known: list[DtRegion | None] = [
+        chip.ram,
+        chip.rom,
+        chip.boot_addr,
+    ]
+    known.extend(
+        getattr(chip.periph, spec.name) for spec in fields(chip.periph)
+    )
+    for region in known:
+        if region is not None:
+            claimed.add((region.base, region.size))
+    out: list[DtUnsupportedDevice] = []
+    for node in nodes:
+        path = node.path
+        if path == "/" or path.startswith(("/cpus", "/reserved-memory")):
+            continue
+        if "memory" in strings_of(node, "device_type"):
+            continue
+        compatible = ", ".join(strings_of(node, "compatible"))
+        for region in _regions(node):
+            if (region.base, region.size) in claimed:
+                continue
+            out.append(DtUnsupportedDevice(path, compatible, region))
+    return out
 
 
 def _first_region(

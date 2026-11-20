@@ -59,11 +59,7 @@ def _warn_if_stale(lib_path: Path) -> None:
     with suppress(OSError):
         if _newest_rust_source() <= lib_path.stat().st_mtime:
             return
-        logger.warning(
-            "{} 比 Rust 源码旧, 当前运行的是旧实现; "
-            "请先执行 make build-native 重新编译",
-            lib_path.name,
-        )
+        logger.warning("请先执行 make build-native 重新编译")
 
 
 def _load_lib_safe(lib_path: Path) -> ctypes.CDLL | None:
@@ -96,7 +92,6 @@ try:
     if _lib is None:
         raise OSError(f"无法加载 {_LIB_PATH.name}")
     bind_functions(_lib, defs_gen.FUNCTIONS["cpu"])
-
 except OSError as exc:
     logger.warning(
         "无法加载 native 加速库 ({}): {} — 降级为性能较低的纯 Python 实现",
@@ -132,14 +127,11 @@ def loaded_lib() -> ctypes.CDLL | None:
 _TERMIO_LIB_PATH = _NATIVE_DIR / f"libtermio{_EXT}"
 _termio_lib: ctypes.CDLL | None = None
 
-
 try:
     _termio_lib = _load_lib_safe(_TERMIO_LIB_PATH)
     if _termio_lib is None:
         raise OSError(f"无法加载 {_TERMIO_LIB_PATH.name}")
-
     bind_functions(_termio_lib, defs_gen.FUNCTIONS["termio"])
-
 except OSError as exc:
     logger.warning(
         "无法加载 terminal I/O 加速库 ({}): {} — 降级为 Python 轮询 stdin",

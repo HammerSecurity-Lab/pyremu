@@ -7,13 +7,13 @@
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
 from pyremu.core.priv_defs import (
     MSTATUS_MIE,
     MSTATUS_SIE,
 )
 from pyremu.core.registers import CsrAccessError
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.interrupt.clint import CLINT
 from pyremu.memory.bus import Bus

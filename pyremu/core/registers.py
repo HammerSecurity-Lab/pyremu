@@ -630,6 +630,6 @@ def register_csr():
     return deepcopy(ret)
 
 
-# 向 regname 注入名称映射 — 断开 core.decoder 与 disasm 的循环导入
+# 向 regname 注入名称映射 — 断开 decoder 与 disasm 的循环导入
 init_gpr_map([r.name for r in _gpr], [r.alias for r in _gpr])
 init_csr_map({addr: csr.name for addr, csr in csr_bank.items()})

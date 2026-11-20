@@ -37,6 +37,13 @@
 **/
 .global _start
 _start:
+	/*
+		disable all interrupt sources before installing mtvec: a pending
+		interrupt would otherwise vector to AL1S_HANG and be mistaken for a
+		POST failure when this loader is entered from a stage that left
+		interrupts enabled.
+	*/
+	csrw	mie, zero
 	/* set mtvec to AL1S_HANG */
 	lla		t0, AL1S_HANG
 	csrrw	x0, mtvec, t0

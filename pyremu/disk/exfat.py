@@ -274,7 +274,7 @@ def _read_free_clusters(
     data = _read_cluster_chain(fp, superblock, first_cluster, byte_size)
     full_bytes = superblock.cluster_count // 8
     remainder = superblock.cluster_count % 8
-    needed = full_bytes + (1 if remainder else 0)
+    needed = full_bytes + int(remainder)
     if len(data) < needed:
         raise DiskFormatError("分配位图短于簇数所需")
 

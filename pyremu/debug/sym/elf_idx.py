@@ -506,10 +506,6 @@ class ElfSymbolIndex:
                 found = st_value
         return found
 
-    # ----------------------------------------------------------
-    #  生命周期
-    # ----------------------------------------------------------
-
     def close(self) -> None:
         self._elf.close()
         self._name_cache.clear()

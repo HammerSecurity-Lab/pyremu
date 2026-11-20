@@ -8,7 +8,11 @@
 
 Pyremu 是一个用 CPython3.15.0 编写的 **RISC-V 指令集模拟器与交互式调试器**，面向固件调试、TEE 开发、操作系统调试等场景。
 
-可模拟多 hart 执行，支持 RV64 **IMAFDC** 指令扩展与 Zicsr/Zifencei/Zbb/Sstc，U/S/M 三级特权级，Sv39 虚拟内存，L2 缓存 MESI 一致性协议，以及 CLINT、PLIC、AIA基础的 (IMSIC 与 APLIC) 等中断控制器。
+可模拟多 hart 执行，支持 RV64 **IMAFDC** 指令扩展与 Zicsr/Zifencei/Zbb/Sstc，U/S/M 三级特权级，Sv39 虚拟内存，L2 缓存 MESI 一致性协议，以及 CLINT、PLIC、AIA(IMSIC 与 APLIC) 等中断控制器。
+
+![加载符号](../assets/img/load-syms.png)
+![获取调用栈](../assets/img/dump-kern-stk.png)
+![运行linux](../assets/img/run-linux.png)
 
 ## 快速上手
 
@@ -44,8 +48,7 @@ uv run python tools/jmp_instr_counter.py  # 统计基本块终结指令的静态
 仓库自带的 [tools/git-hooks/pre-commit](tools/git-hooks/pre-commit) 在每次 `git commit` 前
 运行检查与格式化: 逐个文件做格式检查, 需要格式化的文件由挂载器(hook)格式化并加入索引, 格式化
 失败或静态检查不通过时中止提交. 格式化与静态检查全部通过后, 钩子在仓库根目录执行 `make test`,
-用例失败同样中止提交. `make test` 需要 `llvm-mc`、`ld.lld`、`cargo` 与 `uv`. 需要跳过全部钩子时
-使用 `git commit --no-verify`。
+用例失败同样中止提交. `make test` 需要 `llvm-mc`、`ld.lld`、`cargo` 与 `uv`.
 Git 默认只从 `.git/hooks/` 读取待挂载执行的脚本, 需在仓库根目录执行一次以下命令, 把项目
 挂载目录指向该脚本:
 
@@ -162,10 +165,9 @@ pyremu/                       模拟器包
 bsp/                          板级支持包
   sittim/                     可嵌入 OpenSBI 的 S 模式运行时
   kei-boot/                   模拟器的零阶段加载器
-  linux_tee_drvs/             Linux 飞地驱动与模块工具
+  tee-tools/                  Linux 飞地驱动与模块工具
     linux-driver/             Linux 飞地交互内核驱动, 提供 /dev/tee_enclave
-    ext-mod-svc/              扩展模块服务
-    sign-mod/                 为扩展模块文件追加 ECDSA 签名
+    signer/                   为扩展模块文件追加 ECDSA 签名
   eval-suites/                TEE 评测工具, 部署到根文件系统的 /eval
     common/                   各套件共用: enclave_abi.h (设备与 ioctl 定义),
                               host_util.{h,c} (宿主侧辅助), mod_loader.{h,c} 与
@@ -175,11 +177,9 @@ bsp/                          板级支持包
       host/                   宿主侧控制与探测程序 (glibc)
       payload/                飞地内载荷 (musl)
     basic-test/               TEE 飞地生命周期批处理测试套件, 部署到 /eval/basic-test
-      host/                   宿主侧控制程序 (glibc)
-      payload/                飞地内载荷 (musl)
     app-loader/               应用装载器, 部署到 /eval/app-loader
 	fn_apps/                  可信应用载荷
-  linux/                      内核源码树, 需要自行复制到本仓库
+  linux/                      [[内核源码树, 需要自行复制到本仓库]]
   setup-rootfs/               用 debootstrap 构建根文件系统, 并打包测试程序与驱动
 
 tests/                        pytest 套件与部分测试项的源码
@@ -192,7 +192,7 @@ tests/                        pytest 套件与部分测试项的源码
   loader.py                   把多个 U 模式程序注入内核进程表
 
 mk/                           按子系统拆分的 makefile, 生成 configs_gen.py等文件
-examples/                     编程接口使用示例
+ex./                          编程接口使用示例
 docs/                         设计文档与 CHANGELOG
 tools/                        辅助性脚本工具
 vendor/                       第三方子模块, 如 musl
@@ -202,14 +202,7 @@ build/                        构建产物
 
 ## 交互式调试器 (rvdb)
 
-```
-rvdbg[0] bt              # GDB 风格栈回溯
-rvdbg[0] disasm 0x80000000 +32  # 反汇编
-rvdbg[0] step 10         # 单步 10 条指令
-rvdbg[0] regs            # 全部寄存器
-rvdbg[0] mem 0x80000000 64  # 内存 dump
-rvdbg[0] csr satp        # CSR 读写
-```
+![界面](../assets/img/booting-ui.png)
 
 依赖 `prompt_toolkit` 提供 Tab 补全与历史记录，历史记录写入 `PYREMU_HISTORY_FILE` 给出的路径，该路径在 `mk/emu-feats.mk` 中配置；未配置时写入 `~/.pyremu_history`。`rich` 提供彩色格式化的命令行输出。历史文件超过 10000 行时只保留最近 5000 行。
 

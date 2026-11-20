@@ -70,8 +70,6 @@ class ClintInfo:
 
 @dataclass(slots=True)
 class DevInfo:
-    """Device MMIO ranges"""
-
     bases: Any = None  # ctypes array of uint64
     ends: Any = None  # ctypes array of uint64
 
@@ -97,9 +95,6 @@ class PlicInfo:
 
 @dataclass(slots=True)
 class UartInfo:
-    """UART context — lets Rust buffer sbi_printf output inline
-    and handle IE/IP/TXCTRL register reads without exiting from speedup lib"""
-
     base: int = 0
     tx_buf: Any = None
     tx_wr: Any = None
@@ -117,15 +112,6 @@ class UartInfo:
 
 @dataclass(slots=True)
 class VirtIOInfo:
-    """virtio-blk inline context — Rust handles all MMIO register
-    accesses inline; only QueueNotify exits to Python.
-
-    Carries the full runtime state of the virtio-blk MMIO register file
-    across speedup process.  Without this, dynamic state written by the guest
-    (queue descriptors, feature negotiation, InterruptStatus, etc.) is
-    silently reset to zero, and the guest sees a dead device.
-    """
-
     base: int = 0
     capacity: int = 0
     queue_num_max: int = 256
@@ -140,6 +126,27 @@ class VirtIOInfo:
     queue_device: int = 0
     status: int = 0
     interrupt_status: int = 0
+
+
+class TlbFlushCounter:
+    """已发生的 TLB 刷新次数.
+
+    计数保存在 ctypes 单元格中, 加速执行引擎按地址读写同一单元格; Python 侧经
+    note 加一. 引擎在两次调用之间沿用既有的翻译条目, 计数发生变化时 Python 侧
+    的两个 TLB 一并作废.
+    """
+
+    def __init__(self) -> None:
+        self.cell = ctypes.c_uint64(0)
+
+    @property
+    def value(self) -> int:
+        """当前计数."""
+        return self.cell.value
+
+    def note(self) -> None:
+        """计数加一."""
+        self.cell.value += 1
 
 
 @dataclass(slots=True)
@@ -164,10 +171,8 @@ class RunConfig:
     bp_addrs: list[int] | None = None
     stop_flag: Any = None  # ctypes.c_uint8 — Ctrl+Q 与设备共用的停止标志
     ext_irq: Any = None  # FfiExtIrqCtx — 外部中断上下文
-    flush_cnt: Any = None  # ctypes.c_uint64 — 已发生的 TLB 刷新次数
-    flush_cnt_per_hart: Any = (
-        None  # ctypes array of c_uint64 — 各 hart 上次见到的取值
-    )
+    flush_cnt: Any = None  # ctypes.c_uint64 — TlbFlushCounter.cell
+    flush_cnt_per_hart: Any = None
 
 
 @dataclass(slots=True)
@@ -305,7 +310,7 @@ def _build_virtio_ffi(virtio: VirtIOInfo | None) -> FfiParts:
     ffi.queue_num = (
         virtio.queue_num if virtio.queue_num else virtio.queue_num_max
     )
-    ffi.queue_ready = 1 if virtio.queue_ready else 0
+    ffi.queue_ready = int(virtio.queue_ready)
     ffi.queue_desc = virtio.queue_desc
     ffi.queue_driver = virtio.queue_driver
     ffi.queue_device = virtio.queue_device

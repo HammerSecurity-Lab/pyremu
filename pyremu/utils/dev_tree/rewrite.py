@@ -347,13 +347,15 @@ def _cpu_nodes(
 ) -> list[tuple[FdtNode, FdtNode | None]]:
     """按 /cpus 子节点顺序给出各处理器节点与其中断控制器子节点."""
     cpus = child_node(root, "cpus")
-    if cpus is None:
-        return []
-    return [
-        (sub, _cpu_intc_node(sub))
-        for sub in cpus.subdata
-        if isinstance(sub, FdtNode) and _is_cpu_node(sub)
-    ]
+    return (
+        []
+        if cpus is None
+        else [
+            (sub, _cpu_intc_node(sub))
+            for sub in cpus.subdata
+            if isinstance(sub, FdtNode) and _is_cpu_node(sub)
+        ]
+    )
 
 
 def _hart_hwirq_pattern(
@@ -489,20 +491,19 @@ def _rewrite_chosen(
     if bootargs:
         set_property(node, FdtPropertyStrings("bootargs", [bootargs]))
     set_property(node, FdtPropertyBytes.init_raw("rng-seed", os.urandom(64)))
-    if initrd is not None:
-        start, end = initrd
-        set_property(
-            node,
-            FdtPropertyBytes.init_raw(
-                "linux,initrd-start", struct.pack(">Q", start)
-            ),
-        )
-        set_property(
-            node,
-            FdtPropertyBytes.init_raw(
-                "linux,initrd-end", struct.pack(">Q", end)
-            ),
-        )
+    if initrd is None:
+        return
+    start, end = initrd
+    set_property(
+        node,
+        FdtPropertyBytes.init_raw(
+            "linux,initrd-start", struct.pack(">Q", start)
+        ),
+    )
+    set_property(
+        node,
+        FdtPropertyBytes.init_raw("linux,initrd-end", struct.pack(">Q", end)),
+    )
 
 
 def _add_device_node(

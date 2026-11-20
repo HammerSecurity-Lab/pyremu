@@ -14,7 +14,6 @@ RISC-V 内存管理单元 (MMU): 页表项 (PTE) 定义与 Sv39 页表遍历。
 from enum import Enum
 from typing import Callable
 
-from pyremu.generic_ops import PteFields, Sv39Vpn
 from pyremu.utils.mask import mask64
 
 #  地址翻译模式
@@ -34,8 +33,6 @@ PAGE_SHIFT = 12
 PAGE_SIZE = 1 << PAGE_SHIFT  # 4 KiB
 
 
-#  PTE — 页表项 (64-bit)
-
 # Sv39/Sv48 PTE 布局 (bits):
 #   [0]     V    — 有效位
 #   [1]     R    — 可读
@@ -50,7 +47,6 @@ PAGE_SIZE = 1 << PAGE_SHIFT  # 4 KiB
 #   [28:20] PPN1 — 物理页号 [28:20]
 #   [53:29] PPN2 — 物理页号 [53:29] (Sv39 仅用 [37:29])
 #   [63:54]      — 保留
-
 PTE_V = 1 << 0
 PTE_R = 1 << 1
 PTE_W = 1 << 2
@@ -574,48 +570,3 @@ def sv39_canonical_va(va: int) -> int | None:
     else:
         canonical = va & 0x7F_FFFFFFFF  # 高 25 位清零
     return canonical if va == canonical else None
-
-
-#  Sv39 页表项与页大小的纯 Python 实现
-#
-#  与加速执行引擎的同名函数返回同样的 ctypes 结构体;
-#  后端选择在 pyremu.generic_ops 内完成.
-
-
-def sv39_vpn_fields(va: int) -> Sv39Vpn:
-    """把 39 位虚拟地址分解为带字段的 Sv39Vpn 结构体."""
-    vpn = Sv39Vpn()
-    va &= 0xFFFF_FFFF_FFFF_FFFF
-    vpn.vpn2 = (va >> 30) & 0x1FF
-    vpn.vpn1 = (va >> 21) & 0x1FF
-    vpn.vpn0 = (va >> 12) & 0x1FF
-    vpn.offset = va & 0xFFF
-    return vpn
-
-
-def pte_parse(raw: int) -> PteFields:
-    """把 64 位页表项原值拆成 PteFields."""
-    raw &= 0xFFFF_FFFF_FFFF_FFFF
-    # 叶子页表项要求 R、W、X 中至少一位置位; W 置位而 R 清零属保留编码,
-    # 仍按叶子项处理, 由权限检查投递缺页.
-    rwx = raw & 0b1110
-    f = PteFields()
-    f.ppn = (raw >> 10) & 0xFFF_FFFF_FFFF
-    f.perm = raw & 0x1E
-    f.v = 1 if raw & 0x1 else 0
-    f.is_leaf = 1 if f.v and rwx else 0
-    f.is_ptr = 1 if f.v and not rwx else 0
-    return f
-
-
-def pte_assemble_pa(ppn: int, va: int, level: int) -> int:
-    """由叶子页表项的 PPN、原虚拟地址与页级别合成物理地址."""
-    if level == 1:
-        vpn0 = (va >> 12) & 0x1FF
-        ppn = (ppn & 0xFFFF_FFFF_FFFF_FE00) | vpn0
-    return ((ppn << 12) | (va & 0xFFF)) & 0xFFFF_FFFF_FFFF_FFFF
-
-
-def sv39_page_size(level: int) -> int:
-    """返回 Sv39 叶子页的字节数."""
-    return 2 * 1024 * 1024 if level == 1 else 4096

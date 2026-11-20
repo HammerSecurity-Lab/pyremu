@@ -32,7 +32,7 @@ import threading
 import time
 from typing import Any
 
-from pyremu.core.decoder import Hart
+from pyremu.emu.hart import Hart
 from pyremu.emu.load import LoadOps
 from pyremu.emu.native import NativeOps
 from pyremu.emu.run import RunOps, RunStopReason, TimeoutError
@@ -84,8 +84,8 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         """
         if config is None:
             config = self._build_default_config(**kwargs)
-        # 装配前再检查一次: 调用方可能在构造配置之后修改了外设基址.
-        config.validate()
+
+        config.validate()  # 装配前再检查调用方有没有在构造配置后修改了外设基址
         self._cfg = config
         self._dtb_addr: int | None = None  # 最近一次写入设备树的物理地址
         self._dtb_size: int = 0  # 最近一次写入的设备树字节数
@@ -186,10 +186,6 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         self._init_termio()
         self._init_for_speedup_lib()
 
-    # ----------------------------------------------------------
-    #  公开属性
-    # ----------------------------------------------------------
-
     @property
     def config(self) -> PlatformConfig:
         return self._cfg
@@ -247,10 +243,6 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         """
         return self._irq_sink.irq_route
 
-    # ----------------------------------------------------------
-    #  生命周期与外部接口
-    # ----------------------------------------------------------
-
     def close(self) -> None:
         """释放本 Emulator 占用的全部输入输出资源; 重复调用不产生效果.
 
@@ -305,10 +297,6 @@ class Emulator(LoadOps, NativeOps, RunOps, SetupOps):
         ``on_irq`` 持有同一对象, 理由见 DeviceIrqSink.
         """
         return self._irq_sink
-
-    # ----------------------------------------------------------
-    #  状态导出
-    # ----------------------------------------------------------
 
     def dump_hart_regs(self, hart_id: int = 0) -> dict:
         """导出指定 hart 的关键寄存器状态."""

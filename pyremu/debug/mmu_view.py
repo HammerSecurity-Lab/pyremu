@@ -5,13 +5,12 @@
 
 """MmuViewOps — PMP/SATP/页表遍历显示.
 
-依赖 DebuggerBase + MemoryOps._resolve_addr.
+依赖 DebuggerBase + AddrOps.
 """
 
 from rich.table import Table
 
 from pyremu.debug.attrs import SharedAttrs
-from pyremu.debug.utils import fmt_size, hex_addr
 from pyremu.memory.mmu import pte_flags_str, sv39_decompose_va
 from pyremu.memory.pmp import (
     decode_napot,
@@ -25,6 +24,7 @@ from pyremu.memory.pmp import (
     PMP_X,
 )
 from pyremu.utils.mask import mask64
+from pyremu.utils.str_aux import fmt_size, hex_addr
 from pyremu.utils.wrapper import seize_val_err
 
 # 页表级别到该级叶子页在 VA 中保留的页内偏移掩码
@@ -41,10 +41,6 @@ _PMP_MODE_NAMES = {
 
 class MmuViewOps(SharedAttrs):
     """PMP、页表、SATP 显示."""
-
-    # ----------------------------------------------------------
-    #  PMP 配置解码
-    # ----------------------------------------------------------
 
     @staticmethod
     def _decode_pmp_cfg_byte(cfg_val: int, entry_idx: int) -> int:
@@ -63,10 +59,6 @@ class MmuViewOps(SharedAttrs):
                 (PMP_X, "x", "red"),
             )
         )
-
-    # ----------------------------------------------------------
-    #  PMP 命令
-    # ----------------------------------------------------------
 
     def cmd_pmp(self) -> None:
         """显示所有 PMP 条目的保护地址范围与权限 (含原始寄存器值).
@@ -163,10 +155,6 @@ class MmuViewOps(SharedAttrs):
                 fmt_size(size),
             )
         return f"0x{base:016x}", "0x0000000000000000", "-"
-
-    # ----------------------------------------------------------
-    #  satp 命令
-    # ----------------------------------------------------------
 
     def cmd_satp(self) -> None:
         """显示当前 satp 的 MODE / ASID / PPN 解码."""

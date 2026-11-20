@@ -8,13 +8,11 @@
 可扩展中断控制器框架。
 
 定义 InterruptController 抽象基类:
-- CLINT (SiFive 兼容) 和未来的 IMSIC (AIA) 均实现此接口
+- CLINT 和 IMSIC (AIA) 均实现此接口
 - 提供统一的中断检查、IPI 发送/清除、定时器接口
 
-中断优先级 (RISC-V 规范):
+中断优先级:
     MEI > MSI > MTI > SEI > SSI > STI
-    (Machine External > Machine Software > Machine Timer >
-     Supervisor External > Supervisor Software > Supervisor Timer)
 """
 
 from abc import ABC, abstractmethod

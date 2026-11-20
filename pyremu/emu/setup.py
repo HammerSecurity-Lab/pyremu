@@ -12,8 +12,8 @@ import ctypes
 import sys
 from typing import Any
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs
+from pyremu.emu.hart import Hart
 from pyremu.generic_ops import (
     FfiUartCtx,
     HartState,
@@ -402,10 +402,7 @@ class SetupOps:
         self._clint_mtimecmp_arr = (ctypes.c_uint64 * 0)()
         self._clint_msip_arr = (ctypes.c_uint8 * 0)()
 
-        ram = self.bus._ram  # bytearray
-        # 首地址用 ctypes.addressof 取得; 取地址不用 ctypes.cast,
-        # 后者会与所转换的缓冲区构成引用环.
-        self._native_ram_ptr = ctypes.addressof(ctypes.c_uint8.from_buffer(ram))
+        self._native_ram_ptr = self.bus.ram_native_ptr
 
         self._pmp_num: int = 0
         self._pmp_cfg_buf = (ctypes.c_uint8 * 0)()

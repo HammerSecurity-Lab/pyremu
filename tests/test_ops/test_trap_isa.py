@@ -9,9 +9,9 @@ from unittest import mock
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs
 from pyremu.disasm import Opc
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.generic_ops import run_parallel
 from pyremu.utils.isa import encode_misa, isa_ext_list

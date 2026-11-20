@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import Counter
 import time
 
-from pyremu.core.hart_ffi import (
+from pyremu.generic_ops.hart_ffi import (
     EXIT_BREAKPOINT,
     EXIT_EBREAK,
     EXIT_ECALL,

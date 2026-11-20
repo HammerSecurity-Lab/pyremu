@@ -8,18 +8,19 @@
 依赖 DebuggerBase + SymLookupOps.
 """
 
-import re
-
 from rich.markup import escape
 from rich.table import Table
 
 from pyremu.core.hart import RiscvMode
-from pyremu.core.registers import csr_addr_from_name, gpr_idx_from_name
 from pyremu.core.trap_def import trap_cause_name
 from pyremu.debug.attrs import SharedAttrs
+from pyremu.debug.disasm_view import (
+    colorize_asm,
+    ctrl_flow_kind,
+    ctrl_flow_kind_compressed,
+)
 from pyremu.debug.utils import (
     check_rv64_addr,
-    hex_addr,
     read_pa_bytes,
     read_va_bytes,
 )
@@ -27,7 +28,7 @@ from pyremu.disasm import disasm
 from pyremu.generic_ops import decode_fields
 from pyremu.memory.mmu import PTE_R, PTE_U, PTE_W, PTE_X, sv39_walk
 from pyremu.utils.mask import mask64
-from pyremu.utils.str_aux import dye_hexdump
+from pyremu.utils.str_aux import dye_hexdump, hex_addr
 from pyremu.utils.wrapper import seize_val_err
 
 # 计算反汇编首条指令与参照 PC 之间的距离时, 最多遍历的指令条数.
@@ -181,30 +182,9 @@ _TERMINATOR_KINDS = frozenset(
     }
 )
 
-# SYSTEM 指令的 funct12 到控制流分类
-_SYSTEM_FLOW_KINDS = {
-    0x000: "ecall",
-    0x001: "ebreak",
-    0x302: "mret",
-    0x102: "sret",
-    0x105: "wfi",
-}
-
-
-def _mnemonic_color(mnemonic: str) -> str | None:
-    """返回反汇编助记符对应的颜色名; 无对应颜色时返回 None."""
-    for group, color in _MNEMONIC_COLORS:
-        if mnemonic in group:
-            return color
-    return None
-
 
 class MemoryOps(SharedAttrs):
     """内存访问和反汇编."""
-
-    # ----------------------------------------------------------
-    #  内存读取
-    # ----------------------------------------------------------
 
     def _try_read_va(self, va: int, size: int) -> bytes | None:
         """从虚拟地址读取内存, 自动完成 VA 到 PA 的翻译."""
@@ -235,56 +215,6 @@ class MemoryOps(SharedAttrs):
         return (pa, data) if data is not None else None
 
     # ----------------------------------------------------------
-    #  地址解析
-    # ----------------------------------------------------------
-
-    def _find_gpr(self, name: str) -> int | None:
-        """按名称查找 GPR 索引 (x12, t0, a0, sp 等)."""
-        return gpr_idx_from_name(name)
-
-    def _resolve_addr(self, arg: str) -> int | None:
-        """将字符串解析为地址: pc / 寄存器名 / 符号名 / 数值."""
-        if arg.lower() == "pc":
-            return self.hart.pc
-        idx = self._find_gpr(arg)
-        if idx is not None:
-            return mask64(self.hart.gprs[idx])
-        v = self._read_csr_by_name(arg)
-        if v != 0 or csr_addr_from_name(arg) is not None:
-            return v
-
-        name_addr = self._resolve_symbol_operand(arg)
-        if name_addr is not None:
-            return name_addr
-        return self._parse_addr_literal(arg)
-
-    def _resolve_symbol_operand(self, name: str) -> int | None:
-        """按固件符号、已加载模块、外部符号表的顺序解析符号名."""
-        if self._image and self._image.symbols:
-            sym_va = self._image.symbols.get(name)
-            if sym_va is not None:
-                return sym_va + self._load_offset
-        module_pa = self._module_runtime_addr_of_name(name)
-        if module_pa is not None:
-            return module_pa
-        if self._sym_symbols:
-            sym_va = self._sym_symbols.get(name)
-            if sym_va is not None:
-                return self._resolve_sym_addr(sym_va)
-        return None
-
-    @staticmethod
-    def _parse_addr_literal(text: str) -> int | None:
-        """解析数值字面量; 超出 RV64 范围或非整数时返回 None."""
-        try:
-            v = int(text, 0)
-        except ValueError:
-            return None
-        if v < 0 or v >= (1 << 64):
-            return None
-        return v
-
-    # ----------------------------------------------------------
     #  反汇编辅助
     # ----------------------------------------------------------
 
@@ -300,60 +230,6 @@ class MemoryOps(SharedAttrs):
         if decode_fields(instr).is_compressed:
             return f"{instr & 0xFFFF:04x}", disasm(instr, pc)
         return f"{instr:08x}", disasm(instr, pc)
-
-    @staticmethod
-    def _colorize_asm(asm_text: str) -> str:
-        """为反汇编文本添加 Rich 颜色标记."""
-        if not asm_text or asm_text.startswith("[") or asm_text == "(unknown)":
-            return asm_text
-        parts = asm_text.split(maxsplit=1)
-        mnemonic = parts[0]
-        operands = parts[1] if len(parts) > 1 else ""
-        color = _mnemonic_color(mnemonic)
-        if not operands:
-            return asm_text if color is None else f"[{color}]{mnemonic}[/]"
-        # 十六进制与纯数字立即数显示为品红
-        operands = re.sub(
-            r"\b(0x[0-9a-fA-F]+|\d+)\b", r"[magenta]\1[/]", operands
-        )
-        if color is None:
-            return f"{mnemonic} {operands}"
-        return f"[{color}]{mnemonic}[/] {operands}"
-
-    @staticmethod
-    def _ctrl_flow_kind(instr: int) -> str:
-        """32-bit 指令的控制流分类."""
-        opcode = instr & 0x7F
-        if opcode == 0x73:
-            return _SYSTEM_FLOW_KINDS.get((instr >> 20) & 0xFFF, "csr")
-        return _OPCODE_FLOW_KINDS.get(opcode, "normal")
-
-    @staticmethod
-    def _ctrl_flow_kind_compressed(instr16: int) -> str:
-        """16-bit 压缩指令的控制流分类."""
-        op = instr16 & 0x3
-        funct3 = (instr16 >> 13) & 0x7
-        if op == 0x1 and funct3 in (0x1, 0x5):
-            return "jal"
-        if op == 0x2 and funct3 == 0x4:
-            # C2 funct3=100: C.JR/C.JALR (rs2=0) vs C.MV/C.ADD (rs2≠0)
-            rs2 = (instr16 >> 2) & 0x1F
-            if rs2 == 0:
-                return "jalr"
-        elif op == 0x2 and funct3 == 0x6:
-            # C.JALR (rs2=0 only)
-            rs2 = (instr16 >> 2) & 0x1F
-            if rs2 == 0:
-                return "jalr"
-        if op == 0x1 and funct3 in (0x6, 0x7):
-            return "branch"
-        if op == 0x2 and funct3 == 0x0:
-            return "ebreak"
-        return "normal"
-
-    @staticmethod
-    def _trap_cause_name_static(mcause_val: int) -> str:
-        return trap_cause_name(mcause_val)
 
     def _warn_pc_if_suspect(self, h, v: int) -> None:
         """PC 值可疑时输出警告 (不可达 / trap / 越界)."""
@@ -569,9 +445,9 @@ class MemoryOps(SharedAttrs):
                 f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
             )
             ctrl = (
-                self._ctrl_flow_kind_compressed(instr & 0xFFFF)
+                ctrl_flow_kind_compressed(instr & 0xFFFF)
                 if is_compressed
-                else self._ctrl_flow_kind(instr)
+                else ctrl_flow_kind(instr)
             )
             instrs.append((pc_addr, raw_hex, asm, ctrl))
             offset += inst_size
@@ -649,7 +525,7 @@ class MemoryOps(SharedAttrs):
             prefix = self._disasm_prefix(step, pc_addr == self._disasm_ref_pc)
             lines.append(
                 f"{prefix}    [blue]{hex_addr(pc_addr)}[/]    "
-                f"[bright_black]{raw_hex:>8s}[/]    {self._colorize_asm(asm)}"
+                f"[bright_black]{raw_hex:>8s}[/]    {colorize_asm(asm)}"
             )
             if ctrl in _TERMINATOR_KINDS:
                 lines.append(f"  {'─' * 80}")
@@ -789,9 +665,9 @@ class MemoryOps(SharedAttrs):
                 f"{instr & 0xFFFF:04x}" if is_compressed else f"{instr:08x}"
             )
             ctrl = (
-                self._ctrl_flow_kind_compressed(instr & 0xFFFF)
+                ctrl_flow_kind_compressed(instr & 0xFFFF)
                 if is_compressed
-                else self._ctrl_flow_kind(instr)
+                else ctrl_flow_kind(instr)
             )
             instrs.append((pc_va, raw_hex, asm, ctrl, pc_pa))
             offset += inst_size
@@ -817,7 +693,7 @@ class MemoryOps(SharedAttrs):
             lines.append(
                 f"{prefix_fixed}    [dim]{hex_addr(pc_va)}[/]    "
                 f"[bright_black]{hex_addr(pc_pa)}[/]    "
-                f"[bright_black]{raw_hex:>8s}[/]    {self._colorize_asm(asm)}"
+                f"[bright_black]{raw_hex:>8s}[/]    {colorize_asm(asm)}"
             )
             if ctrl in _TERMINATOR_KINDS:
                 lines.append(f"  {'─' * 80}")

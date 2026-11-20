@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 import os
 import resource
@@ -58,19 +59,15 @@ def host_memory_limit() -> int | None:
     两者都取不到时返回 None, 调用方据此跳过该项检查.
     """
     limits: list[int] = []
-    try:
+    with suppress(OSError, ValueError):
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
         if pages > 0 and page_size > 0:
             limits.append(pages * page_size)
-    except OSError, ValueError:
-        pass
-    try:
+    with suppress(OSError, ValueError):
         soft, _hard = resource.getrlimit(resource.RLIMIT_AS)
         if soft != resource.RLIM_INFINITY and soft > 0:
             limits.append(soft)
-    except OSError, ValueError:
-        pass
     return min(limits) if limits else None
 
 

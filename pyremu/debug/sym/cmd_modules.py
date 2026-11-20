@@ -13,7 +13,7 @@ from rich.text import Text
 
 from pyremu.debug.exception import UsageError
 from pyremu.debug.sym import cmd_files, model, registry
-from pyremu.debug.utils import fmt_display_name
+from pyremu.utils.str_aux import fmt_display_name
 
 
 def sym_detail(dbg, rest: str) -> None:

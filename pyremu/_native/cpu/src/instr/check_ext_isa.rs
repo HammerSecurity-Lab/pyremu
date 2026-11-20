@@ -3,7 +3,7 @@
 //! 每条指令先由编码得到所属扩展, 再取该 hart 的扩展开关。基础整数指令与
 //! 特权指令不属于可选扩展, 不受扩展声明约束。
 //!
-//! 同一份编码到扩展的对应关系在 ``pyremu/core/decoder/check_ext_isa.py`` 中另有
+//! 同一份编码到扩展的对应关系在 ``pyremu/generic_ops/ext_isa.py`` 中另有
 //! 一份实现, 两侧必须逐一对应。
 
 use crate::instr::decode::DecodedFields;
@@ -86,11 +86,13 @@ pub fn check_ext_isa(exts: &IsaExts, f: &DecodedFields) -> bool {
 			0b011 => exts.is_d,
 			_ => true,
 		},
-		0b10100_11 | 0b10000_11 | 0b10001_11 | 0b10010_11 | 0b10011_11 => match f.fmt {
-			0 => exts.is_f,
-			1 => exts.is_d,
-			_ => true,
-		},
+		0b10100_11 | 0b10000_11 | 0b10001_11 | 0b10010_11 | 0b10011_11 => {
+			match f.fmt {
+				0 => exts.is_f,
+				1 => exts.is_d,
+				_ => true,
+			}
+		}
 		0b11100_11 => {
 			if is_csr_func3(f.func3) {
 				exts.is_zicsr

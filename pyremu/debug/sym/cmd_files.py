@@ -16,7 +16,7 @@ from rich.text import Text
 
 from pyremu.debug.exception import UsageError
 from pyremu.debug.sym import loader, model, registry
-from pyremu.debug.utils import fmt_display_name, parse_hex_addr
+from pyremu.debug.utils import parse_hex_addr
 from pyremu.utils.file_ops import (
     file_size_bytes,
     is_file_executable,
@@ -24,6 +24,7 @@ from pyremu.utils.file_ops import (
     is_file_writable,
     iter_regular_files,
 )
+from pyremu.utils.str_aux import fmt_display_name
 
 LOAD_USAGE = "用法: sym load <#n|文件名> [pa:<addr>|va:<addr>]"
 CHDIR_USAGE = "用法: sym chdir <绝对路径>; 省略参数时显示当前候选目录"

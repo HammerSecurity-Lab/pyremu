@@ -6,7 +6,7 @@
 """hart 与加速执行引擎之间的状态编组.
 
 结构体布局由 ``pyremu/_native/defs_aux.py`` 从 Rust 侧 DI 元数据生成.
-本模块的方法以 hart 自身为接收者, 由 ``HartWithRegs`` 组合进来.
+本模块的方法以 hart 自身为接收者, 由 ``pyremu.emu.hart`` 的 Hart 组合进来.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from __future__ import annotations
 import ctypes
 import struct
 
+from pyremu._native import HartState
 from pyremu.core.priv_defs import RiscvMode
-from pyremu.generic_ops import HartState
 
 # 线格式中的 u8 特权级取值到 RiscvMode 的映射.
 _MODE_FROM_U8: dict[int, RiscvMode] = {
@@ -25,7 +25,8 @@ _MODE_FROM_U8: dict[int, RiscvMode] = {
     3: RiscvMode.M,
 }
 
-# IMSIC 的 eip 与 eie 各为 64 个 u32 字, 两处列表按小端序整体编组到 HartState.
+# IMSIC 的 eip 与 eie 各为 64 个 u32 字
+# 两处列表按小端序整体设置到 HartState.
 _IMSIC_PACK_FORMAT = "<64I"
 _IMSIC_PACK_BYTES = 64 * 4
 # 第 0 个字中对应 S 模式与 M 模式软件中断的位, 不属于外部中断.
@@ -50,7 +51,7 @@ def _has_ext_interrupt(eip: list[int]) -> int:
     """判定 eip 中是否有中断编号不小于 6 的位."""
     if eip[0] & ~_IMSIC_IPI_WORD0_MASK:
         return 1
-    return 1 if any(eip[1:]) else 0
+    return int(any(eip[1:]))
 
 
 def _merge_eip(
@@ -105,13 +106,13 @@ class HartFfiOps:
         state.mode = self.mode.value
         state.mmu_mode = self.mmu_mode
 
-        state.reservation_valid = 1 if self.reservation_valid else 0
+        state.reservation_valid = int(self.reservation_valid)
         state.reservation_addr = self.reservation_addr
         state.reservation_value = self._reservation_value
 
-        state.waiting = 1 if self._waiting else 0
-        state.wfi_woken = 1 if self._wfi_woken else 0
-        state.halted = 1 if self._halted else 0
+        state.waiting = int(self._waiting)
+        state.wfi_woken = int(self._wfi_woken)
+        state.halted = int(self._halted)
 
         state.mdid = self.mdid_val
         state.pmpsplit = self.pmpsplit_val

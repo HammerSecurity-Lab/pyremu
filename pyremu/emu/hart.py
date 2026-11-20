@@ -3,22 +3,22 @@
 """RISC-V hart 的指令执行入口与 32 位指令处理器.
 
 exec_instr 解码字段并按 opcode 查表分发到各处理器. 压缩指令与特权指令的方法由
-同包的 compressed.CompressedInstrOps 与 sys_ops.SysInstrOps 组合进来; 算术运算与
-访存取值委托给同包的 alu / mem_ops 模块.
+``pyremu.decoder`` 的 CompressedInstrOps 与 SysInstrOps 组合进来; 算术运算与访存
+取值委托给 ``pyremu.decoder`` 的 alu 与 mem_instr 模块. 计算入口统一取自
+``pyremu.generic_ops``, 由它在动态链接库与纯 Python 实现之间选择.
 """
 
-from pyremu.core.decoder.compressed import CompressedInstrOps
-from pyremu.core.decoder.mem_instr import (
+from pyremu.core.hart import HartWithRegs
+from pyremu.core.mem_check_aux import MemoryAccessError
+from pyremu.core.registers import CsrAccessError
+from pyremu.core.trap_def import TrapType
+from pyremu.decoder.mem_instr import (
     amo_result,
     amo_width,
     LD_READ_SIZE,
     load_value,
 )
-from pyremu.core.decoder.sys_instr import SysInstrOps
-from pyremu.core.hart import HartWithRegs
-from pyremu.core.mem_check_aux import MemoryAccessError
-from pyremu.core.registers import CsrAccessError
-from pyremu.core.trap_def import TrapType
+from pyremu.decoder.sys_instr import SysInstrOps
 from pyremu.disasm import (
     AMOF5_MAP,
     AmoFunct5,
@@ -32,6 +32,7 @@ from pyremu.disasm import (
 )
 from pyremu.generic_ops import (
     check_ext_isa,
+    CompressedInstrOps,
     decode_fields,
     exec_alu,
     exec_op32,
@@ -39,11 +40,16 @@ from pyremu.generic_ops import (
     exec_op_imm32,
     fp_exec_fma,
     fp_exec_op,
+    HartFfiOps,
 )
 from pyremu.utils.mask import mask16, mask64, sext, sext32, sint64
 
+_NANBOX_S = 0xFFFF_FFFF_0000_0000
+_MSTATUS_FS = 0b11 << 13
+_MSTATUS_SD = 1 << 63
 
-class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
+
+class Hart(CompressedInstrOps, SysInstrOps, HartFfiOps, HartWithRegs):
     # 32-bit 指令分发表: opcode 映射到处理方法名, 索引取值为整数 0 到 127,
     # 分发复杂度为 O(1)
     _DISPATCH: dict[int, str] = {
@@ -70,9 +76,6 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         0b10011_11: "handle_fp_fma",  # Opc.fnmadd
     }
 
-    # ----------------------------------------------------------
-    #  R-type ALU (opcode = Opc.op)
-    # ----------------------------------------------------------
     def handle_alu(self, instr: int) -> int:
         """执行 R 型 ALU 指令."""
         f = self._f
@@ -81,9 +84,6 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             self.gprs[f.rd] = result
         return 4
 
-    # ----------------------------------------------------------
-    #  I-type ALU (opcode = Opc.op_imm)
-    # ----------------------------------------------------------
     def handle_op_imm(self, instr: int) -> int:
         """执行 I 型立即数 ALU 指令."""
         f = self._f
@@ -92,9 +92,6 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             self.gprs[f.rd] = result
         return 4
 
-    # ----------------------------------------------------------
-    #  RV64 32-bit word operations (opcode = Opc.op32)
-    # ----------------------------------------------------------
     def handle_op32(self, instr: int):
         """执行 RV64 的 32 位字运算指令, 如 ADDW、SUBW、SLLW 等."""
         f = self._f
@@ -103,9 +100,6 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             self.gprs[f.rd] = result
         return 4
 
-    # ----------------------------------------------------------
-    #  I-type immediate word operations (opcode = Opc.op_imm32)
-    # ----------------------------------------------------------
     def handle_op_imm32(self, instr: int):
         """执行 I 型 32 位字立即数 ALU 指令, 如 ADDIW、SLLIW 等."""
         f = self._f
@@ -115,8 +109,6 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         return 4
 
     def handle_br(self, instr: int) -> int:
-        """Execute a conditional branch.  Returns 0 if taken (pc updated),
-        4 if not taken (pc advances normally)."""
         f = self._f
         fn3 = f.func3
         rs1 = f.rs1
@@ -209,26 +201,15 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
             return 0
         return 4
 
-    # ----------------------------------------------------------
-    #  F/D 浮点指令
-    #
-    #  计算委托给加速执行引擎的 softfloat, 入口为 fp_exec_op 与 fp_exec_fma,
-    #  单精度结果的高 32 位由该引擎填为全 1 以设置为 NaN; Python 侧仅负责寄存器
-    #  与内存的路由, 并在 FLW 载入 32 位浮点数时做同样的填充.
-    # ----------------------------------------------------------
-
-    _NANBOX_S = 0xFFFF_FFFF_0000_0000
-    _MSTATUS_FS = 0b11 << 13
-    _MSTATUS_SD = 1 << 63
 
     def _fp_enabled(self) -> bool:
         """mstatus.FS != Off。"""
-        return (self.mstatus_val & self._MSTATUS_FS) != 0
+        return (self.mstatus_val & _MSTATUS_FS) != 0
 
     def _fp_mark_dirty(self) -> None:
         """执行浮点指令后置 FS=Dirty 与 SD。"""
         self.mstatus_val = (
-            self.mstatus_val | self._MSTATUS_FS | self._MSTATUS_SD
+            self.mstatus_val | _MSTATUS_FS | _MSTATUS_SD
         )
 
     def _fp_frm(self) -> int:
@@ -261,7 +242,7 @@ class Hart(CompressedInstrOps, SysInstrOps, HartWithRegs):
         val = 0
         for i in range(size):
             val |= mem[i] << (8 * i)
-        self.fpr_bits[f.rd] = (self._NANBOX_S | val) if size == 4 else val
+        self.fpr_bits[f.rd] = (_NANBOX_S | val) if size == 4 else val
         self._fp_mark_dirty()
         return 4
 

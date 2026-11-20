@@ -5,8 +5,8 @@
 
 """trap 用例共用的 PTE 常量、hart 构造与中断控制器替身."""
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
+from pyremu.emu.hart import Hart
 
 # Sv39 叶 PTE 的权限位
 PTE_V = 1 << 0

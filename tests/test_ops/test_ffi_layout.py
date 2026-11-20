@@ -22,8 +22,8 @@ from pyremu._native import (
     TlbEntry,
 )
 from pyremu.configs_gen import CPU_FREQ_HZ
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RatifiedHartAttrs, RiscvMode
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator, RunStopReason
 from pyremu.interrupt.imsic import IMSIC
 from pyremu.utils.mask import mask64

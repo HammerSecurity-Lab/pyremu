@@ -52,7 +52,7 @@ def main() -> None:
         ("nq(4)=2", "n-queen n=4 correct"),
     ]
     for pattern, desc in checks:
-        status = "✓" if pattern in output else "✗"
+        status = "passed" if pattern in output else "failed"
         print(f"  {status} {desc}: '{pattern}'")
 
 

@@ -7,8 +7,11 @@
 import pytest
 
 from pyremu.core.hart import RiscvMode
-from pyremu.core.trap_def import trap_cause_name
-from pyremu.debug.mem import MemoryOps
+from pyremu.debug.disasm_view import (
+    colorize_asm,
+    ctrl_flow_kind,
+    ctrl_flow_kind_compressed,
+)
 from pyremu.debugger import (
     Debugger,
     HartSnapshot,
@@ -445,7 +448,7 @@ class TestColorizeAsm:
         ],
     )
     def test_colorize_asm_matches_expected_markup(self, text, expected):
-        assert MemoryOps._colorize_asm(text) == expected
+        assert colorize_asm(text) == expected
 
     def test_unknown_sentinel_escaped(self):
         """<unknown 开头的指令不做 Rich 标记, 原样返回."""
@@ -518,7 +521,7 @@ class TestCtrlFlowKind:
         ],
     )
     def test_ctrl_flow_kind_matches_expected(self, instr, expected):
-        assert MemoryOps._ctrl_flow_kind(instr) == expected
+        assert ctrl_flow_kind(instr) == expected
 
     def test_jal_is_term(self):
         """JAL 为无条件终止."""
@@ -634,16 +637,7 @@ class TestCtrlFlowKindCompressed:
         ],
     )
     def test_ctrl_flow_kind_compressed_matches_expected(self, instr, expected):
-        assert MemoryOps._ctrl_flow_kind_compressed(instr) == expected
-
-
-class TestTrapCauseNameStatic:
-    @pytest.mark.parametrize("mcause", [0, 2, 13, (1 << 63) | 7])
-    def test_matches_module_level_function(self, mcause):
-        """静态转发与 trap_def 的映射一致."""
-        assert MemoryOps._trap_cause_name_static(mcause) == (
-            trap_cause_name(mcause)
-        )
+        assert ctrl_flow_kind_compressed(instr) == expected
 
 
 class TestWarnPcIfSuspect:

@@ -1,94 +1,27 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # SPDX-LICENSE-IDENTIFIER: MIT
-# (C) All rights reserved. Author: <kisfg@hotmail.com> in 2026
-
-"""
-平台配置 — 描述 CPU 拓扑、内存布局、外设映射和 ISA 特性.
-
-配置与预设分离: 每个预设是独立的工厂函数, 返回填充了合理默认值的
-PlatformConfig 实例. 也支持从 JSON / TOML / YAML 文件反序列化.
-
-Usage:
-    # 使用预设
-    cfg = PlatformConfig.sifive_u54()
-    emu = Emulator(cfg)
-
-    # 从配置文件加载
-    cfg = PlatformConfig.from_json("platforms/virt.json")
-    cfg = PlatformConfig.from_toml("platforms/virt.toml")
-    cfg = PlatformConfig.from_yaml("platforms/virt.yaml")
-
-    # 程序化定制
-    cfg = PlatformConfig.sifive_u54()
-    cfg.periph.uart_base = 0x2000_0000
-    emu = Emulator(cfg)
-"""
+"""平台配置 — CPU 拓扑、内存布局、外设映射与 ISA 特性."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 import json
 from pathlib import Path
 import tomllib
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import yaml
 
 from pyremu import configs_gen
 from pyremu.check_configs import check_limits, DevRange, parse_dev_range
-from pyremu.interrupt.clint import CLINT_SIZE
-from pyremu.interrupt.plic import PLIC_CONTEXT_BASE, PLIC_CONTEXT_STRIDE
-from pyremu.peripheral.uart import UART_IRQ
-from pyremu.peripheral.virtio_blk import VIRTIO_BLK_IRQ
-from pyremu.peripheral.virtio_mmio import VIRTIO_MMIO_SIZE
-from pyremu.peripheral.virtio_net import VIRTIO_NET_M_IRQ, VIRTIO_NET_S_IRQ
-from pyremu.peripheral.watchdog import WATCHDOG_IRQ
+from pyremu.platform.assembly import periph_from_chip
+from pyremu.platform.specs import (
+    DEVICE_SPECS,
+    InterruptMode,
+    PeripheralConfig,
+)
 
-# 各设备窗口的字节数. 与设备构造时的 size 保持一致,
-# 由 tests/test_utils/test_configs_check.py 对照实际注册的设备校验.
-_PAGE_SIZE = 0x1000
-_APLIC_RANGE_SIZE = 0x6000
-
-
-class InterruptMode(Enum):
-    """中断子系统模式."""
-
-    LEGACY = "legacy"  # CLINT 维持软件中断与时钟中断，PLIC 维持所有外部中断
-    # CLINT 只提供 MTIP, IMSIC 提供 MSIP+MEIP+SEIP, APLIC 把有线中断转为 MSI
-    AIA = "aia"
-
-
-@dataclass
-class PeripheralConfig:
-    """外设 MMIO 基址. 默认值由 mk/ 下的配置生成为 configs_gen."""
-
-    uart_base: int = configs_gen.UART_BASE
-    uart_irq: int = UART_IRQ  # 串口的中断源编号
-    spi_base: int = configs_gen.SPI_BASE
-    i2c_base: int = configs_gen.I2C_BASE
-    gpio_base: int = configs_gen.GPIO_BASE
-    clint_base: int = configs_gen.CLINT_BASE
-    plic_base: int = configs_gen.PLIC_BASE
-    virtio_blk_base: int = configs_gen.VIRTIO_BLK_BASE
-    virtio_blk_irq: int = VIRTIO_BLK_IRQ  # 块设备的中断源编号
-    # 宿主侧网卡: 中断由 S 模式接受
-    virtio_net_s_base: int = configs_gen.VIRTIO_NET_S_BASE
-    virtio_net_s_irq: int = VIRTIO_NET_S_IRQ  # 宿主侧网卡的中断源编号
-    # 飞地侧网卡: 中断由 M 模式接受
-    virtio_net_m_base: int = configs_gen.VIRTIO_NET_M_BASE
-    virtio_net_m_irq: int = VIRTIO_NET_M_IRQ  # 飞地侧网卡的中断源编号
-    watchdog_base: int = configs_gen.WATCHDOG_BASE
-    watchdog_irq: int = WATCHDOG_IRQ  # 看门狗的中断源编号
-    crng_base: int = configs_gen.CRNG_BASE
-    power_base: int = configs_gen.POWER_BASE  # 关机与复位请求设备
-    imsic_m_base: int = configs_gen.IMSIC_M_BASE
-    imsic_s_base: int = configs_gen.IMSIC_S_BASE
-    aplic_s_base: int = configs_gen.APLIC_S_BASE
-    aplic_m_base: int = configs_gen.APLIC_M_BASE
-    boot_addr_base: int = configs_gen.BOOT_REGS_ADDR
-    boot_addr_size: int = configs_gen.BOOT_REGS_SIZE
+if TYPE_CHECKING:
+    from pyremu.utils.dev_tree.chip import ChipDt
 
 
 @dataclass
@@ -188,95 +121,11 @@ class PlatformConfig:
             ranges.append(
                 DevRange("rom", self.rom_base, self.rom_size, is_fixed=True)
             )
-        periph = self.periph
-        imsic_size = self._imsic_range_size()
-        candidates: list[tuple[str, int, int, int]] = [
-            ("uart", periph.uart_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("spi", periph.spi_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("i2c", periph.i2c_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("gpio", periph.gpio_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("crng", periph.crng_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("power", periph.power_base, _PAGE_SIZE, _PAGE_SIZE),
-            ("clint", periph.clint_base, CLINT_SIZE, _PAGE_SIZE),
-            (
-                "boot_addr",
-                periph.boot_addr_base,
-                periph.boot_addr_size,
-                _PAGE_SIZE,
-            ),
-            (
-                "watchdog",
-                periph.watchdog_base,
-                self.num_harts * 0x10,
-                _PAGE_SIZE,
-            ),
-            (
-                "virtio_net_s",
-                periph.virtio_net_s_base,
-                VIRTIO_MMIO_SIZE,
-                _PAGE_SIZE,
-            ),
-            (
-                "virtio_net_m",
-                periph.virtio_net_m_base,
-                VIRTIO_MMIO_SIZE,
-                _PAGE_SIZE,
-            ),
-        ]
-        if self.disk_image is not None:
-            candidates.append(
-                (
-                    "virtio_blk",
-                    periph.virtio_blk_base,
-                    VIRTIO_MMIO_SIZE,
-                    _PAGE_SIZE,
-                )
-            )
-        if self.interrupt_mode == InterruptMode.AIA:
-            candidates.extend(
-                [
-                    ("imsic_m", periph.imsic_m_base, imsic_size, imsic_size),
-                    (
-                        "aplic_s",
-                        periph.aplic_s_base,
-                        _APLIC_RANGE_SIZE,
-                        _PAGE_SIZE,
-                    ),
-                    (
-                        "aplic_m",
-                        periph.aplic_m_base,
-                        _APLIC_RANGE_SIZE,
-                        _PAGE_SIZE,
-                    ),
-                ]
-            )
-        else:
-            candidates.append(
-                (
-                    "plic",
-                    periph.plic_base,
-                    self._plic_range_size(),
-                    _PAGE_SIZE,
-                )
-            )
-        for name, base, size, align in candidates:
-            if base:
-                ranges.append(DevRange(name, base, size, align=align))
+        for spec in DEVICE_SPECS:
+            entry = spec.dev_range(self)
+            if entry is not None:
+                ranges.append(entry)
         return ranges
-
-    def _plic_range_size(self) -> int:
-        """PLIC 的窗口字节数: 到最后一个 context 末尾再加一页."""
-        contexts = 2 * self.num_harts
-        return (
-            PLIC_CONTEXT_BASE
-            + (contexts - 1) * PLIC_CONTEXT_STRIDE
-            + _PAGE_SIZE
-        )
-
-    def _imsic_range_size(self) -> int:
-        """IMSIC 的窗口字节数: M 区与 S 区各按 2 的幂对齐."""
-        power = (self.num_harts - 1).bit_length() if self.num_harts > 1 else 0
-        return 2 * (1 << power) * _PAGE_SIZE
 
     def _apply_dev_ranges(self) -> None:
         """检查设备区间是否冲突; 冲突者重新分配并把新基址写回配置."""
@@ -309,6 +158,30 @@ class PlatformConfig:
                     f"{name_a} [0x{base_a:x}, 0x{base_a + size_a:x}) 与 "
                     f"{name_b} [0x{base_b:x}, 0x{base_b + size_b:x}) 重叠"
                 )
+
+    @classmethod
+    def from_chip(
+        cls,
+        chip: ChipDt,
+        is_aia: bool | None = None,
+    ) -> PlatformConfig:
+        """按芯片设备树构造平台配置.
+
+        主存与引导只读存储器取树中声明或默认区间; 外设区间与中断源编号取自
+        该树, 缺失的中断控制器由 :func:`periph_from_chip` 在空闲区间放置;
+        其余取值树中没有声明时取 mk/ 生成的默认值.
+        """
+        return cls(
+            num_harts=max(1, chip.num_harts),
+            ram_base=chip.ram.base,
+            ram_size=chip.ram.size,
+            rom_base=chip.rom.base,
+            rom_size=chip.rom.size,
+            pmp_entries=chip.pmp_entries or configs_gen.PMP_ENTRIES,
+            timebase_freq=chip.timebase_freq or configs_gen.TIMER_FREQ,
+            isa=chip.isa or configs_gen.ISA,
+            periph=periph_from_chip(chip, is_aia=is_aia),
+        )
 
     @classmethod
     def from_dict(

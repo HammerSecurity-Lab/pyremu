@@ -7,8 +7,8 @@ import pytest
 from rich.console import Console
 
 from pyremu.configs_aux import force_config
-from pyremu.core.decoder import Hart
 from pyremu.debug import Debugger
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.platform import PeripheralConfig, PlatformConfig
 from pyremu.utils.parse_bin import FirmwareImage

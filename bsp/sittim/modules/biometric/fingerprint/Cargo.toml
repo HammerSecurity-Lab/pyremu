@@ -1,0 +1,15 @@
+[package]
+name = "fingerprint"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "fingerprint"
+path = "src/main.rs"
+
+[dependencies]
+fprint-bozorth3 = "0.1.0"
+fprint-mindtct = "0.1.0"
+
+[workspace]

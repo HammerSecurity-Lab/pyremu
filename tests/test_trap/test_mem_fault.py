@@ -9,7 +9,6 @@ import struct
 
 import pytest
 
-from pyremu.core.decoder import Hart
 from pyremu.core.hart import RiscvMode
 from pyremu.core.mem_check_aux import (
     AccessFaultError,
@@ -19,6 +18,7 @@ from pyremu.core.priv_defs import (
     MSTATUS_MXR,
     MSTATUS_SUM,
 )
+from pyremu.emu.hart import Hart
 from pyremu.emulator import Emulator
 from pyremu.memory.bus import Bus
 from pyremu.memory.mmu import sv39_vpn

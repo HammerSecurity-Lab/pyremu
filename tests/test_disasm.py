@@ -9,7 +9,7 @@ from typing import Callable
 
 import pytest
 
-from pyremu.core.decoder import decode_sd_sp
+from pyremu.decoder.mem_instr import decode_sd_sp
 from pyremu.disasm import disasm
 from tests.instr_encode import b_type, i_type, j_type, r_type, s_type, u_type
 

@@ -3,7 +3,7 @@
 
 由 ``core.registers`` 的工厂函数在模块初始化后调用 ``init_gpr_map`` /
 ``init_csr_map`` 注入名称映射。 ``disasm`` 仅依赖本模块,
-不依赖 ``core.*``, 从而断开 core.decoder 与 disasm 的循环导入链。
+不依赖 ``core.*``, 从而断开 decoder 与 disasm 的循环导入链。
 """
 
 from __future__ import annotations

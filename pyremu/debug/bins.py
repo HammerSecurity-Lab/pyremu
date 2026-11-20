@@ -11,7 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from pyremu.debug.attrs import SharedAttrs
-from pyremu.debug.utils import fmt_display_name, fmt_size
+from pyremu.utils.str_aux import fmt_display_name, fmt_size
 
 BINS_USAGE = "用法: bins-info"
 

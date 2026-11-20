@@ -14,7 +14,7 @@ from pyremu import configs_gen
 from pyremu.debug.attrs import SharedAttrs
 from pyremu.debug.sym import cmd_files, cmd_modules
 from pyremu.debug.types import ImageKind
-from pyremu.debug.utils import group_order
+from pyremu.utils.str_aux import group_order
 
 # 按前缀过滤的结果超过该条目数时改为列出下一级子组
 SYMBOL_SUBGROUP_THRESHOLD = 50
